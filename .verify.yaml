@@ -1,0 +1,39 @@
+# verify run  (from the repo root)
+backend: web
+
+options:
+  web:
+    headless: true
+    viewport: [1400, 900]
+
+steps:
+  - name: lint
+    actions:
+      - shell: ".venv/bin/ruff check src tests examples bench docs scripts && .venv/bin/ruff format --check src tests examples bench docs scripts"
+
+  - name: tests on both physics engines
+    actions:
+      - shell: { cmd: ".venv/bin/python -m pytest tests examples -q -n 8 -p no:cacheprovider --rw-backend mujoco,pybullet", timeout: 900 }
+
+  - name: cli reports working offscreen rendering
+    actions:
+      - shell: ".venv/bin/robowright info 2>&1 | grep -q 'offscreen rendering: ok'"
+
+  - name: failing run produces a trace that replays bit-identically
+    actions:
+      - shell: ".venv/bin/python scripts/verify_viewer.py /tmp/robowright-verify && .venv/bin/robowright replay /tmp/robowright-verify/verify__test_place_in_wrong_spot.zip | grep -q bit-identical"
+
+  - name: generated regression test reproduces the failure
+    actions:
+      - shell: "cd /tmp/robowright-verify && $OLDPWD/.venv/bin/robowright codegen verify__test_place_in_wrong_spot.zip -o test_regression.py && ! $OLDPWD/.venv/bin/python -m pytest -q -p no:cacheprovider test_regression.py"
+
+  - name: trace viewer DOM (desktop + Pixel 7)
+    actions:
+      - shell: "/home/admin/.venvs/verify/bin/python scripts/check_viewer.py /tmp/robowright-verify/trace.html"
+
+  - name: trace viewer renders
+    actions:
+      - navigate: "file:///tmp/robowright-verify/trace.html"
+      - wait: 1
+    expect:
+      vision: "a trace viewer: an action list on the left with a red failed 'expect(cube).to_be_inside' entry, a 3D render of a yellow robot arm with a red cube and blue bin in the middle, timeline and line plots below; no error message and not blank"

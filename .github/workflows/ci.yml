@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    env:
+      MUJOCO_GL: egl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Offscreen GL (Mesa EGL)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests examples bench docs scripts && ruff format --check src tests examples bench docs scripts
+      - name: Environment
+        run: robowright info
+      - name: Tests (MuJoCo + PyBullet)
+        run: pytest tests examples -n auto --rw-backend mujoco,pybullet
+      - name: Upload traces of failed tests
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robowright-traces-py${{ matrix.python }}
+          path: robowright-traces/
