@@ -132,3 +132,17 @@ def test_cli_round_trip(tmp_path):
     gen = tmp_path / "test_gen.py"
     subprocess.run([*cli, "codegen", str(path), "-o", str(gen)], check=True, capture_output=True)
     assert gen.read_text().startswith('"""Regression test generated')
+
+
+def test_tracing_survives_missing_gl(tmp_path, monkeypatch):
+    w = rw.launch(name="nogl", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+
+    def broken(*a, **k):
+        raise RuntimeError("no EGL")
+
+    monkeypatch.setattr(w.backend, "render", broken)
+    w.robot.reset_to()
+    with pytest.warns(UserWarning, match="camera frames disabled"):
+        w.robot.arm.home()
+    tr = Trace(w.close())
+    assert tr.frame_names == [] and len(tr) > 1

@@ -45,7 +45,16 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
     wb.add_light(
         pos=[0.3, -0.3, 1.5], dir=[-0.2, 0.2, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL, castshadow=1, diffuse=[0.5, 0.5, 0.5]
     )
-    wb.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[1, 1, 0.05], material="table")
+    s.add_texture(
+        name="sky",
+        type=mujoco.mjtTexture.mjTEXTURE_SKYBOX,
+        builtin=mujoco.mjtBuiltin.mjBUILTIN_GRADIENT,
+        rgb1=[0.93, 0.95, 0.98],
+        rgb2=[0.72, 0.78, 0.86],
+        width=256,
+        height=1536,
+    )
+    wb.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[4, 4, 0.05], material="table")
     for o in spec.objects:
         pos = o.initial_pos
         if o.kind == "bin":

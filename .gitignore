@@ -9,3 +9,4 @@ robowright-traces/
 bench/results/traces/
 *.html
 !src/robowright/viewer.html
+.verify-artifacts/

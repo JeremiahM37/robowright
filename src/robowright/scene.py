@@ -69,8 +69,8 @@ class ObjectSpec:
 @dataclass
 class CameraSpec:
     name: str
-    pos: tuple = (0.55, -0.35, 0.4)
-    lookat: tuple = (0.2, 0.0, 0.03)
+    pos: tuple = (0.6, -0.42, 0.42)
+    lookat: tuple = (0.17, 0.02, 0.07)
     fovy: float = 45.0
     width: int = 320
     height: int = 240
