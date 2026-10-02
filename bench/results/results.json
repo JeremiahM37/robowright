@@ -1,0 +1,283 @@
+{
+  "env": {
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "cores": 32,
+    "python": "3.12.13",
+    "os": "Linux 6.17.13-2-pve",
+    "mujoco": "3.14.0",
+    "robowright": "0.1.0.dev0",
+    "date": "2026-10-02",
+    "pybullet": "installed"
+  },
+  "throughput": [
+    {
+      "backend": "mujoco",
+      "mode": "no trace",
+      "steps_per_s": 25268.591113294184,
+      "realtime_factor": 505.3718222658836,
+      "trace_kb_per_sim_s": 0.0
+    },
+    {
+      "backend": "mujoco",
+      "mode": "trace, no frames",
+      "steps_per_s": 18429.025777855088,
+      "realtime_factor": 368.58051555710176,
+      "trace_kb_per_sim_s": 3.2466796875
+    },
+    {
+      "backend": "mujoco",
+      "mode": "trace + frames every 5 steps",
+      "steps_per_s": 3116.7523417975044,
+      "realtime_factor": 62.33504683595009,
+      "trace_kb_per_sim_s": 113.13662109375
+    },
+    {
+      "backend": "pybullet",
+      "mode": "no trace",
+      "steps_per_s": 5174.148380162449,
+      "realtime_factor": 103.48296760324898,
+      "trace_kb_per_sim_s": 0.0
+    },
+    {
+      "backend": "pybullet",
+      "mode": "trace, no frames",
+      "steps_per_s": 5027.6812318085595,
+      "realtime_factor": 100.55362463617118,
+      "trace_kb_per_sim_s": 4.0640625
+    },
+    {
+      "backend": "pybullet",
+      "mode": "trace + frames every 5 steps",
+      "steps_per_s": 458.09222759451586,
+      "realtime_factor": 9.161844551890317,
+      "trace_kb_per_sim_s": 61.465966796875
+    }
+  ],
+  "pick_place": [
+    {
+      "backend": "mujoco",
+      "median_wall_s": 0.0901062935590744,
+      "sim_s": 3.5999999999999455,
+      "realtime_factor": 39.95281414654745
+    },
+    {
+      "backend": "pybullet",
+      "median_wall_s": 0.14620066445786506,
+      "sim_s": 3.2600000000000025,
+      "realtime_factor": 22.29812027249392
+    }
+  ],
+  "parallel": [
+    {
+      "workers": 1,
+      "wall_s": 8.793181461980566,
+      "ok": true,
+      "speedup": 1.0
+    },
+    {
+      "workers": 2,
+      "wall_s": 4.961673475103453,
+      "ok": true,
+      "speedup": 1.7722209061323257
+    },
+    {
+      "workers": 4,
+      "wall_s": 3.190714748110622,
+      "ok": true,
+      "speedup": 2.7558657404857136
+    },
+    {
+      "workers": 8,
+      "wall_s": 2.311150571098551,
+      "ok": true,
+      "speedup": 3.8046770175605364
+    },
+    {
+      "workers": 16,
+      "wall_s": 2.3397768759168684,
+      "ok": true,
+      "speedup": 3.758128201234939
+    }
+  ],
+  "replay": [
+    {
+      "backend": "mujoco",
+      "runs": 20,
+      "bit_identical": 20,
+      "steps_replayed": 3821,
+      "max_joint_error_rad": 0.0,
+      "max_object_error_m": 0.0
+    },
+    {
+      "backend": "pybullet",
+      "runs": 20,
+      "bit_identical": 20,
+      "steps_replayed": 3650,
+      "max_joint_error_rad": 0.0,
+      "max_object_error_m": 0.0
+    }
+  ],
+  "parity": [
+    {
+      "backend": "mujoco",
+      "passed": 50,
+      "n": 50,
+      "ci_low": 0.9286499658256813,
+      "ci_high": 1.0
+    },
+    {
+      "backend": "pybullet",
+      "passed": 50,
+      "n": 50,
+      "ci_low": 0.9286499658256813,
+      "ci_high": 1.0
+    },
+    {
+      "backend": "difference",
+      "median_final_cube_distance_mm": 4.930869994537283,
+      "max_final_cube_distance_mm": 21.461841173610146
+    }
+  ],
+  "faults": [
+    {
+      "fault": "action delay (steps of 20 ms)",
+      "level": 0,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 4.859999999999919
+    },
+    {
+      "fault": "action delay (steps of 20 ms)",
+      "level": 10,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 5.6599999999999016
+    },
+    {
+      "fault": "action delay (steps of 20 ms)",
+      "level": 20,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 6.65999999999988
+    },
+    {
+      "fault": "action delay (steps of 20 ms)",
+      "level": 30,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 7.859999999999855
+    },
+    {
+      "fault": "action delay (steps of 20 ms)",
+      "level": 40,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 9.060000000000016
+    },
+    {
+      "fault": "joint noise (rad std)",
+      "level": 0.0,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 4.859999999999919
+    },
+    {
+      "fault": "joint noise (rad std)",
+      "level": 0.03,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 5.359999999999908
+    },
+    {
+      "fault": "joint noise (rad std)",
+      "level": 0.06,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 9.66000000000011
+    },
+    {
+      "fault": "joint noise (rad std)",
+      "level": 0.09,
+      "passed": 12,
+      "n": 20,
+      "ci_low": 0.3865779423152061,
+      "ci_high": 0.7811960325858074,
+      "median_task_s": 16.66000000000097
+    },
+    {
+      "fault": "joint noise (rad std)",
+      "level": 0.12,
+      "passed": 0,
+      "n": 20,
+      "ci_low": 0.0,
+      "ci_high": 0.16113012549493322,
+      "median_task_s": null
+    },
+    {
+      "fault": "weak shoulder_lift (gain scale)",
+      "level": 1.0,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 4.859999999999919
+    },
+    {
+      "fault": "weak shoulder_lift (gain scale)",
+      "level": 0.05,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 4.859999999999919
+    },
+    {
+      "fault": "weak shoulder_lift (gain scale)",
+      "level": 0.02,
+      "passed": 20,
+      "n": 20,
+      "ci_low": 0.8388698745050667,
+      "ci_high": 1.0,
+      "median_task_s": 4.839999999999919
+    },
+    {
+      "fault": "weak shoulder_lift (gain scale)",
+      "level": 0.01,
+      "passed": 15,
+      "n": 20,
+      "ci_low": 0.5312949900419365,
+      "ci_high": 0.888139947210597,
+      "median_task_s": 5.2399999999999105
+    },
+    {
+      "fault": "weak shoulder_lift (gain scale)",
+      "level": 0.005,
+      "passed": 1,
+      "n": 20,
+      "ci_low": 0.008881219432873136,
+      "ci_high": 0.23613589351256675,
+      "median_task_s": 4.31999999999993
+    }
+  ],
+  "micro": {
+    "ik_solve_ms": 1.010692985728383,
+    "step_us": 31.0302865691483,
+    "step_with_2_invariants_us": 46.43169650807977
+  }
+}
