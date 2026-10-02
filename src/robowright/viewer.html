@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ · robowright trace</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2129; --muted: #667085; --line: #e3e6eb;
+  --accent: #2f6fde; --ok: #188a4a; --bad: #d1323f; --warn: #b7791f; --sel: #eaf1fd; --code: #f1f3f6;
+  --s0: #2f6fde; --s1: #d1323f; --s2: #188a4a; --s3: #b7791f; --s4: #7d4fc9; --s5: #0f8a8a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111318; --panel: #1a1d24; --ink: #e6e8ec; --muted: #98a0ae; --line: #2a2f39;
+    --accent: #6e9cf5; --ok: #43c07a; --bad: #f06872; --warn: #e2b04a; --sel: #222c3d; --code: #22262f;
+    --s0: #6e9cf5; --s1: #f06872; --s2: #43c07a; --s3: #e2b04a; --s4: #b08ef0; --s5: #3fc4c4;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 14px; margin: 0; font-weight: 600; word-break: break-all; }
+.pill { padding: 1px 8px; border-radius: 99px; font-weight: 600; font-size: 12px; }
+.pill.passed { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.pill.failed { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+.meta { color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
+main { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(240px, 340px); gap: 12px; padding: 12px 16px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+section > h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); font-weight: 600; }
+#events { list-style: none; margin: 0; padding: 4px 0; max-height: calc(100vh - 150px); overflow: auto; }
+#events li { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px; padding: 5px 12px; cursor: pointer; border-left: 3px solid transparent; }
+#events li:hover { background: var(--sel); }
+#events li.sel { background: var(--sel); border-left-color: var(--accent); }
+#events li.failed .name { color: var(--bad); }
+#events .icon { text-align: center; color: var(--muted); }
+#events li.failed .icon { color: var(--bad); }
+#events li.ok.expect .icon { color: var(--ok); }
+#events .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-word; }
+#events .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.stage { padding: 10px; }
+.cams { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.cams button, .controls button, .controls select { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.cams button.on { border-color: var(--accent); color: var(--accent); }
+#frame { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #000; border-radius: 6px; display: block; }
+.noframe { display: grid; place-items: center; width: 100%; aspect-ratio: 4/3; border-radius: 6px; background: var(--code); color: var(--muted); }
+.controls { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; flex-wrap: wrap; }
+.clock { font-variant-numeric: tabular-nums; color: var(--muted); margin-left: auto; font-size: 12px; }
+canvas { width: 100%; display: block; }
+#timeline { height: 46px; cursor: pointer; margin-top: 4px; }
+#plot { height: 170px; margin-top: 10px; cursor: pointer; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.tabs { display: flex; border-bottom: 1px solid var(--line); }
+.tabs button { flex: 1; font: inherit; font-size: 12px; background: none; border: none; color: var(--muted); padding: 8px; cursor: pointer; border-bottom: 2px solid transparent; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.pane { padding: 10px 12px; max-height: calc(100vh - 190px); overflow: auto; }
+.pane h3 { font-size: 12px; margin: 12px 0 4px; color: var(--muted); font-weight: 600; }
+.pane h3:first-child { margin-top: 0; }
+pre { background: var(--code); padding: 8px; border-radius: 6px; overflow: auto; font-size: 11.5px; margin: 0; white-space: pre-wrap; word-break: break-word; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
+td:first-child, th:first-child { text-align: left; font-family: ui-monospace, Menlo, monospace; }
+th { color: var(--muted); font-weight: 600; }
+.bad { color: var(--bad); } .muted { color: var(--muted); }
+@media (max-width: 1000px) { main { grid-template-columns: 1fr; } #events, .pane { max-height: 320px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1><span id="status" class="pill"></span>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <section><h2>Actions</h2><ul id="events"></ul></section>
+  <section class="stage">
+    <div class="cams" id="cams"></div>
+    <div id="view"><img id="frame" alt="camera frame"></div>
+    <div class="controls">
+      <button id="play" title="Space">Play</button>
+      <button id="prev" title="Left arrow">&larr;</button>
+      <button id="next" title="Right arrow">&rarr;</button>
+      <select id="speed"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select>
+      <span class="clock" id="clock"></span>
+    </div>
+    <canvas id="timeline"></canvas>
+    <canvas id="plot"></canvas>
+    <div class="legend" id="legend"></div>
+  </section>
+  <section>
+    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button></div>
+    <div class="pane" id="pane"></div>
+  </section>
+</main>
+<script>
+const D = __TRACE_DATA__;
+const M = D.meta, N = D.t.length, J = M.joint_names;
+let cur = 0, sel = -1, tab = "details", cam = Object.keys(D.frames)[0] || null, playing = false, last = 0;
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = (x, d = 3) => (x == null ? "" : Number(x).toFixed(d));
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+const ICON = {action: "▶", expect: "✓", invariant: "◆", violation: "✖", fault: "⚡", edit: "✎", log: "•"};
+
+$("title").textContent = M.name;
+$("status").textContent = M.status; $("status").className = "pill " + M.status;
+$("meta").innerHTML = [`backend ${M.backend}`, `seed ${M.seed}`, `${fmt(D.t[N - 1], 2)}s simulated`, `${M.steps} steps`, `${fmt(M.wall_seconds, 2)}s wall`, esc(D.source)].map((s) => `<span>${s}</span>`).join("");
+
+const evs = M.events;
+$("events").innerHTML = evs.map((e, i) => `<li data-i="${i}" class="${e.status} ${e.type}"><span class="icon">${e.status === "failed" ? "✖" : ICON[e.type] || "•"}</span><span class="name">${esc(e.name)}</span><span class="time">${fmt(e.t, 2)}s</span></li>`).join("");
+$("events").addEventListener("click", (ev) => { const li = ev.target.closest("li"); if (li) selectEvent(+li.dataset.i, true); });
+
+const camNames = Object.keys(D.frames);
+$("cams").innerHTML = camNames.map((c) => `<button data-cam="${c}" class="${c === cam ? "on" : ""}">${esc(c)}</button>`).join("");
+$("cams").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; cam = b.dataset.cam; [...$("cams").children].forEach((x) => x.classList.toggle("on", x === b)); render(); });
+if (!cam) $("view").innerHTML = '<div class="noframe">no camera frames in this trace</div>';
+const frameSteps = {}; for (const c of camNames) frameSteps[c] = Object.keys(D.frames[c]).map(Number).sort((a, b) => a - b);
+
+function frameAt(step) {
+  const s = frameSteps[cam]; if (!s || !s.length) return null;
+  let lo = 0, hi = s.length - 1, best = s[0];
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (s[mid] <= step) { best = s[mid]; lo = mid + 1; } else hi = mid - 1; }
+  return D.frames[cam][best];
+}
+
+function selectEvent(i, seek) {
+  sel = i;
+  [...$("events").children].forEach((li, k) => li.classList.toggle("sel", k === i));
+  if (seek) { const e = evs[i]; cur = Math.min(N - 1, Math.max(0, e.status === "failed" ? (e.end_step ?? e.step) : e.step)); }
+  tab = "details"; setTab(); render();
+}
+
+function sizeCanvas(c) { const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1; c.width = r.width * dpr; c.height = r.height * dpr; const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); return [g, r.width, r.height]; }
+const X = (step, w) => 8 + (w - 16) * (N > 1 ? step / (N - 1) : 0);
+
+function drawTimeline() {
+  const [g, w, h] = sizeCanvas($("timeline"));
+  g.clearRect(0, 0, w, h);
+  const acts = evs.map((e, i) => [e, i]).filter(([e]) => e.type === "action" || e.type === "expect" || e.type === "violation");
+  g.fillStyle = css("--line"); g.fillRect(8, 20, w - 16, 2);
+  for (const [e, i] of acts) {
+    const x0 = X(e.step, w), x1 = Math.max(x0 + 3, X(e.end_step ?? e.step, w));
+    g.fillStyle = e.status === "failed" ? css("--bad") : e.type === "action" ? css("--accent") : css("--ok");
+    g.globalAlpha = i === sel ? 1 : 0.55;
+    if (e.type === "action") g.fillRect(x0, 8, x1 - x0, 10); else { g.beginPath(); g.arc(x0, 32, 3.5, 0, 7); g.fill(); }
+  }
+  g.globalAlpha = 1;
+  for (const e of evs) if (e.type === "fault" || e.type === "edit") { g.fillStyle = css("--warn"); g.fillRect(X(e.step, w) - 1, 24, 2, 16); }
+  const cx = X(cur, w); g.strokeStyle = css("--ink"); g.lineWidth = 1.5; g.beginPath(); g.moveTo(cx, 2); g.lineTo(cx, h - 2); g.stroke();
+}
+
+const SER = ["--s0", "--s1", "--s2", "--s3", "--s4", "--s5"];
+function drawPlot() {
+  const [g, w, h] = sizeCanvas($("plot"));
+  g.clearRect(0, 0, w, h);
+  let lo = Infinity, hi = -Infinity;
+  for (const row of D.qpos) for (const v of row) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  for (const row of D.ctrl) for (const v of row) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (!(hi > lo)) { lo -= 1; hi += 1; }
+  const Y = (v) => 6 + (h - 20) * (1 - (v - lo) / (hi - lo));
+  g.strokeStyle = css("--line"); g.lineWidth = 1; g.beginPath(); g.moveTo(8, Y(0)); g.lineTo(w - 8, Y(0)); g.stroke();
+  J.forEach((_, j) => {
+    g.strokeStyle = css(SER[j % 6]);
+    for (const [arr, dash, alpha] of [[D.ctrl, [3, 3], 0.45], [D.qpos, [], 1]]) {
+      g.setLineDash(dash); g.globalAlpha = alpha; g.lineWidth = 1.4; g.beginPath();
+      arr.forEach((row, i) => { const x = X(i, w), y = Y(row[j]); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+    }
+  });
+  g.setLineDash([]); g.globalAlpha = 1;
+  g.fillStyle = css("--muted"); g.font = "10px system-ui"; g.fillText(`${fmt(hi, 2)} rad`, 10, 14); g.fillText(`${fmt(lo, 2)} rad`, 10, h - 16);
+  const cx = X(cur, w); g.strokeStyle = css("--ink"); g.beginPath(); g.moveTo(cx, 2); g.lineTo(cx, h - 12); g.stroke();
+}
+$("legend").innerHTML = J.map((n, j) => `<span><i style="background:var(${SER[j % 6]})"></i>${esc(n)}</span>`).join("") + '<span class="muted">solid = measured, dashed = commanded</span>';
+
+function seekFromCanvas(ev) { const r = ev.currentTarget.getBoundingClientRect(); cur = Math.round(Math.min(1, Math.max(0, (ev.clientX - r.left - 8) / (r.width - 16))) * (N - 1)); render(); }
+for (const id of ["timeline", "plot"]) { $(id).addEventListener("click", seekFromCanvas); $(id).addEventListener("mousemove", (ev) => { if (ev.buttons) seekFromCanvas(ev); }); }
+
+function kv(obj) { return `<pre>${esc(JSON.stringify(obj, null, 2))}</pre>`; }
+function paneDetails() {
+  if (sel < 0) { const f = evs.findIndex((e) => e.status === "failed"); return f >= 0 ? `<p class="bad">This run failed at <b>${esc(evs[f].name)}</b> (t=${fmt(evs[f].t, 2)}s).</p><p class="muted">Select an action on the left to inspect it, or scrub the timeline.</p>` : '<p class="muted">Select an action on the left to inspect it, or scrub the timeline.</p>'; }
+  const e = evs[sel];
+  return `<h3>${esc(e.type)}</h3><div class="${e.status === "failed" ? "bad" : ""}"><b>${esc(e.name)}</b> &middot; ${esc(e.status)}</div>
+    <h3>Time</h3><div>${fmt(e.t, 3)}s &rarr; ${fmt(e.end_t, 3)}s (steps ${e.step}&ndash;${e.end_step ?? ""})</div>
+    ${e.detail ? `<h3>Detail</h3><pre>${esc(e.detail)}</pre>` : ""}
+    ${Object.keys(e.args || {}).length ? `<h3>Arguments</h3>${kv(e.args)}` : ""}`;
+}
+function paneState() {
+  const q = D.qpos[cur], c = D.ctrl[cur];
+  let h = `<h3>Joints at t=${fmt(D.t[cur], 2)}s</h3><table><tr><th>joint</th><th>measured</th><th>target</th><th>error</th></tr>`;
+  J.forEach((n, j) => { const err = c[j] - q[j]; h += `<tr><td>${esc(n)}</td><td>${fmt(q[j])}</td><td>${fmt(c[j])}</td><td class="${Math.abs(err) > 0.1 ? "bad" : ""}">${fmt(err)}</td></tr>`; });
+  h += "</table>";
+  if (M.object_names.length) {
+    h += `<h3>Objects</h3><table><tr><th>object</th><th>x</th><th>y</th><th>z</th></tr>`;
+    M.object_names.forEach((n, k) => { const p = D.obj_pos[cur][k]; h += `<tr><td>${esc(n)}</td><td>${fmt(p[0])}</td><td>${fmt(p[1])}</td><td>${fmt(p[2])}</td></tr>`; });
+    h += "</table>";
+  }
+  const cs = D.contacts[cur] || [];
+  h += `<h3>Contacts</h3>` + (cs.length ? `<table><tr><th>pair</th><th>force (N)</th></tr>${cs.map((x) => `<tr><td>${esc(x[0])} &harr; ${esc(x[1])}</td><td>${fmt(x[2], 2)}</td></tr>`).join("")}</table>` : '<p class="muted">none</p>');
+  return h;
+}
+function paneRun() {
+  return `<h3>Faults</h3>${M.faults.length ? kv(M.faults) : '<p class="muted">none</p>'}<h3>Scene</h3>${kv(M.scene)}<h3>Versions</h3><div>robowright ${esc(M.robowright)}, trace format ${M.format}</div>`;
+}
+function setTab() { document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab)); }
+document.querySelector(".tabs").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (b) { tab = b.dataset.tab; setTab(); render(); } });
+
+function render() {
+  if (cam) { const f = frameAt(cur); if (f) $("frame").src = f; }
+  $("clock").textContent = `t = ${fmt(D.t[cur], 2)}s · step ${cur} / ${N - 1}`;
+  drawTimeline(); drawPlot();
+  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : paneRun();
+}
+
+function tick(ts) {
+  if (!playing) return;
+  if (!last) last = ts;
+  const dt = (ts - last) / 1000 * +$("speed").value; last = ts;
+  const target = D.t[cur] + dt; while (cur < N - 1 && D.t[cur + 1] <= target) cur++;
+  if (cur >= N - 1) { playing = false; $("play").textContent = "Play"; }
+  render(); requestAnimationFrame(tick);
+}
+function togglePlay() { playing = !playing; $("play").textContent = playing ? "Pause" : "Play"; if (playing) { if (cur >= N - 1) cur = 0; last = 0; requestAnimationFrame(tick); } }
+$("play").onclick = togglePlay;
+$("prev").onclick = () => { cur = Math.max(0, cur - 1); render(); };
+$("next").onclick = () => { cur = Math.min(N - 1, cur + 1); render(); };
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === " ") { ev.preventDefault(); togglePlay(); }
+  else if (ev.key === "ArrowLeft") { cur = Math.max(0, cur - (ev.shiftKey ? M.frame_every : 1)); render(); }
+  else if (ev.key === "ArrowRight") { cur = Math.min(N - 1, cur + (ev.shiftKey ? M.frame_every : 1)); render(); }
+});
+window.addEventListener("resize", render);
+const firstFail = evs.findIndex((e) => e.status === "failed");
+if (firstFail >= 0) selectEvent(firstFail, true); else render();
+</script>
+</body>
+</html>

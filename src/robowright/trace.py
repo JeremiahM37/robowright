@@ -1,0 +1,236 @@
+"""Trace recording and loading.
+
+A trace is a zip archive holding everything needed to inspect, replay or
+regenerate a run:
+
+- ``trace.json``   metadata, scene spec, events (actions, expectations, faults, logs)
+- ``steps.npz``    per-control-step arrays: time, qpos, ctrl, object poses, forces
+- ``state0.npy``   full simulator state before the first step (when supported)
+- ``contacts.json`` contact pairs per step
+- ``frames/<camera>/<step>.jpg`` camera frames at ``frame_every`` steps
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import time
+import zipfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+FORMAT_VERSION = 1
+
+
+@dataclass
+class Event:
+    type: str  # action | expect | invariant | fault | log | edit
+    name: str
+    step: int
+    t: float
+    end_step: int | None = None
+    end_t: float | None = None
+    status: str = "ok"  # ok | failed | running
+    args: dict = field(default_factory=dict)
+    detail: str = ""
+
+    def to_dict(self):
+        return {k: v for k, v in self.__dict__.items()}
+
+
+class Recorder:
+    def __init__(self, world, frame_every: int = 5, cameras=None, image_size=(320, 240)):
+        self.world = world
+        self.frame_every = frame_every
+        self.cameras = cameras
+        self.image_size = image_size
+        self.events: list[Event] = []
+        self.t: list[float] = []
+        self.qpos: list[np.ndarray] = []
+        self.ctrl: list[np.ndarray] = []
+        self.obj_pos: list[np.ndarray] = []
+        self.obj_quat: list[np.ndarray] = []
+        self.forces: list[np.ndarray] = []
+        self.contacts: list[list] = []
+        self.frames: dict[str, dict[int, bytes]] = {}
+        self.state0 = None
+        self.begin_index = 0
+        self.started = time.time()
+
+    @property
+    def can_render(self):
+        from .backends.base import RENDER
+
+        return RENDER in self.world.backend.capabilities and self.cameras != []
+
+    def begin(self):
+        from .backends.base import STATE
+
+        b = self.world.backend
+        self.begin_index = len(self.events)
+        if STATE in b.capabilities:
+            self.state0 = b.get_state()
+        self._snapshot(0)
+
+    def _snapshot(self, step: int):
+        w = self.world
+        b = w.backend
+        names = w.object_names
+        if names and w.has_ground_truth:
+            poses = [b.object_pose(n) for n in names]
+            self.obj_pos.append(np.array([p for p, _ in poses]))
+            self.obj_quat.append(np.array([q for _, q in poses]))
+        else:
+            self.obj_pos.append(np.zeros((len(names), 3)))
+            self.obj_quat.append(np.zeros((len(names), 4)))
+        self.t.append(b.time)
+        self.qpos.append(b.qpos())
+        self.ctrl.append(b.ctrl())
+        self.forces.append(np.zeros((len(names), 3)))
+        if w.has_contacts:
+            self.contacts.append([[c.a, c.b, round(c.force, 4)] for c in b.contacts()])
+        else:
+            self.contacts.append([])
+        if self.can_render and step % self.frame_every == 0:
+            self._frame(step)
+
+    def _frame(self, step: int):
+        from PIL import Image
+
+        w, h = self.image_size
+        for cam in self.cameras or [c.name for c in self.world.spec.cameras]:
+            try:
+                img = self.world.backend.render(cam, w, h)
+            except Exception as e:  # no GL available: keep tracing, just without frames
+                import warnings
+
+                warnings.warn(f"robowright: camera frames disabled, rendering failed ({type(e).__name__}: {e})", stacklevel=2)
+                self.cameras = []
+                return
+            buf = io.BytesIO()
+            Image.fromarray(img).save(buf, format="JPEG", quality=80)
+            self.frames.setdefault(cam, {})[step] = buf.getvalue()
+
+    def record_step(self, step: int, applied_ctrl: np.ndarray, forces: dict):
+        self._snapshot(step)
+        # ctrl stored at index i is what was applied during step i-1 -> i
+        self.ctrl[-1] = applied_ctrl.copy()
+        if forces:
+            names = self.world.object_names
+            for n, f in forces.items():
+                self.forces[-1][names.index(n)] = f
+
+    def event(self, type, name, args=None, status="ok", detail="") -> Event:
+        w = self.world
+        e = Event(type, name, w.step_count, w.time, args=args or {}, status=status, detail=detail)
+        if type not in ("action",):
+            e.end_step, e.end_t = e.step, e.t
+        self.events.append(e)
+        return e
+
+    def finish_event(self, e: Event, status="ok", detail=""):
+        e.end_step, e.end_t, e.status = self.world.step_count, self.world.time, status
+        if detail:
+            e.detail = detail
+
+    def meta(self) -> dict:
+        w = self.world
+        return {
+            "format": FORMAT_VERSION,
+            "robowright": _version(),
+            "name": w.name,
+            "backend": w.backend.name,
+            "seed": w.seed,
+            "scene": w.spec.to_dict(),
+            "joint_names": list(w.backend.joint_names),
+            "object_names": list(w.object_names),
+            "control_dt": w.backend.control_dt,
+            "frame_every": self.frame_every,
+            "cameras": sorted(self.frames),
+            "started": self.started,
+            "wall_seconds": time.time() - self.started,
+            "steps": w.step_count,
+            "begin_event_index": self.begin_index,
+            "status": w.status,
+            "faults": [f.describe() for f in w.faults.active],
+            "events": [e.to_dict() for e in self.events],
+        }
+
+    def save(self, path: str | Path) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("trace.json", json.dumps(self.meta(), default=_json_default))
+            buf = io.BytesIO()
+            np.savez_compressed(
+                buf,
+                t=np.array(self.t),
+                qpos=np.array(self.qpos),
+                ctrl=np.array(self.ctrl),
+                obj_pos=np.array(self.obj_pos),
+                obj_quat=np.array(self.obj_quat),
+                forces=np.array(self.forces),
+            )
+            z.writestr("steps.npz", buf.getvalue())
+            if self.state0 is not None:
+                b = io.BytesIO()
+                np.save(b, self.state0)
+                z.writestr("state0.npy", b.getvalue())
+            z.writestr("contacts.json", json.dumps(self.contacts))
+            for cam, frames in self.frames.items():
+                for step, data in frames.items():
+                    z.writestr(f"frames/{cam}/{step:06d}.jpg", data)
+        return path
+
+
+def _json_default(o):
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, (np.floating, np.integer)):
+        return o.item()
+    if isinstance(o, tuple):
+        return list(o)
+    return str(o)
+
+
+def _version():
+    from . import __version__
+
+    return __version__
+
+
+class Trace:
+    """A loaded trace archive."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        with zipfile.ZipFile(self.path) as z:
+            self.meta = json.loads(z.read("trace.json"))
+            with z.open("steps.npz") as f:
+                arr = np.load(io.BytesIO(f.read()))
+                self.arrays = {k: arr[k] for k in arr.files}
+            self.state0 = np.load(io.BytesIO(z.read("state0.npy"))) if "state0.npy" in z.namelist() else None
+            self.contacts = json.loads(z.read("contacts.json"))
+            self.frame_names = sorted(n for n in z.namelist() if n.startswith("frames/"))
+
+    @property
+    def events(self) -> list[dict]:
+        return self.meta["events"]
+
+    @property
+    def failed(self) -> bool:
+        return self.meta.get("status") == "failed"
+
+    def scene(self):
+        from .scene import SceneSpec
+
+        return SceneSpec.from_dict(self.meta["scene"])
+
+    def frame(self, name: str) -> bytes:
+        with zipfile.ZipFile(self.path) as z:
+            return z.read(name)
+
+    def __len__(self):
+        return len(self.arrays["t"])

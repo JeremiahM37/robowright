@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+robowright-traces/
+bench/results/traces/
+*.html
+!src/robowright/viewer.html

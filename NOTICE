@@ -1,0 +1,9 @@
+robowright
+Copyright 2026 Jeremiah Mackey
+
+This product includes the SO-101 robot description (MJCF and meshes) from
+MuJoCo Menagerie (https://github.com/google-deepmind/mujoco_menagerie,
+robotstudio_so101), Copyright Google DeepMind, licensed under Apache-2.0,
+and the SO-101 URDF from TheRobotStudio/SO-ARM100
+(https://github.com/TheRobotStudio/SO-ARM100), licensed under Apache-2.0.
+Both are in src/robowright/assets/so101/.
