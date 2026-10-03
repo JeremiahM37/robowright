@@ -34,6 +34,10 @@ for robot, force in {**{r: _SLIDE[r] for r in ("piper", "arx_l5", "wx250s")}, "v
     )
 KNOWN[("test_cube_survives_a_shove_when_held", "pybullet", "piper")] = "the PiPER model squeezes 0.7 N; a 1.5 N shove knocks the cube out"
 
+KNOWN[("test_stands_on_its_own", "genesis", "spot")] = (
+    "standing still, Spot creeps backward ~2 cm/s on its sphere feet in Genesis (MuJoCo: settles to 0.2 mm/s)"
+)
+
 
 def pytest_collection_modifyitems(config, items):
     for item in items:

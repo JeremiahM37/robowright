@@ -99,10 +99,13 @@ def _with_mimic(path, meta) -> Path:
     MuJoCo couples a gripper's linkage with equality constraints. Genesis reads
     URDF ``<mimic>`` as a joint equality constraint, which keeps that coupling
     two-way: when a pad blocks on an object the constraint stops the driver
-    too, and both sides of the gripper close together. Servoing linkage joints to the driver's measured travel instead lets
-    the driver run on, and the half-closed chain jams against itself.
+    too, and both sides of the gripper close together. Servoing linkage joints
+    to the driver's measured travel instead lets the driver run on, and the
+    half-closed chain jams against itself.
     """
-    g = meta["gripper"]
+    g = meta.get("gripper")
+    if not g:
+        return path
     ref = g["driven"][0]
     rc, ro = g["joints"][ref]
     tree = ET.parse(path)
@@ -173,16 +176,17 @@ class GenesisBackend(Backend):
         self._floor = scene.add_entity(gs.morphs.Plane())
         yaw = rm.base_yaw
         # Arm controllers on real robots cancel gravity; bare position servos sag under it.
+        # Legged robots stand on their own weight.
         self.robot = scene.add_entity(
             gs.morphs.URDF(
                 file=str(path),
-                fixed=True,
+                fixed=not rm.floating,
                 pos=tuple(rm.base_pos),
                 quat=(np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)),
                 merge_fixed_links=False,
                 default_armature=None,
             ),
-            material=gs.materials.Rigid(gravity_compensation=1.0),
+            material=gs.materials.Rigid(gravity_compensation=1.0 if rm.family == "arm" else 0.0),
         )
         self._objects: dict = {}
         self._walls: dict[str, list] = {}
@@ -206,13 +210,14 @@ class GenesisBackend(Backend):
 
         jm = meta["joints"]
         self._arm = np.array([dof(j) for j in rm.arm_joints])
-        grip = meta["gripper"]
+        grip = meta.get("gripper") or {"joints": {}, "driven": [], "effort": {}}
         self._fingers = {n: (dof(n), c, o) for n, (c, o) in grip["joints"].items()}
-        driven = grip.get("driven") or [grip["main"]]
+        driven = grip.get("driven") or grip.get("main", [])
         self._driven = np.array([dof(n) for n in driven])
         self._driven_c = np.array([grip["joints"][n][0] for n in driven])
         self._driven_o = np.array([grip["joints"][n][1] for n in driven])
-        self._main, self._main_c, self._main_o = self._fingers[grip["main"]]
+        if self.has_gripper:
+            self._main, self._main_c, self._main_o = self._fingers[grip["main"]]
         all_names = [*rm.arm_joints, *grip["joints"]]
         all_dofs = np.array([dof(n) for n in all_names])
         robot.set_dofs_armature(np.array([jm[n]["armature"] for n in all_names]), all_dofs)
@@ -233,7 +238,7 @@ class GenesisBackend(Backend):
         # Every finger joint is tied to the driven ones, so the drivers also carry the
         # linkage's dry friction. MuJoCo's grip effort is the net squeeze, measured past
         # that friction; add it back, or a model with stiff linkage friction (xArm 7) stalls.
-        ref_c, ref_o = grip["joints"][driven[0]]
+        ref_c, ref_o = grip["joints"][driven[0]] if driven else (0.0, 1.0)
         friction_load = sum(jm[n]["frictionloss"] * abs((o - c) / (ref_o - ref_c)) for n, (c, o) in grip["joints"].items())
 
         def finger_gains(names, dofs, sat):
@@ -251,10 +256,11 @@ class GenesisBackend(Backend):
                 cap.append(e)
             return np.array(kp), np.array(kv), np.array(cap)
 
-        kp, kv, cap = finger_gains(driven, self._driven, _DRIVE_SAT)
-        robot.set_dofs_kp(kp, self._driven)
-        robot.set_dofs_kv(kv, self._driven)
-        robot.set_dofs_force_range(-cap, cap, self._driven)
+        if driven:
+            kp, kv, cap = finger_gains(driven, self._driven, _DRIVE_SAT)
+            robot.set_dofs_kp(kp, self._driven)
+            robot.set_dofs_kv(kv, self._driven)
+            robot.set_dofs_force_range(-cap, cap, self._driven)
 
         # Contact friction per link, as the MuJoCo model sets it per geom.
         friction = {}
@@ -281,13 +287,18 @@ class GenesisBackend(Backend):
         for name, ents in self._walls.items():
             for e in ents:
                 self._label[e.links[0].idx] = name
-        self._hand = link_of[meta["hand"]]
-        self._hand_anchor = _hand_anchor(rm)
+        self._hand = link_of[meta["hand"]] if rm.hand else None
+        self._hand_anchor = _hand_anchor(rm) if rm.hand else None
         self._pending: dict[str, np.ndarray] = {}
-        self._ctrl = np.zeros(self.n_arm + 1)
-        q0 = _np(robot.get_dofs_position())
-        lo, hi = (_np(x) for x in robot.get_dofs_limit())
-        robot.set_dofs_position(np.clip(q0, lo, hi), zero_velocity=True)
+        self._ctrl = np.zeros(len(self.joint_names))
+        if rm.floating:
+            yaw = rm.base_yaw
+            self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
+            self.set_joint_positions(rm.stand_q())
+        else:
+            q0 = _np(robot.get_dofs_position())
+            lo, hi = (_np(x) for x in robot.get_dofs_limit())
+            robot.set_dofs_position(np.clip(q0, lo, hi), zero_velocity=True)
         self.set_ctrl(self.qpos())
 
     def _add_object(self, o) -> None:
@@ -326,15 +337,23 @@ class GenesisBackend(Backend):
 
     def qpos(self):
         q = _np(self.robot.get_dofs_position())
+        if not self.has_gripper:
+            return q[self._arm]
         return np.append(q[self._arm], self._opening(q[self._main]))
 
     def qvel(self):
         v = _np(self.robot.get_dofs_velocity())
+        if not self.has_gripper:
+            return v[self._arm]
         return np.append(v[self._arm], v[self._main] / (self._main_o - self._main_c))
 
     def set_ctrl(self, target):
         target = np.asarray(target, float)
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
+        if not self.has_gripper:
+            self._ctrl = arm
+            self.robot.control_dofs_position(arm, self._arm)
+            return
         s = float(np.clip(target[self.n_arm], 0.0, 1.0))
         self._ctrl = np.append(arm, s)
         self.robot.control_dofs_position(arm, self._arm)
@@ -350,7 +369,7 @@ class GenesisBackend(Backend):
 
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
-        s = float(np.clip(q[self.n_arm], 0, 1))
+        s = float(np.clip(q[self.n_arm], 0, 1)) if self.has_gripper else 0.0
         pos = _np(self.robot.get_dofs_position())
         pos[self._arm] = q[: self.n_arm]
         # Every finger joint where it sits at this opening, so the gripper starts at rest.
@@ -358,6 +377,16 @@ class GenesisBackend(Backend):
             pos[d] = c + s * (o - c)
         self.robot.set_dofs_position(pos, zero_velocity=True)
         self.set_ctrl(q)
+
+    def base_pose(self):
+        return _np(self.robot.get_pos()), _np(self.robot.get_quat())
+
+    def base_velocity(self):
+        return np.concatenate([_np(self.robot.get_vel()), _np(self.robot.get_ang())])
+
+    def set_base_pose(self, pos, quat):
+        self.robot.set_pos(np.asarray(pos, float), zero_velocity=True)
+        self.robot.set_quat(np.asarray(quat, float), zero_velocity=True)
 
     def hand_pose(self):
         pos = _np(self._hand.get_pos())
@@ -369,7 +398,7 @@ class GenesisBackend(Backend):
         solver = self.scene.sim.rigid_solver
         for _ in range(self._substeps):
             for name, f in self._pending.items():
-                link = self._objects[name].links[0]
+                link = (self.robot if name == "robot" else self._objects[name]).links[0]
                 solver.apply_links_external_wrench(force=np.asarray(f)[None], links_idx=[link.idx], ref=gs.link_ref_frame.link_COM)
             self.scene.step()
         self._pending = {}
