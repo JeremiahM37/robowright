@@ -427,7 +427,8 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 
 ## License
 
-Apache-2.0. The SO-101 model (MJCF, URDF and meshes) is from
-[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) and
-[TheRobotStudio/SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100), both Apache-2.0.
-See [NOTICE](NOTICE).
+Apache-2.0. The bundled SO-101 model (MJCF and meshes) is from
+[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie), Apache-2.0, based on
+[TheRobotStudio/SO-ARM100](https://github.com/TheRobotStudio/SO-ARM100). Other robot models
+are downloaded from Menagerie at runtime and keep their own licences (`robowright robots`
+lists them). See [NOTICE](NOTICE).

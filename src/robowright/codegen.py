@@ -125,7 +125,7 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
     header += ['"""', ""]
     lines = (
         header
-        + sorted(imports)
+        + sorted(imports, key=lambda s: (s.startswith("from "), s))  # isort order: plain imports first
         + [
             "",
             f"SCENE = rw.SceneSpec.from_dict({scene})",
@@ -133,7 +133,8 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
             "",
             f"def {name}():",
             f"    with rw.launch(SCENE, backend={m['backend']!r}, seed={m['seed']}, name={name!r}) as world:",
-            "        robot, scene = world.robot, world.scene",
+            # Bind only what the body uses, so the generated file passes a linter as is.
+            "        robot, scene = world.robot, world.scene" if any("scene[" in ln for ln in body) else "        robot = world.robot",
         ]
     )
     lines += ["        " + ln for ln in body] or ["        pass"]
