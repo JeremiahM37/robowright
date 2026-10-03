@@ -158,7 +158,8 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
         if mod:
             importlib.import_module(f"robowright.backends.{mod}")
     if name not in _REGISTRY:
-        raise ValueError(f"unknown backend {name!r}; available: {sorted(_REGISTRY)}")
+        known = sorted(set(_MODULES) | set(_REGISTRY))
+        raise ValueError(f"unknown backend {name!r}; known backends: {', '.join(known)} (installed: {', '.join(available()) or 'none'})")
     return _REGISTRY[name](spec, seed=seed, **kw)
 
 

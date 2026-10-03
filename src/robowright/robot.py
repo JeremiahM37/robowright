@@ -242,6 +242,12 @@ class Robot:
         self._home_q = None
 
     @property
+    def base(self):
+        raise AttributeError(
+            f"{self.model.title} is a fixed-base arm: robot.base exists on legged robots. Arms have robot.arm, robot.gripper and robot.tcp"
+        )
+
+    @property
     def grip_yaw(self) -> float:
         """World angle of the finger-closing axis about z (modulo pi)."""
         T = self.kin.fk(self.true_qpos()[: self.n_arm])

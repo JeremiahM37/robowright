@@ -146,3 +146,36 @@ def test_tracing_survives_missing_gl(tmp_path, monkeypatch):
         w.robot.arm.home()
     tr = Trace(w.close())
     assert tr.frame_names == [] and len(tr) > 1
+
+
+@pytest.mark.parametrize("robot", ["panda", "go2"])
+def test_replay_and_codegen_beyond_the_so101(tmp_path, robot):
+    """A 7-DoF arm and a floating-base robot: replay is exact and codegen reproduces the run step for step."""
+    from robowright import expect
+
+    w = rw.launch(robot=robot, seed=3, name="orig", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    w.robot.reset_to()
+    if robot == "go2":
+        w.faults.push("robot", force=(0, 30.0, 0), duration=0.1)
+        w.wait(0.5)
+        w.robot.crouch(0.3)
+        w.robot.stand()
+        expect(w.robot.base).to_be_upright(tol_deg=15)
+    else:
+        w.faults.action_delay(steps=2)
+        w.robot.pick(w.scene["cube"])
+        w.robot.place(on=w.scene["bin"])
+    path = w.close()
+    assert replay(path).first_divergent_step is None
+    code = generate(path, test_name="test_regen")
+    ns = {}
+    exec(code, ns)
+    original_launch = rw.launch
+    try:
+        rw.launch = lambda *a, **k: original_launch(*a, **{**k, "settings": rw.Settings(trace="on", trace_dir=str(tmp_path / "regen"))})
+        ns["rw"] = rw
+        ns["test_regen"]()
+    finally:
+        rw.launch = original_launch
+    a, b = Trace(path).arrays, Trace(tmp_path / "regen" / "test_regen.zip").arrays
+    assert np.array_equal(a["qpos"], b["qpos"])

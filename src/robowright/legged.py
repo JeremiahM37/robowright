@@ -83,9 +83,13 @@ class LeggedRobot(Robot):
         self.world = world
         self.model = world.backend.robot_model
         self.n_arm = self.model.n_arm
-        self.base = Base(self)
+        self._base = Base(self)
         self._target = world.backend.qpos().copy()
         self._home_q = np.asarray(self.model.stand_q(), float)
+
+    @property
+    def base(self) -> Base:
+        return self._base
 
     @property
     def home_q(self) -> np.ndarray:
@@ -110,7 +114,9 @@ class LeggedRobot(Robot):
         b.set_joint_positions(q)
         self._target = q.copy()
         if self.world.trace:
-            self.world.trace.event("edit", "reset_to", {"q": [float(v) for v in q], "base_pos": [float(x), float(y), float(z)]})
+            self.world.trace.event(
+                "edit", "reset_to", {"q": [float(v) for v in q], "base_pos": [float(x), float(y), float(z)], "yaw": float(yaw)}
+            )
 
     @action
     def move_joints(self, q, speed: float | None = None, timeout: float | None = None):
@@ -155,3 +161,14 @@ class LeggedRobot(Robot):
 
     def _set_gripper(self, a):
         raise AttributeError(f"{self.model.title} has no gripper")
+
+    _ARM_ONLY = frozenset({"arm", "gripper", "tcp", "pick", "place", "kin", "grip_yaw", "min_grasp_z"})
+
+    def __getattribute__(self, name):
+        if name in LeggedRobot._ARM_ONLY:
+            title = object.__getattribute__(self, "model").title
+            raise AttributeError(
+                f"{title} is a legged robot: it has no {name!r}. Legged robots have robot.base, "
+                "robot.stand(), robot.crouch(), robot.move_joints() and robot.run_policy()"
+            )
+        return object.__getattribute__(self, name)

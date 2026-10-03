@@ -119,6 +119,9 @@ class World:
 
     def wait(self, seconds: float):
         """Let time pass while holding the current targets."""
+        if self.trace:
+            # Recorded so codegen reproduces timing: what a push or a fault does depends on it.
+            self.trace.event("wait", "world.wait", {"seconds": float(seconds)})
         self.step(max(1, round(seconds / self.dt)))
 
     def run_until(self, predicate: Callable[[], bool], timeout: float, hold: float = 0.0) -> bool:

@@ -93,4 +93,7 @@ def _apply(b, events):
         elif e["name"] == "move_object":
             b.set_object_pose(e["args"]["object"], e["args"]["pos"], e["args"]["quat"])
         elif e["name"] == "reset_to":
+            if "base_pos" in e["args"]:
+                yaw = e["args"].get("yaw", 0.0)
+                b.set_base_pose(e["args"]["base_pos"], (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
             b.set_joint_positions(np.array(e["args"]["q"]))

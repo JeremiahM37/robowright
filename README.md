@@ -139,7 +139,8 @@ pytest examples
 ```
 
 Robot models other than the SO-101 are downloaded from MuJoCo Menagerie the first time a
-test uses them (a sparse checkout, a few MB per robot) into `~/.cache/robowright`.
+test uses them, into `~/.cache/robowright`. It's a sparse checkout of just the robots you
+run: 30–40 MB each, mostly meshes.
 
 On a headless Linux machine robowright renders through EGL. Without a working GL, tests
 still run and traces are still recorded, just without camera frames.

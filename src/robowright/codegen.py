@@ -25,7 +25,7 @@ def _ident(name: str) -> str:
 
 
 def _subject(name: str) -> str:
-    return {"robot": "robot", "gripper": "robot.gripper", "tcp": "robot.tcp"}.get(name, f"scene[{name!r}]")
+    return {"robot": "robot", "gripper": "robot.gripper", "tcp": "robot.tcp", "base": "robot.base"}.get(name, f"scene[{name!r}]")
 
 
 def _value(v) -> str:
@@ -70,7 +70,12 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
         t, a = e["type"], e.get("args", {})
         if t == "edit" and e["name"] == "reset_to":
             q = a["q"]
-            body.append(f"robot.reset_to({_value(q[:-1])}, gripper={_value(q[-1])})")
+            if "base_pos" in a:  # legged: joints, then where the base stands
+                body.append(f"robot.reset_to({_value(q)}, base_pos={_value(a['base_pos'])}, yaw={_value(a.get('yaw', 0.0))})")
+            else:
+                body.append(f"robot.reset_to({_value(q[:-1])}, gripper={_value(q[-1])})")
+        elif t == "wait":
+            body.append(f"world.wait({_value(a['seconds'])})")
         elif t == "edit" and e["name"] == "move_object":
             body.append(f"world.move_object({a['object']!r}, {_value(a['pos'])}, {_value(a['quat'])})")
         elif t == "fault":

@@ -85,6 +85,9 @@ class Faults:
         return self._add(Push(object, tuple(map(float, force)), float(at), float(duration)))
 
     def weak_joint(self, joint: str, scale: float = 0.5):
+        names = self.world.backend.joint_names
+        if joint not in names:
+            raise ValueError(f"unknown joint {joint!r}; {self.world.backend.robot_model.title} has: {', '.join(names)}")
         self.world.backend.set_gain_scale(joint, scale)
         return self._add(WeakJoint(joint, scale))
 
