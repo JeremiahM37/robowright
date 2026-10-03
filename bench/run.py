@@ -257,12 +257,12 @@ def bench_micro(reps=2000):
     """Per-call costs of the core building blocks."""
     w = rw.launch(settings=_settings("off"))
     w.robot.reset_to()
-    chain = w.robot.chain
+    kin = w.robot.kin
     rng = np.random.default_rng(0)
     targets = [np.array([rng.uniform(0.16, 0.26), rng.uniform(-0.08, 0.08), rng.uniform(0.02, 0.07)]) for _ in range(200)]
     t0 = time.perf_counter()
     for t in targets:
-        chain.ik(t, w.robot.home_q, (0, 0, -1), yaw=0.0)
+        kin.ik(t, w.robot.home_q, (0, 0, -1), yaw=0.0)
     ik_ms = (time.perf_counter() - t0) / len(targets) * 1000
     t0 = time.perf_counter()
     for _ in range(reps):
@@ -287,7 +287,8 @@ def write_markdown(res: dict, path: Path):
         f"Python {e['python']}, MuJoCo {e['mujoco']}, robowright {e['robowright']}. Raw data: "
         "[`bench/results/results.json`](bench/results/results.json).",
         "",
-        "One control step is 20 ms of simulated time (50 Hz) and four physics substeps. Single-process throughput "
+        "These are framework costs on the default robot (SO-101). One control step is 20 ms of simulated time "
+        "(50 Hz) and four physics substeps; the robot x engine matrix is in MATRIX.md. Single-process throughput "
         "numbers moved by about 20% between two consecutive runs on this machine; treat them as rough.",
         "",
     ]
@@ -342,9 +343,9 @@ def write_markdown(res: dict, path: Path):
         )
     L += [
         "",
-        "## Same test, two physics engines",
+        "## Same test, every engine",
         "",
-        "Randomised pick-and-place (cube position +/-2 cm, yaw +/-0.5 rad), identical seeds on both engines.",
+        "Randomised pick-and-place (cube position +/-2 cm, yaw +/-0.5 rad), identical seeds on every engine.",
         "",
         "| backend | passed | 95% CI |",
         "|---|---:|---:|",
@@ -393,28 +394,33 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--markdown-only", action="store_true", help="re-render BENCHMARKS.md from results.json")
+    ap.add_argument("--steps", help="comma-separated stages to (re)run, merged into the existing results.json")
     a = ap.parse_args()
     if a.markdown_only:
         write_markdown(json.loads((OUT / "results.json").read_text()), ROOT / "BENCHMARKS.md")
         return
     reps = 5 if a.quick else 20
     backends = available()
-    res = {"env": env()}
+    path = OUT / "results.json"
+    res = json.loads(path.read_text()) if a.steps and path.exists() else {}
+    res["env"] = env()
     steps = [
         ("throughput", lambda: bench_throughput(backends, 5.0 if a.quick else 20.0)),
         ("pick_place", lambda: bench_pick_place(backends, reps)),
-        ("parallel", lambda: bench_parallel([1, 2, 4] if a.quick else [1, 2, 4, 8, 16])),
+        ("parallel", lambda: bench_parallel([1, 2, 4])),
         ("replay", lambda: bench_replay(backends, reps)),
         ("parity", lambda: bench_parity(backends, 10 if a.quick else 50)),
         ("faults", lambda: bench_faults(5 if a.quick else 20)),
         ("micro", bench_micro),
     ]
+    if a.steps:
+        steps = [s for s in steps if s[0] in a.steps.split(",")]
+    OUT.mkdir(parents=True, exist_ok=True)
     for name, fn in steps:
         t0 = time.perf_counter()
         res[name] = fn()
         print(f"{name}: {time.perf_counter() - t0:.1f}s", flush=True)
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "results.json").write_text(json.dumps(res, indent=2))
+        path.write_text(json.dumps(res, indent=2))  # after every stage: a late crash loses one stage, not the run
     write_markdown(res, ROOT / "BENCHMARKS.md")
     print((ROOT / "BENCHMARKS.md").read_text())
 

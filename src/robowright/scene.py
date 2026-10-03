@@ -153,7 +153,10 @@ def default_camera(robot: str = "so101") -> CameraSpec:
     m = robots.get(robot)
     if m.family == "legged":
         h = m.stand_height
-        k = max(h, 0.3) / (0.55 if "humanoid" in m.tags else 0.3)  # tall and narrow: frame the height
+        if "humanoid" in m.tags:  # tall and narrow: a level view of the whole height
+            k = h / 0.38
+            return CameraSpec("front", pos=(0.55 * k, -0.75 * k, 0.9 * h), lookat=(0.0, 0.0, 0.7 * h), fovy=45.0)
+        k = max(h, 0.3) / 0.3
         return CameraSpec("front", pos=(0.55 * k, -0.75 * k, 0.45 * k), lookat=(0.0, 0.0, 0.6 * h), fovy=45.0)
     if robot == "so101":
         return CameraSpec("front")

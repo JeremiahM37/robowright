@@ -1,6 +1,6 @@
 # robowright
 
-**Playwright-style testing for robots.** Write a robot test once, with actions that wait until they're actually done and assertions that retry until the physical world catches up. Run it on **19 robots** (13 arms, 6 legged) across **several physics engines**, and get a trace you can scrub through, a bit-for-bit replay and a generated regression test for every failure.
+**Playwright-style testing for robots.** Write a robot test once, with actions that wait until they're actually done and assertions that retry until the physical world catches up. Run it on **19 robots** (13 arms, 6 legged) across **five physics engines**, and get a trace you can scrub through, a bit-for-bit replay and a generated regression test for every failure.
 
 <p align="center"><img src="docs/demo.gif" width="480" alt="SO-101 arm picking up a red cube and placing it in a blue bin"></p>
 
@@ -253,7 +253,7 @@ failure becomes a test you can run every time.
 ### Several physics engines
 
 ```console
-$ pytest --rw-backend mujoco,pybullet,drake,genesis
+$ pytest --rw-backend mujoco,pybullet,drake,genesis,isaac
 ```
 
 | engine | install | notes |
@@ -262,6 +262,7 @@ $ pytest --rw-backend mujoco,pybullet,drake,genesis
 | PyBullet | `pip install robowright[pybullet]` | Bullet, the long-standing open-source baseline |
 | Drake | `pip install robowright[drake]` (Python 3.12+) | Toyota Research Institute's simulator; SAP contact solver, soft-surface contact |
 | Genesis | `pip install robowright[genesis]` | CPU by default (faster than CUDA for one scene, and deterministic); `ROBOWRIGHT_GENESIS_DEVICE=gpu` |
+| Isaac Sim | install Isaac Sim 5.x into the environment | NVIDIA PhysX 5; needs an NVIDIA GPU machine. CPU PhysX pipeline by default (deterministic, ~17× faster than the GPU pipeline for one scene); physics only, no camera frames yet |
 
 The robot, kinematics, actions and assertions are shared; only physics differs. Every
 engine loads the same description of each robot: a URDF and OBJ meshes exported from its
@@ -274,23 +275,83 @@ on contact details that no engine models faithfully. Those cases are kept visibl
 tuned away: [`conftest.py`](conftest.py) lists each known divergence as a strict expected
 failure with the measured reason, so CI fails the day one starts passing.
 
-## Benchmarks
+## The matrix: every robot on every engine
+
+`python bench/matrix.py` runs the same randomised pick-and-place on every (engine, arm)
+pair, 20 seeds each (cube position σ = 15 mm, yaw σ = 0.6 rad, the same seeds in every
+column), plus standing and push recovery for the legged robots. Every number is measured;
+the full tables are in [MATRIX.md](MATRIX.md).
+
+| robot | MuJoCo | PyBullet | Drake | Genesis | Isaac Sim |
+|---|---:|---:|---:|---:|---:|
+| SO-101 | 20/20 | 20/20 | 20/20 | 20/20 | 15/20 ⚠️ |
+| Franka Emika Panda | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| Universal Robots UR5e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| Universal Robots UR10e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| Kinova Gen3 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 19/20 ⚠️ | 20/20 |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 16/20 ⚠️ | 20/20 |
+| UFACTORY xArm 7 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| Trossen ViperX 300 S (ALOHA) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| Trossen WidowX 250 S (Bridge) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| AgileX PiPER | 20/20 | 0/20 ❌ | 20/20 | 20/20 | 20/20 |
+| I2RT YAM | 20/20 | 15/20 ⚠️ | 20/20 | 20/20 | 20/20 |
+| ARX L5 | 20/20 | 0/20 ❌ | 20/20 | 20/20 | 20/20 |
+| Rethink Sawyer + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| *legged: stands, survives a shove of ≥ 0.6× body weight* | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+
+What running everything on everything turned up:
+
+- **Bugs in robowright, not the engines.** The first full run had the KUKA iiwa at 8/20
+  *in MuJoCo*, the reference, and dropping the cube 100–150 mm from MuJoCo's spot in every
+  other engine. Traces showed four causes, all in robowright, not the engines:
+  - the redundant arm's IK let the elbow drift during straight-line moves;
+  - the IK picked a symmetric grasp yaw that needed more wrist turning than necessary;
+  - `place()` turned the wrist under load;
+  - `place()` crossed 8 mm above the bin's rim.
+
+  All four are fixed; every arm is now 20/20 in MuJoCo and Drake.
+- **Weak gripper models.** The low-cost slide-finger grippers are modelled squeezing
+  0.4–2.2 N (PiPER, ARX L5, YAM, WidowX), and the Franka Hand 1.3 N against 70 N on the
+  real one. MuJoCo's, Drake's and Genesis's contact models hold a 30 g cube anyway; PyBullet's
+  drops it from the PiPER and ARX L5 every time and from the YAM a quarter of the time.
+- **Contact models disagree by millimetres.** Same robot, same seed, same commands: Drake
+  and Genesis put the cube within about 1 mm of MuJoCo's final position on most arms,
+  PyBullet within about 6–23 mm, and on the weak grippers up to 19 cm, where the cube fell.
+- **Engine-specific grasp failures.** Holding the cube in a Robotiq 2F-85 on the iiwa,
+  Genesis lets it slide out slowly during transport (16/20); the other engines hold it. In
+  Isaac Sim the SO-101's swinging jaw keeps chattering against the cube, so the gripper
+  never reads as stalled (15/20).
+- **Fixes needed to match MuJoCo:**
+  - PyBullet multiplies friction coefficients where MuJoCo takes the larger, and folding
+    MuJoCo's armature into PyBullet's link inertia made arms fling held objects.
+  - Drake needed soft-surface contact for objects and its "lagged" contact setting to
+    keep a resting cube from spinning.
+  - Genesis on CPU is 5.6× faster than on an RTX 5080 for a single scene, and Isaac Sim's
+    CPU PhysX pipeline 17× faster than its GPU one. GPU physics pays off for thousands of
+    parallel scenes, not for one test.
+  - Isaac Sim needed PGS instead of PhysX's default TGS solver (TGS let the xArm 7's gripper
+    linkage drag its arm joints off target), rigid mimic joints for finger coupling, and
+    joint velocities measured from motion, because PhysX reports a clamped jaw as moving.
+- **Legged robots agree closely.** Every engine stands all six robots on joint servos, and
+  push recovery agrees to within about 0.1× body weight across engines.
+
+### Framework speed
 
 Measured with `python bench/run.py`. Full tables and machine details are in
 [BENCHMARKS.md](BENCHMARKS.md).
 
-On an AMD Ryzen AI Max+ 395 (32 threads):
+On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 
-| | MuJoCo | PyBullet |
-|---|---:|---:|
-| one pick-and-place test (2 actions, 3 assertions) | 90 ms wall for 3.6 s simulated | 146 ms for 3.3 s |
-| control steps/s, no tracing / tracing / tracing + camera frames | 25k / 18k / 3.1k | 5.2k / 5.0k / 0.46k |
-| replays of faulted runs that were bit-identical | 20/20 | 20/20 |
-| randomised pick-and-place passing (same 50 seeds) | 50/50 | 50/50 |
+| | MuJoCo | PyBullet | Drake | Genesis |
+|---|---:|---:|---:|---:|
+| one pick-and-place test (2 actions, 3 assertions) | 163 ms | 220 ms | 1481 ms | 294 ms |
+| control steps/s: no tracing / tracing / tracing + camera frames | 28.5k / 18.1k / 4.5k | 6.0k / 5.6k / 535 | 1.7k / 1.4k / 959 | 1.7k / 1.4k / 765 |
+| replays of faulted runs that were bit-identical | 20/20 | 20/20 | 20/20 | 20/20 |
+| randomised pick-and-place passing (same 50 seeds) | 50/50 | 50/50 | 50/50 | 50/50 |
 
-- **Parallel runs:** 64 randomised tests take 8.8 s on one worker and 2.3 s with 8 pytest-xdist workers. Speed-up flattens around 4x because a suite that small is dominated by worker start-up.
-- **Invariants:** two `expect(...).always` invariants add 15 µs to each 31 µs control step.
-- **Fault curves:** the reference policy still passes 20/20 with 0.06 rad of encoder noise, 12/20 at 0.09 rad and 0/20 at 0.12 rad. With the shoulder servo's gain cut to 1% it passes 15/20; at 0.5% it passes 1/20. Those are the curves `@pytest.mark.trials` exists to guard.
+- **Parallel runs:** 64 randomised tests take 13.1 s on one worker and 4.7 s on four pytest-xdist workers (2.8x).
+- **Invariants:** two `expect(...).always` invariants add 14 µs to each 33 µs control step; an IK solve costs 0.35 ms.
+- **Fault curves:** the reference policy still passes 20/20 with 0.06 rad of encoder noise, 13/20 at 0.09 rad and 0/20 at 0.12 rad; with the shoulder servo's gain cut to 2% it passes 13/20, at 0.5% 3/20. Those are the curves `@pytest.mark.trials` exists to guard.
 
 ## How it works
 

@@ -383,12 +383,23 @@ class Robot:
         return obs
 
     @action
-    def run_policy(self, policy, task: str | None = None, until=None, timeout: float = 20.0, cameras=(), privileged: bool = False):
+    def run_policy(
+        self,
+        policy,
+        task: str | None = None,
+        until=None,
+        timeout: float = 20.0,
+        cameras=(),
+        privileged: bool = False,
+        hold: float = 0.0,
+    ):
         """Run a policy (``obs -> joint targets`` or an action chunk) until ``until`` or ``timeout``.
 
         ``until`` is a zero-argument predicate, typically built with
-        :func:`robowright.condition`. Returns a :class:`Rollout` summary;
-        it does not raise when the condition is not met - assert on it.
+        :func:`robowright.condition`; with ``hold`` it must stay true that long
+        while the policy keeps running (an object carried into a bin is "inside"
+        before it is let go). Returns a :class:`Rollout` summary; it does not
+        raise when the condition is not met - assert on it.
         """
         w = self.world
         if hasattr(policy, "reset"):
@@ -396,10 +407,15 @@ class Robot:
         queue: list = []
         t0, wall0, steps, infer_ms = w.time, _time.perf_counter(), 0, []
         met = False
+        since = None
         while w.time - t0 < timeout - 1e-9:
             if until is not None and until():
-                met = True
-                break
+                since = w.time if since is None else since
+                if w.time - since >= hold - 1e-9:
+                    met = True
+                    break
+            else:
+                since = None
             if not queue:
                 obs = self.observe(cameras, privileged, task)
                 ti = _time.perf_counter()

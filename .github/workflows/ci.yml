@@ -37,13 +37,13 @@ jobs:
           path: robowright-traces/
 
   matrix:
-    # Every robot on every engine CI can run: the backend contract, the legged contract,
+    # Every robot on every engine CI can run (Isaac Sim needs an NVIDIA GPU machine): the backend contract, the legged contract,
     # and the example suite. Known divergences are strict xfails (see conftest.py).
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        backend: [mujoco, pybullet]
+        backend: [mujoco, pybullet, drake, genesis]
         robots: [all, legged]
     steps:
       - uses: actions/checkout@v4
@@ -52,13 +52,19 @@ jobs:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
       - run: pip install -e ".[dev]"
+      - if: matrix.backend == 'drake'
+        run: pip install -e ".[drake]"
+      - if: matrix.backend == 'genesis'
+        # CPU torch: Genesis runs on its CPU backend by default.
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -e ".[genesis]"
       - name: Robot models (MuJoCo Menagerie, sparse checkout) and exported URDFs
         uses: actions/cache@v4
         with:
           path: ~/.cache/robowright
           key: robowright-models-${{ hashFiles('src/robowright/robots/**') }}
       - name: Robot x engine tests
-        run: pytest tests/test_conformance.py tests/test_legged.py examples -n auto --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }}
+        # Genesis workers take ~4.5 GB each; two fit a hosted runner.
+        run: pytest tests/test_conformance.py tests/test_legged.py examples -n ${{ matrix.backend == 'genesis' && '2' || 'auto' }} --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }}
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

@@ -40,7 +40,7 @@ def test_selectors(scene):
 def test_policy_with_randomized_cube(world, robot, scene):
     world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
     done = condition(scene["cube"], "to_be_inside", scene["bin"])
-    rollout = robot.run_policy(ScriptedPickPlace(), until=done, timeout=15, privileged=True)
+    rollout = robot.run_policy(ScriptedPickPlace(), until=done, hold=1.0, timeout=15, privileged=True)
     assert rollout.success, rollout
     expect(scene["cube"]).to_be_at_rest()
 
@@ -51,7 +51,7 @@ def test_policy_with_sensor_noise_and_latency(world, robot, scene):
     world.faults.joint_noise(std=0.02)
     world.faults.action_delay(steps=3)
     done = condition(scene["cube"], "to_be_inside", scene["bin"])
-    assert robot.run_policy(ScriptedPickPlace(), until=done, timeout=20, privileged=True)
+    assert robot.run_policy(ScriptedPickPlace(), until=done, hold=1.0, timeout=20, privileged=True)
 
 
 def test_cube_survives_a_shove_when_held(world, robot, scene):
