@@ -357,9 +357,15 @@ class Robot:
         above = np.array([p[0], p[1], top + height + 0.03])
         # Rise straight up to the transit height first: a joint-space move from a low
         # lift dips on its way across and drags the held object through the target's rim.
+        # Small arms cannot always reach that high where they are; then go direct.
         here = self.tcp.position
         if here[2] < above[2] - 0.005:
-            self.arm.move_to.__wrapped__(self.arm, [here[0], here[1], above[2]], linear=True, timeout=timeout)
+            try:
+                self._ik([here[0], here[1], above[2]], self._target[: self.n_arm], DOWN, yaw)
+            except UnreachableError:
+                pass
+            else:
+                self.arm.move_to.__wrapped__(self.arm, [here[0], here[1], above[2]], yaw=yaw, linear=True, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper)
