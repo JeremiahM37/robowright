@@ -1,4 +1,4 @@
-"""Command line: ``robowright test | show-trace | replay | codegen | info``."""
+"""Command line: ``robowright test | show-trace | replay | codegen | robots | info``."""
 
 from __future__ import annotations
 
@@ -50,13 +50,19 @@ def _info(args, rest):
     import numpy
 
     from . import __version__
-    from .backends.base import available
+    from .backends.base import _REQUIRES, available
 
     print(f"robowright {__version__}")
     print(f"python {platform.python_version()}, numpy {numpy.__version__}")
     for name in available():
-        mod = __import__(name)
-        print(f"backend {name}: {getattr(mod, '__version__', 'installed')}")
+        from importlib.metadata import PackageNotFoundError, version
+
+        dist = {"genesis": "genesis-world", "drake": "drake"}.get(name, _REQUIRES[name])
+        try:
+            v = version(dist)
+        except PackageNotFoundError:
+            v = "installed"
+        print(f"backend {name}: {v}")
     try:
         from . import launch
 
@@ -66,6 +72,27 @@ def _info(args, rest):
         print(f"offscreen rendering: ok ({img.shape[1]}x{img.shape[0]})")
     except Exception as e:  # rendering is optional: traces just lose their frames
         print(f"offscreen rendering: unavailable ({type(e).__name__}: {e})")
+    return 0
+
+
+def _robots(args, rest):
+    from . import robots
+
+    rows = []
+    for name in robots.names(args.family):
+        m = robots.get(name)
+        kind = m.family if m.family == "arm" else next((t for t in m.tags if t in ("quadruped", "humanoid")), m.family)
+        rows.append((name, m.title, m.maker, kind, str(m.n_arm), m.license))
+    head = ("name", "robot", "maker", "kind", "joints", "model licence")
+    if args.markdown:
+        print("| " + " | ".join(head) + " |")
+        print("|" + "---|" * len(head))
+        for r in rows:
+            print(f"| `{r[0]}` | " + " | ".join(r[1:]) + " |")
+        return 0
+    widths = [max(len(x) for x in col) for col in zip(head, *rows)]
+    for r in (head, *rows):
+        print("  ".join(x.ljust(w) for x, w in zip(r, widths)).rstrip())
     return 0
 
 
@@ -87,11 +114,14 @@ def main(argv=None) -> int:
     c.add_argument("--name")
     c.add_argument("--full", action="store_true", help="include events after the first failure")
     sub.add_parser("info", help="versions, backends and rendering support")
+    rb = sub.add_parser("robots", help="list the robots tests can run on")
+    rb.add_argument("--family", choices=["arm", "legged"])
+    rb.add_argument("--markdown", action="store_true")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
         return _test(None, argv[1:])
     args = p.parse_args(argv)
-    return {"show-trace": _show, "replay": _replay, "codegen": _codegen, "info": _info}[args.cmd](args, [])
+    return {"show-trace": _show, "replay": _replay, "codegen": _codegen, "info": _info, "robots": _robots}[args.cmd](args, [])
 
 
 if __name__ == "__main__":

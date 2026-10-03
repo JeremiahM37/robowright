@@ -1,12 +1,11 @@
 # robowright
 
-**Playwright-style testing for robots.** Write a robot test once, with actions that wait until they're actually done and assertions that retry until the physical world catches up. Run it on MuJoCo or PyBullet. Every failure comes with a trace you can scrub through, a replay that reproduces it bit-for-bit, and a generated regression test.
+**Playwright-style testing for robots.** Write a robot test once, with actions that wait until they're actually done and assertions that retry until the physical world catches up. Run it on **19 robots** (13 arms, 6 legged) across **several physics engines**, and get a trace you can scrub through, a bit-for-bit replay and a generated regression test for every failure.
 
 <p align="center"><img src="docs/demo.gif" width="480" alt="SO-101 arm picking up a red cube and placing it in a blue bin"></p>
 
 ```python
 from robowright import expect
-
 
 def test_pick_and_place(robot, scene):
     cube, bin = scene["cube"], scene["bin"]
@@ -20,11 +19,18 @@ def test_pick_and_place(robot, scene):
 ```
 
 ```console
-$ pytest --rw-backend mujoco,pybullet
+$ pytest --rw-robot all --rw-backend mujoco,pybullet     # 13 arms x 2 engines, same test
 ```
 
-> **Status: pre-alpha prototype.** One robot (SO-101 arm), two simulators, top-down
-> grasping. See [Limitations](#limitations) before relying on it.
+<p align="center"><img src="docs/gallery.png" alt="Every supported robot running the same test: 13 arms holding the cube, 6 legged robots standing"></p>
+
+The test above runs unchanged on a Franka Panda, a UR5e with a Robotiq gripper, a Kinova
+Gen3, a KUKA iiwa, an xArm 7, ALOHA's ViperX, the Bridge WidowX, a PiPER, a YAM, an ARX L5,
+a Sawyer and the LeRobot SO-101. Adding a robot is about ten lines: name its arm joints,
+hand, finger bodies and gripper actuator. robowright works out the tool axis, tool centre
+point, fingertip clearance and gripper calibration from the robot's own model.
+
+> **Status: pre-alpha.** Simulation only. See [Limitations](#limitations).
 
 ## Why
 
@@ -54,6 +60,70 @@ On top of that, it adds things robots need and web pages don't:
 - **Fault injection:** sensor noise, command latency, weak servos, shoves and camera dropout, all seeded.
 - **Invariants:** `expect(robot).always.to_have_no_collisions()` is checked after every step.
 - **Deterministic replay:** re-simulates a trace from its recorded motor commands and reports the first step where anything diverges.
+
+## Robots
+
+| name | robot | maker | kind | joints | model licence |
+|---|---|---|---|---|---|
+| `so101` | SO-101 | TheRobotStudio / Hugging Face | arm | 5 | Apache-2.0 |
+| `panda` | Franka Emika Panda | Franka Robotics | arm | 7 | Apache-2.0 |
+| `ur5e` | Universal Robots UR5e + Robotiq 2F-85 | Universal Robots | arm | 6 | BSD (arm, gripper) |
+| `ur10e` | Universal Robots UR10e + Robotiq 2F-85 | Universal Robots | arm | 6 | BSD (arm, gripper) |
+| `gen3` | Kinova Gen3 + Robotiq 2F-85 | Kinova | arm | 7 | BSD (arm, gripper) |
+| `iiwa14` | KUKA LBR iiwa 14 + Robotiq 2F-85 | KUKA | arm | 7 | BSD-3-Clause (arm), BSD (gripper) |
+| `xarm7` | UFACTORY xArm 7 | UFACTORY | arm | 7 | BSD |
+| `vx300s` | Trossen ViperX 300 S (ALOHA) | Trossen Robotics | arm | 6 | BSD |
+| `wx250s` | Trossen WidowX 250 S (Bridge) | Trossen Robotics | arm | 6 | BSD |
+| `piper` | AgileX PiPER | AgileX Robotics | arm | 6 | MIT |
+| `yam` | I2RT YAM | I2RT | arm | 6 | MIT |
+| `arx_l5` | ARX L5 | ARX | arm | 6 | BSD-3-Clause |
+| `sawyer` | Rethink Sawyer + Robotiq 2F-85 | Rethink Robotics | arm | 7 | Apache-2.0 (arm), BSD (gripper) |
+| `go2` | Unitree Go2 | Unitree Robotics | quadruped | 12 | BSD |
+| `go1` | Unitree Go1 | Unitree Robotics | quadruped | 12 | BSD-3-Clause |
+| `a1` | Unitree A1 | Unitree Robotics | quadruped | 12 | BSD-3-Clause |
+| `spot` | Boston Dynamics Spot | Boston Dynamics | quadruped | 12 | BSD-3-Clause |
+| `anymal_c` | ANYbotics ANYmal C | ANYbotics | quadruped | 12 | BSD |
+| `g1` | Unitree G1 | Unitree Robotics | humanoid | 29 | BSD |
+
+```console
+$ robowright robots                              # this list
+$ pytest --rw-robot panda,ur5e                   # pick robots
+$ pytest --rw-robot all                          # every arm
+$ pytest --rw-robot legged                       # every legged robot
+```
+
+Models come from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie),
+fetched on first use (a sparse checkout of just the robots you run, pinned to one commit),
+except the SO-101, which ships with robowright. They keep their own licences. Robots
+without a gripper of their own (UR5e, UR10e, Gen3, iiwa, Sawyer) get a Robotiq 2F-85.
+
+Each arm is mounted where its top-down workspace covers the same task area, so a test's
+coordinates mean the same thing on every robot. Everything else is derived from the model,
+not hand-tuned:
+
+- **Tool axis and TCP:** read from the finger geometry, with the TCP placed where the fingers close.
+- **Fingertip clearance:** how low a grasp can go before the fingertips touch the table.
+- **Gripper calibration:** every finger joint's open and closed position, plus which joints the
+  actuator drives and which follow through a linkage. Engines without MuJoCo's tendons and
+  equality constraints need this to move the fingers the same way.
+
+## Legged robots
+
+```python
+def test_go2_recovers_from_a_shove(world, robot):
+    expect(robot.base).always.to_be_upright(tol_deg=30)          # invariant: never tips over
+    world.faults.push("robot", force=(0, 0.3 * robot.total_mass * 9.81, 0), duration=0.1)
+    world.wait(1.5)
+    expect(robot.base).to_be_upright(tol_deg=10)
+    expect(robot.base).to_be_above(0.8 * robot.model.stand_height)
+```
+
+`robot.base` is a live handle like any object: position, orientation, velocity, contacts.
+`robot.stand()`, `robot.crouch(depth)` and `robot.move_joints(q)` wait until the robot
+settles. Policies get what an IMU and joint encoders give a real robot (`base_quat`,
+`base_ang_vel`, `qpos`, `qvel`). There is no walking controller built in: walking is a
+policy's job, run with `robot.run_policy(...)`. Unitree H1 and Booster T1 are not on the
+list because neither can stand on joint servos alone, without a balance controller.
 
 ## Install
 

@@ -5,15 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  MUJOCO_GL: egl
+
 jobs:
-  test:
+  unit:
+    # The framework itself, on the default robot (SO-101 ships with robowright, no download).
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python: ["3.10", "3.12"]
-    env:
-      MUJOCO_GL: egl
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,17 +23,44 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Offscreen GL (Mesa EGL)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
-      - name: Install
-        run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]"
       - name: Lint
-        run: ruff check src tests examples bench docs scripts && ruff format --check src tests examples bench docs scripts
-      - name: Environment
-        run: robowright info
-      - name: Tests (MuJoCo + PyBullet)
-        run: pytest tests examples -n auto --rw-backend mujoco,pybullet
+        run: ruff check . && ruff format --check .
+      - run: robowright info
+      - name: Tests (MuJoCo + PyBullet, SO-101)
+        run: pytest tests examples -n auto --rw-backend mujoco,pybullet --rw-robot so101
       - name: Upload traces of failed tests
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: robowright-traces-py${{ matrix.python }}
+          name: traces-unit-py${{ matrix.python }}
+          path: robowright-traces/
+
+  matrix:
+    # Every robot on every engine CI can run: the backend contract, the legged contract,
+    # and the example suite. Known divergences are strict xfails (see conftest.py).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [mujoco, pybullet]
+        robots: [all, legged]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
+      - run: pip install -e ".[dev]"
+      - name: Robot models (MuJoCo Menagerie, sparse checkout) and exported URDFs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/robowright
+          key: robowright-models-${{ hashFiles('src/robowright/robots/**') }}
+      - name: Robot x engine tests
+        run: pytest tests/test_conformance.py tests/test_legged.py examples -n auto --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traces-${{ matrix.backend }}-${{ matrix.robots }}
           path: robowright-traces/

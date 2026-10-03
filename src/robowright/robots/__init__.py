@@ -89,6 +89,7 @@ register(
         base_pos=(-0.3, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="Franka Robotics",
+        license="Apache-2.0",
         tags=("research", "7dof"),
     )
 )
@@ -101,6 +102,7 @@ register(
         base_pos=(-0.3, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="Universal Robots",
+        license="BSD (arm, gripper)",
         tags=("industrial", "cobot", "6dof"),
         **_2F85,
     )
@@ -114,6 +116,7 @@ register(
         base_pos=(-0.45, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="Universal Robots",
+        license="BSD (arm, gripper)",
         tags=("industrial", "cobot", "6dof"),
         **_2F85,
     )
@@ -127,6 +130,7 @@ register(
         base_pos=(-0.3, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="Kinova",
+        license="BSD (arm, gripper)",
         tags=("research", "7dof"),
         **{**_2F85, "attach": Attachment(_m("robotiq_2f85/2f85.xml"), "pinch_site")},
     )
@@ -140,6 +144,7 @@ register(
         base_pos=(-0.4, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="KUKA",
+        license="BSD-3-Clause (arm), BSD (gripper)",
         tags=("industrial", "7dof"),
         **_2F85,
     )
@@ -159,6 +164,7 @@ register(
         base_pos=(-0.25, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="UFACTORY",
+        license="BSD",
         tags=("cobot", "7dof"),
     )
 )
@@ -177,6 +183,7 @@ register(
         base_pos=(-0.1, 0.0, 0.0),
         home=(0.2, 0.0, 0.15),
         maker="Trossen Robotics",
+        license="BSD",
         tags=("aloha", "6dof"),
     )
 )
@@ -195,6 +202,7 @@ register(
         base_pos=(-0.05, 0.0, 0.0),
         home=(0.2, 0.0, 0.15),
         maker="Trossen Robotics",
+        license="BSD",
         tags=("bridge", "open-x", "6dof"),
     )
 )
@@ -213,6 +221,7 @@ register(
         base_pos=(0.0, 0.0, 0.0),
         home=(0.2, 0.0, 0.12),
         maker="AgileX Robotics",
+        license="MIT",
         tags=("low-cost", "6dof"),
     )
 )
@@ -231,6 +240,7 @@ register(
         base_pos=(-0.05, 0.0, 0.0),
         home=(0.2, 0.0, 0.15),
         maker="I2RT",
+        license="MIT",
         tags=("low-cost", "6dof"),
     )
 )
@@ -249,6 +259,7 @@ register(
         base_pos=(-0.05, 0.0, 0.0),
         home=(0.2, 0.0, 0.15),
         maker="ARX",
+        license="BSD-3-Clause",
         tags=("low-cost", "6dof"),
     )
 )
@@ -261,6 +272,7 @@ register(
         base_pos=(-0.35, 0.0, 0.0),
         home=(0.2, 0.0, 0.2),
         maker="Rethink Robotics",
+        license="Apache-2.0 (arm), BSD (gripper)",
         tags=("research", "7dof"),
         **_2F85,
     )
@@ -282,8 +294,8 @@ register(
         base_body="base",
         servo=(60.0, 3.0),
         maker="Unitree Robotics",
+        license="BSD",
         tags=("quadruped",),
-        license="BSD-3-Clause",
         **_LEGGED,
     )
 )
@@ -295,8 +307,8 @@ register(
         _legs("FR", "FL", "RR", "RL"),
         base_body="trunk",
         maker="Unitree Robotics",
-        tags=("quadruped",),
         license="BSD-3-Clause",
+        tags=("quadruped",),
         **_LEGGED,
     )
 )
@@ -308,8 +320,8 @@ register(
         _legs("FR", "FL", "RR", "RL"),
         base_body="trunk",
         maker="Unitree Robotics",
+        license="BSD-3-Clause",
         tags=("quadruped",),
-        license="MPL-2.0",
         **_LEGGED,
     )
 )
@@ -321,8 +333,8 @@ register(
         _legs("fl", "fr", "hl", "hr", names=("hx", "hy", "kn")),
         base_body="body",
         maker="Boston Dynamics",
-        tags=("quadruped",),
         license="BSD-3-Clause",
+        tags=("quadruped",),
         **_LEGGED,
     )
 )
@@ -335,8 +347,8 @@ register(
         base_body="base",
         stand=(0.0, 0.4, -0.8, 0.0, 0.4, -0.8, 0.0, -0.4, 0.8, 0.0, -0.4, 0.8),
         maker="ANYbotics",
+        license="BSD",
         tags=("quadruped",),
-        license="BSD-3-Clause",
         **_LEGGED,
     )
 )
@@ -354,8 +366,8 @@ register(
         # squat: hips and ankles pitch against the knees so the torso stays over the feet
         crouch=(-0.8, 0, 0, 1.6, -0.8, 0) * 2 + (0,) * 17,
         maker="Unitree Robotics",
+        license="BSD",
         tags=("humanoid",),
-        license="BSD-3-Clause",
         **_LEGGED,
     )
 )

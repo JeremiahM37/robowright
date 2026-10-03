@@ -9,11 +9,15 @@ options:
 steps:
   - name: lint
     actions:
-      - shell: ".venv/bin/ruff check src tests examples bench docs scripts && .venv/bin/ruff format --check src tests examples bench docs scripts"
+      - shell: ".venv/bin/ruff check . && .venv/bin/ruff format --check ."
 
-  - name: tests on both physics engines
+  - name: tests on both physics engines (SO-101)
     actions:
-      - shell: { cmd: ".venv/bin/python -m pytest tests examples -q -n 8 -p no:cacheprovider --rw-backend mujoco,pybullet", timeout: 900 }
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests examples -q -n 4 -p no:cacheprovider --rw-backend mujoco,pybullet", timeout: 900 }
+
+  - name: every robot on both engines (arm contract, legged contract, examples; known divergences are strict xfails)
+    actions:
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py examples -q -n 4 -p no:cacheprovider --rw-backend mujoco,pybullet --rw-robot all,legged", timeout: 1800 }
 
   - name: cli reports working offscreen rendering
     actions:
