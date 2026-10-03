@@ -48,13 +48,22 @@ def _git(*args, cwd=None):
 
 
 def _fetch(directory: str) -> None:
+    """Check out one robot's directory, serialised across processes.
+
+    pytest-xdist workers all reach for models at once on a fresh machine; two
+    concurrent ``git sparse-checkout`` runs collide on git's index lock.
+    """
+    import fcntl
+
     d = cache_dir()
-    if not (d / ".git").exists():
-        d.parent.mkdir(parents=True, exist_ok=True)
-        _git("clone", "--filter=blob:none", "--no-checkout", "--sparse", REPO, str(d))
-        _git("sparse-checkout", "set", "--no-cone", "/assets/", cwd=d)
-    listed = subprocess.run(["git", "sparse-checkout", "list"], cwd=d, capture_output=True, text=True).stdout.split()
-    want = f"/{directory}/"
-    if want not in listed:
-        _git("sparse-checkout", "add", want, cwd=d)
-    _git("checkout", "-q", COMMIT, cwd=d)
+    d.parent.mkdir(parents=True, exist_ok=True)
+    with open(d.parent / "menagerie.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not (d / ".git").exists():
+            _git("clone", "--filter=blob:none", "--no-checkout", "--sparse", REPO, str(d))
+            _git("sparse-checkout", "set", "--no-cone", "/assets/", cwd=d)
+        listed = subprocess.run(["git", "sparse-checkout", "list"], cwd=d, capture_output=True, text=True).stdout.split()
+        want = f"/{directory}/"
+        if want not in listed:
+            _git("sparse-checkout", "add", want, cwd=d)
+        _git("checkout", "-q", COMMIT, cwd=d)

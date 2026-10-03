@@ -37,8 +37,9 @@ jobs:
           path: robowright-traces/
 
   matrix:
-    # Every robot on every engine CI can run (Isaac Sim needs an NVIDIA GPU machine): the backend contract, the legged contract,
-    # and the example suite. Known divergences are strict xfails (see conftest.py).
+    # Every robot on every engine CI can run (Isaac Sim needs an NVIDIA GPU machine): the backend
+    # contract and the legged contract. The statistical examples on every robot (20-trial runs) are
+    # too heavy for hosted runners; verify runs them locally. Known divergences are strict xfails.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -64,7 +65,7 @@ jobs:
           key: robowright-models-${{ hashFiles('src/robowright/robots/**') }}
       - name: Robot x engine tests
         # Genesis workers take ~4.5 GB each; two fit a hosted runner.
-        run: pytest tests/test_conformance.py tests/test_legged.py examples -n ${{ matrix.backend == 'genesis' && '2' || 'auto' }} --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }}
+        run: pytest tests/test_conformance.py tests/test_legged.py -n ${{ matrix.backend == 'genesis' && '2' || 'auto' }} --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }}
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
