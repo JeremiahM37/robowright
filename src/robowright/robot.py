@@ -283,20 +283,20 @@ class Robot:
             at(i / n)
             self.world.step()
 
-    def _settle(self, goal, timeout):
+    def _settle(self, goal, timeout, tol: float = 0.03):
         timeout = timeout or self.world.settings.action_timeout
         w = self.world
-
         n = self.n_arm
 
         def settled():
             q = self.qpos()[:n]
-            return np.max(np.abs(q - goal)) < 0.03 and np.max(np.abs(w.backend.qvel()[:n])) < 0.08
+            return np.max(np.abs(q - goal)) < tol and np.max(np.abs(w.backend.qvel()[:n])) < 0.08
 
         if not w.run_until(settled, timeout, hold=0.06):
             err = np.abs(self.true_qpos()[:n] - goal)
             j = self.joint_names[int(np.argmax(err))]
-            raise ActionTimeoutError(f"arm did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
+            what = "arm" if self.model.family == "arm" else "robot"
+            raise ActionTimeoutError(f"{what} did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
 
     def _ik(self, p, seed, approach, yaw):
         q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw)

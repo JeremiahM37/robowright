@@ -45,13 +45,13 @@ class RobotModel:
     name: str
     title: str
     mjcf: Callable[[], Path]
-    arm_joints: tuple[str, ...]
-    hand: str  # body the TCP is rigidly attached to
-    left_finger: tuple[str, ...]  # bodies (and their subtrees) that make up each finger
-    right_finger: tuple[str, ...]
-    gripper_actuator: str
-    gripper_open: float  # actuator ctrl for fully open / fully closed
-    gripper_closed: float
+    arm_joints: tuple[str, ...]  # the controlled joints (for legged robots: every actuated joint)
+    hand: str = ""  # body the TCP is rigidly attached to
+    left_finger: tuple[str, ...] = ()  # bodies (and their subtrees) that make up each finger
+    right_finger: tuple[str, ...] = ()
+    gripper_actuator: str | None = None
+    gripper_open: float = 1.0  # actuator ctrl for fully open / fully closed
+    gripper_closed: float = 0.0
     base_pos: tuple = (0.0, 0.0, 0.0)
     base_yaw: float = 0.0
     attach: Attachment | None = None
@@ -61,7 +61,11 @@ class RobotModel:
     tcp_inset: float | None = None  # how far behind the fingertips the TCP sits
     tcp: tuple | None = None  # override the derived TCP (hand frame)
     timestep: float = 0.002
-    family: str = "arm"
+    family: str = "arm"  # "arm" or "legged"
+    base_body: str | None = None  # the floating base of a mobile robot
+    stand: tuple | None = None  # legged: standing joint angles; default: the model's keyframe
+    crouch: tuple | None = None  # legged: fully crouched joint angles; default: bend the bent joints further
+    servo: tuple | None = None  # (kp, kv): turn torque motors into joint PD servos, as robot firmware does
     maker: str = ""
     dof_note: str = ""
     tags: tuple = ()
@@ -83,8 +87,46 @@ class RobotModel:
             s.option.impratio, s.option.cone = g.option.impratio, g.option.cone
             _copy_options(s, g)
             s.attach(g, prefix=self.attach.prefix, site=s.site(self.attach.site))
+        if self.servo is not None:
+            _motors_to_servos(s, *self.servo)
         _exclude_resting_contacts(s)
         return s
+
+    @property
+    def has_gripper(self) -> bool:
+        return self.gripper_actuator is not None
+
+    @property
+    def floating(self) -> bool:
+        return self.base_body is not None
+
+    def stand_q(self) -> np.ndarray:
+        """Joint angles of the standing (legged) or home (fallback) pose."""
+        if self.stand is not None:
+            return np.asarray(self.stand, float)
+        q = self.keyframe_q()
+        return np.zeros(self.n_arm) if q is None else q
+
+    @functools.cached_property
+    def total_mass(self) -> float:
+        m = self.robot_spec().compile()
+        return float(m.body_mass.sum())
+
+    @functools.cached_property
+    def stand_height(self) -> float:
+        """Base height at which the standing robot's lowest point just touches the floor."""
+        s = self.robot_spec()
+        m = s.compile()
+        d = mujoco.MjData(m)
+        mujoco.mj_resetData(m, d)
+        for j, v in zip(self.arm_joints, self.stand_q()):
+            d.qpos[m.joint(j).qposadr[0]] = v
+        free = m.body(self.base_body).jntadr[0]
+        d.qpos[m.jnt_qposadr[free] : m.jnt_qposadr[free] + 7] = [0, 0, 0, 1, 0, 0, 0]
+        mujoco.mj_forward(m, d)
+        geoms = [g for g in range(m.ngeom) if m.geom_contype[g] or m.geom_conaffinity[g]]
+        low = min(_corners(m, d, g)[:, 2].min() for g in geoms)
+        return float(-low + 0.002)
 
     def add_to(self, world: mujoco.MjSpec) -> None:
         """Attach the robot to ``world`` at its base pose with every name prefixed ``robot/``."""
@@ -97,7 +139,7 @@ class RobotModel:
     def keyframe_q(self) -> np.ndarray | None:
         s = mujoco.MjSpec.from_file(str(self.mjcf()))
         keys = {k.name: k for k in s.keys}
-        k = keys.get("home") or (next(iter(keys.values())) if keys else None)
+        k = keys.get("home") or keys.get("stand") or (next(iter(keys.values())) if keys else None)
         if k is None or not len(k.qpos):
             return None
         m = s.compile()
@@ -153,6 +195,23 @@ def body_labels(m: mujoco.MjModel, model: RobotModel, prefix: str = "") -> dict[
             r = m.body_parentid[r]
         out[b] = label or name[len(prefix) :]
     return out
+
+
+def _motors_to_servos(s: mujoco.MjSpec, kp: float, kv: float) -> None:
+    """Replace torque motors with joint PD servos limited to the motors' torque range.
+
+    Robots such as the Unitree Go2 are modelled with raw torque motors; their
+    firmware runs a joint PD loop, which is what a position-commanded test expects.
+    """
+    for a in s.actuators:
+        if a.gaintype == mujoco.mjtGain.mjGAIN_FIXED and a.biastype == mujoco.mjtBias.mjBIAS_NONE:
+            lo, hi = a.ctrlrange
+            a.gainprm[0] = kp
+            a.biastype = mujoco.mjtBias.mjBIAS_AFFINE
+            a.biasprm[0], a.biasprm[1], a.biasprm[2] = 0.0, -kp, -kv
+            a.forcerange = [lo, hi]
+            a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+            a.ctrllimited = mujoco.mjtLimited.mjLIMITED_FALSE
 
 
 def _exclude_resting_contacts(s: mujoco.MjSpec) -> None:

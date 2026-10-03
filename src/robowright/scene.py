@@ -133,16 +133,43 @@ def tabletop(*objects: ObjectSpec, cameras=None, robot: str = "so101", **kw) -> 
     return spec
 
 
+def open_floor(*objects: ObjectSpec, cameras=None, robot: str = "go2", **kw) -> SceneSpec:
+    """An empty floor for mobile robots, with the camera framing the robot."""
+    spec = SceneSpec(robot=robot, objects=list(objects), **kw)
+    spec.cameras = list(cameras) if cameras is not None else [default_camera(robot)]
+    return spec
+
+
+def default_scene(robot: str = "so101") -> SceneSpec:
+    from . import robots
+
+    return open_floor(robot=robot) if robots.get(robot).family == "legged" else tabletop(robot=robot)
+
+
 def default_camera(robot: str = "so101") -> CameraSpec:
     """A front-three-quarter view of the task area that keeps the whole arm in frame."""
     from . import robots
 
     m = robots.get(robot)
-    bx = m.base_pos[0]
-    if bx > -0.06:
+    if m.family == "legged":
+        h = m.stand_height
+        k = max(h, 0.3) / (0.55 if "humanoid" in m.tags else 0.3)  # tall and narrow: frame the height
+        return CameraSpec("front", pos=(0.55 * k, -0.75 * k, 0.45 * k), lookat=(0.0, 0.0, 0.6 * h), fovy=45.0)
+    if robot == "so101":
         return CameraSpec("front")
-    # Frame the span from the robot base to the far edge of the task area.
-    cx = (bx + 0.3) / 2
-    span = 0.3 - bx
-    k = span / 0.3
-    return CameraSpec("front", pos=(cx + 0.43 * k, -0.44 * k - 0.02, 0.18 + 0.3 * k), lookat=(cx, 0.02, 0.1), fovy=45.0)
+    # Fit the robot (in its home pose) and the task area into the same three-quarter view.
+    import numpy as np
+
+    from .robot import _kinematics, home_q
+
+    kin = _kinematics(robot)
+    kin.fk(home_q(robot))
+    pts = np.vstack([kin.d.xpos[1:], [[0.1, -0.12, 0.0], [0.32, 0.2, 0.06]]])
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    centre = (lo + hi) / 2
+    radius = float(np.linalg.norm(hi - lo)) / 2
+    view = np.array([0.43, -0.44, 0.35])
+    view /= np.linalg.norm(view)
+    dist = 1.08 * radius / np.tan(np.radians(45.0) / 2)
+    pos = centre + view * dist
+    return CameraSpec("front", pos=tuple(float(x) for x in pos), lookat=tuple(float(x) for x in centre), fovy=45.0)

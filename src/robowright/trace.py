@@ -53,6 +53,8 @@ class Recorder:
         self.obj_pos: list[np.ndarray] = []
         self.obj_quat: list[np.ndarray] = []
         self.forces: list[np.ndarray] = []
+        # External forces are recorded per object, plus the robot's floating base if it has one.
+        self.force_names = list(world.object_names) + (["robot"] if world.backend.robot_model.floating else [])
         self.contacts: list[list] = []
         self.frames: dict[str, dict[int, bytes]] = {}
         self.state0 = None
@@ -88,7 +90,7 @@ class Recorder:
         self.t.append(b.time)
         self.qpos.append(b.qpos())
         self.ctrl.append(b.ctrl())
-        self.forces.append(np.zeros((len(names), 3)))
+        self.forces.append(np.zeros((len(self.force_names), 3)))
         if w.has_contacts:
             self.contacts.append([[c.a, c.b, round(c.force, 4)] for c in b.contacts()])
         else:
@@ -117,10 +119,8 @@ class Recorder:
         self._snapshot(step)
         # ctrl stored at index i is what was applied during step i-1 -> i
         self.ctrl[-1] = applied_ctrl.copy()
-        if forces:
-            names = self.world.object_names
-            for n, f in forces.items():
-                self.forces[-1][names.index(n)] = f
+        for n, f in forces.items():
+            self.forces[-1][self.force_names.index(n)] = f
 
     def event(self, type, name, args=None, status="ok", detail="") -> Event:
         w = self.world
@@ -146,6 +146,7 @@ class Recorder:
             "scene": w.spec.to_dict(),
             "joint_names": list(w.backend.joint_names),
             "object_names": list(w.object_names),
+            "force_names": self.force_names,
             "control_dt": w.backend.control_dt,
             "frame_every": self.frame_every,
             "cameras": sorted(self.frames),

@@ -16,9 +16,10 @@ import numpy as np
 from .backends import base as backends
 from .errors import CapabilityError, ExpectationError, InvariantViolation
 from .faults import Faults
+from .legged import LeggedRobot
 from .locators import SceneLocator
 from .robot import Robot
-from .scene import SceneSpec, tabletop
+from .scene import SceneSpec, default_scene
 from .trace import Recorder
 
 # Keep robowright internals out of pytest failure tracebacks (--full-trace shows them).
@@ -57,7 +58,7 @@ class World:
         self._step_hooks: list[Callable] = []
         self._soft_failures: list[str] = []
         self.faults = Faults(self)
-        self.robot = Robot(self)
+        self.robot = (LeggedRobot if self.backend.robot_model.family == "legged" else Robot)(self)
         self.scene = SceneLocator(self)
         self.trace: Recorder | None = None
         if self.settings.trace != "off":
@@ -215,12 +216,13 @@ def launch(
     robot: str | None = None,
     **kw,
 ) -> World:
-    """Build a world. ``scene`` defaults to the tabletop with a cube and a bin.
+    """Build a world. ``scene`` defaults to the robot's default scene (for arms,
+    the tabletop with a cube and a bin; for legged robots, an open floor).
 
     ``robot`` picks the robot for the default scene, or overrides ``scene.robot``.
     """
     if scene is None:
-        scene = tabletop(robot=robot or "so101")
+        scene = default_scene(robot or "so101")
     elif robot is not None and robot != scene.robot:
         import dataclasses
 
