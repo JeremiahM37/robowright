@@ -36,7 +36,6 @@ from pydrake.geometry import (
     ProximityProperties,
     RenderCameraCore,
     RenderEngineVtkParams,
-    Role,
     Sphere,
 )
 from pydrake.math import RigidTransform, RotationMatrix
@@ -71,25 +70,23 @@ def _pose(pos, quat_wxyz=(1.0, 0.0, 0.0, 0.0)) -> RigidTransform:
 
 
 def _proximity(friction: float, hydro: str | None = None, size: float = 0.01) -> ProximityProperties:
-    """Contact properties. Objects are soft hydroelastic, the floor and bins rigid hydroelastic.
+    """Contact properties: objects and bin walls soft hydroelastic, the floor rigid.
 
     Point contact between two boxes is a single deepest point, so a cube on a
     bin floor rocks from corner to corner and never comes to rest. A
-    hydroelastic patch supports it like a real face. Robot links stay point
-    contacts (hydroelastic falls back to them), which keep finger contacts
-    cheap and match MuJoCo's convex-hull collision.
+    hydroelastic patch supports it like a real face. Bin walls are soft too:
+    a rigid box against a soft one only yields patches on the box's
+    tessellation, and a cube resting across that mesh kept creeping.
     """
     props = ProximityProperties()
     AddContactMaterial(
-        dissipation=5.0 if hydro == "soft" else None,
+        dissipation=50.0 if hydro == "soft" else None,  # s/m; less lets a placed cube rock forever
         point_stiffness=POINT_STIFFNESS,
         friction=CoulombFriction(friction, friction),
         properties=props,
     )
     if hydro == "soft":
         AddCompliantHydroelasticProperties(size / 2, HYDRO_MODULUS, props)
-    elif hydro == "rigid":
-        AddRigidHydroelasticProperties(size, props)
     elif hydro == "halfspace":
         AddRigidHydroelasticProperties(props)
     return props
@@ -99,11 +96,11 @@ def _proximity(friction: float, hydro: str | None = None, size: float = 0.01) ->
 # 1 mm penetration allowance under the *heaviest* body's weight, which for a small
 # cube between two fingers is soft enough that the pads squeeze a centimetre into it.
 POINT_STIFFNESS = 2e5
-HYDRO_MODULUS = 1e7
+HYDRO_MODULUS = 1e7  # Pa: a hard plastic part; sinks well under a millimetre under its own weight
 # SAP softens any contact stiffer than a light body can follow in one step (its
 # "near-rigid" regime, threshold 1 by default). For a 30 g cube in a 2 ms step that
 # lets the pads sink centimetres into it; a lower threshold keeps grasps rigid.
-SAP_NEAR_RIGID = 0.1  # Pa: a hard plastic part; sinks well under a millimetre under its own weight
+SAP_NEAR_RIGID = 0.1
 
 
 def _render_ok() -> bool:
@@ -187,7 +184,9 @@ class DrakeBackend(Backend):
         for o in spec.objects:
             rgba = list(o.rgba)
             if o.kind == "bin":
-                body = plant.AddRigidBody(o.name, self.robot_model_instance_for(o.name), SpatialInertia.SolidBoxWithMass(1.0, 0.1, 0.1, 0.1))
+                body = plant.AddRigidBody(
+                    o.name, self.robot_model_instance_for(o.name), SpatialInertia.SolidBoxWithMass(1.0, 0.1, 0.1, 0.1)
+                )
                 plant.WeldFrames(plant.world_frame(), body.body_frame(), _pose(o.initial_pos, o.quat))
                 for i, (p, hs) in enumerate(bin_walls(o.size)):
                     shape, X = Box(*(2 * np.asarray(hs))), RigidTransform(np.asarray(p, float))
@@ -539,7 +538,11 @@ class DrakeBackend(Backend):
             raise NotImplementedError("drake cannot render here (no offscreen GL context)")
         c = self._cams[camera]
         core = RenderCameraCore("vtk", CameraInfo(width, height, np.radians(c.fovy)), ClippingRange(0.01, 10.0), RigidTransform())
-        img = self.sg.get_query_output_port().Eval(self.sgc).RenderColorImage(ColorRenderCamera(core), self.sg.world_frame_id(), _camera_pose(c))
+        img = (
+            self.sg.get_query_output_port()
+            .Eval(self.sgc)
+            .RenderColorImage(ColorRenderCamera(core), self.sg.world_frame_id(), _camera_pose(c))
+        )
         return np.array(img.data[:, :, :3], dtype=np.uint8)
 
     def get_state(self):
