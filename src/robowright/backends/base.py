@@ -162,8 +162,14 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     return _REGISTRY[name](spec, seed=seed, **kw)
 
 
-_MODULES = {"mujoco": "mujoco_backend", "pybullet": "pybullet_backend", "genesis": "genesis_backend", "drake": "drake_backend"}
-_REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake"}
+_MODULES = {
+    "mujoco": "mujoco_backend",
+    "pybullet": "pybullet_backend",
+    "genesis": "genesis_backend",
+    "drake": "drake_backend",
+    "isaac": "isaac_backend",
+}
+_REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake", "isaac": "isaacsim"}
 
 
 def available() -> list[str]:
