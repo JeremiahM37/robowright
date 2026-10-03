@@ -20,7 +20,7 @@ def test_pick_and_place(robot, scene):
 ```
 
 ```console
-$ pytest --rw-robot all --rw-backend mujoco,pybullet     # 13 arms x 2 engines, same test
+$ pytest --rw-robot all --rw-backend mujoco,pybullet,drake,genesis   # 13 arms x 4 engines, same test
 ```
 
 <p align="center"><img src="docs/gallery.png" alt="Every supported robot running the same test: 13 arms holding the cube, 6 legged robots standing"></p>
@@ -53,7 +53,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots |
 | trace viewer | every failure leaves a `.zip` trace with camera frames, joints, contacts and the action timeline, viewable as HTML |
 | codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test |
-| projects (browsers) | `--rw-backend mujoco,pybullet` runs every test on each physics engine |
+| projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 
 On top of that, it adds things robots need and web pages don't:
 
@@ -130,13 +130,25 @@ list because neither can stand on joint servos alone, without a balance controll
 
 ```bash
 git clone https://github.com/JeremiahM37/robowright && cd robowright
-pip install -e ".[dev]"      # MuJoCo is required; PyBullet, xdist and ruff come with [dev]
-robowright info              # versions, backends, and whether offscreen rendering works
+pip install -e ".[dev]"          # MuJoCo is required; PyBullet, xdist and ruff come with [dev]
+pip install -e ".[drake]"        # optional: Drake (Python 3.12+)
+pip install -e ".[genesis]"      # optional: Genesis (install a CPU or CUDA torch first)
+robowright info                  # versions, backends, and whether offscreen rendering works
+robowright robots                # the robots you can test on
 pytest examples
 ```
 
+Robot models other than the SO-101 are downloaded from MuJoCo Menagerie the first time a
+test uses them (a sparse checkout, a few MB per robot) into `~/.cache/robowright`.
+
 On a headless Linux machine robowright renders through EGL. Without a working GL, tests
 still run and traces are still recorded, just without camera frames.
+
+**Isaac Sim** (NVIDIA GPU machines only) isn't a pip extra: install Isaac Sim 5.x
+(`pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com`
+into a Python 3.11 environment), set `OMNI_KIT_ACCEPT_EULA=YES`, then install robowright
+into the same environment and use `--rw-backend isaac`. Its URDF importer needs
+`libxml2.so.2` (on Arch-based systems, the `libxml2-legacy` package).
 
 ## A tour
 

@@ -37,7 +37,7 @@ steps:
 
   - name: trace viewer DOM (desktop + Pixel 7)
     actions:
-      - shell: "/home/admin/.venvs/verify/bin/python scripts/check_viewer.py /tmp/robowright-verify/trace.html"
+      - shell: "${VERIFY_PYTHON:-python3} scripts/check_viewer.py /tmp/robowright-verify/trace.html"
 
   - name: trace viewer renders
     actions:
