@@ -27,6 +27,11 @@ for robot, force in {**_SLIDE, "panda": "1.3 N (the real Franka Hand: 70 N)", "v
     KNOWN[("test_cube_survives_a_shove_when_held", "mujoco", robot)] = (
         f"MuJoCo Menagerie's model of this gripper squeezes {force}; a 1.5 N shove knocks the cube out"
     )
+# Drake holds the 1.3 N Panda and 1.9 N YAM grips through the shove; the rest go, as in MuJoCo.
+for robot, force in {**{r: _SLIDE[r] for r in ("piper", "arx_l5", "wx250s")}, "vx300s": "5.4 N"}.items():
+    KNOWN[("test_cube_survives_a_shove_when_held", "drake", robot)] = (
+        f"MuJoCo Menagerie's model of this gripper squeezes {force}; a 1.5 N shove knocks the cube out"
+    )
 KNOWN[("test_cube_survives_a_shove_when_held", "pybullet", "piper")] = "the PiPER model squeezes 0.7 N; a 1.5 N shove knocks the cube out"
 
 

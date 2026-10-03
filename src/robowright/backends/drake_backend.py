@@ -96,7 +96,9 @@ def _proximity(friction: float, hydro: str | None = None, size: float = 0.01) ->
 # 1 mm penetration allowance under the *heaviest* body's weight, which for a small
 # cube between two fingers is soft enough that the pads squeeze a centimetre into it.
 POINT_STIFFNESS = 2e5
-HYDRO_MODULUS = 1e7  # Pa: a hard plastic part; sinks well under a millimetre under its own weight
+# Pa. Stiffer (1e7) let a placed 30 g cube chatter in place on the bin floor at ~1 rad/s
+# without ever moving; at 3e6 it settles, and a 30 N grasp still sinks only ~1 mm.
+HYDRO_MODULUS = 3e6
 # SAP softens any contact stiffer than a light body can follow in one step (its
 # "near-rigid" regime, threshold 1 by default). For a 30 g cube in a 2 ms step that
 # lets the pads sink centimetres into it; a lower threshold keeps grasps rigid.
@@ -149,7 +151,8 @@ class DrakeBackend(Backend):
         parser.SetAutoRenaming(True)
         self.robot = parser.AddModels(str(path))[0]
         X_base = _pose(rm.base_pos, (np.cos(rm.base_yaw / 2), 0, 0, np.sin(rm.base_yaw / 2)))
-        plant.WeldFrames(plant.world_frame(), plant.GetFrameByName(meta["root"], self.robot), X_base)
+        if not rm.floating:  # an unwelded URDF root is a free body in Drake: what a legged robot wants
+            plant.WeldFrames(plant.world_frame(), plant.GetFrameByName(meta["root"], self.robot), X_base)
         self._build_world(spec)
         self._build_actuators(meta)
         plant.Finalize()
@@ -171,7 +174,10 @@ class DrakeBackend(Backend):
         # MuJoCo's reset: every joint at zero, moved inside its limits.
         q = plant.GetPositions(self.pc, self.robot)
         plant.SetPositions(self.pc, self.robot, np.clip(q, self._qlo, self._qhi))
-        self._ctrl = np.zeros(self.n_arm + 1)
+        self._ctrl = np.zeros(len(self.joint_names))
+        if rm.floating:
+            self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(rm.base_yaw / 2), 0, 0, np.sin(rm.base_yaw / 2)))
+            self.set_joint_positions(rm.stand_q())
         self.set_ctrl(self.qpos())
 
     # --- construction ---------------------------------------------------------
@@ -225,10 +231,10 @@ class DrakeBackend(Backend):
         joint to its side's driven joint keeps the linkage moving as one.
         """
         plant, rm = self.plant, self.robot_model
-        joints, grip = meta["joints"], meta["gripper"]
+        joints, grip = meta["joints"], meta.get("gripper") or {"joints": {}, "driven": [], "effort": {}}
         js = lambda n: plant.GetJointByName(urdf._safe(n), self.robot)  # noqa: E731
         self._arm_joints = [js(n) for n in rm.arm_joints]
-        driven = list(grip["driven"]) or [grip["main"]]
+        driven = list(grip["driven"]) or ([grip["main"]] if "main" in grip else [])
         self._driven = driven
         gains: dict[str, tuple[float, float]] = {}
         for n in rm.arm_joints:
@@ -329,13 +335,21 @@ class DrakeBackend(Backend):
         return p
 
     def _set_contact_materials(self, meta: dict) -> None:
-        """The robot's per-geom friction from MuJoCo, and the common point-contact stiffness."""
+        """The robot's friction, chosen so each robot-object pair gets MuJoCo's, and the common point-contact stiffness.
+
+        MuJoCo takes the larger of two geoms' friction coefficients; Drake
+        combines them as 2ab/(a+b), which is lower whenever they differ (a
+        0.6 pad on a 1.0 cube grips at 0.75, not 1.0). Each robot geom is
+        given the coefficient that makes the pair with the scene's objects
+        come out at MuJoCo's value.
+        """
+        o = max((ob.friction for ob in self.spec.objects if not ob.static), default=1.0)
         plant, sg = self.plant, self.sg
         inspector = sg.model_inspector()
         for bi in plant.GetBodyIndices(self.robot):
             for g in plant.GetCollisionGeometriesForBody(plant.get_body(bi)):
                 name = inspector.GetName(g).split("::")[-1]
-                mu = meta["geoms"].get(name, {}).get("friction", 1.0)
+                mu = _matched_friction(meta["geoms"].get(name, {}).get("friction", 1.0), o)
                 props = ProximityProperties(inspector.GetProximityProperties(g))
                 props.UpdateProperty("material", "coulomb_friction", CoulombFriction(mu, mu))
                 props.UpdateProperty("material", "point_contact_stiffness", POINT_STIFFNESS)
@@ -347,28 +361,20 @@ class DrakeBackend(Backend):
 
     def _index(self, meta: dict) -> None:
         plant, rm = self.plant, self.robot_model
-        robot_q0 = plant.GetPositions(self.pc, self.robot)
-        nq = len(robot_q0)
         lo = plant.GetPositionLowerLimits()
         hi = plant.GetPositionUpperLimits()
-        start = plant.GetJointByName(urdf._safe(rm.arm_joints[0]), self.robot).position_start()
-        del start
-        # robot positions are contiguous in the instance's own ordering; map through a selector
-        sel_q = np.array(
-            [plant.get_joint(j).position_start() for j in plant.GetJointIndices(self.robot) if plant.get_joint(j).num_positions()]
-        )
-        order = np.argsort(sel_q)
-        sel_q = sel_q[order]
-        assert len(sel_q) == nq
+        # The instance's positions, in the order GetPositions(context, instance) uses (plant order).
+        sel_q = np.sort([i for ji in plant.GetJointIndices(self.robot) for i in _positions(plant.get_joint(ji))])
         self._qlo, self._qhi = lo[sel_q], hi[sel_q]
         self._qa = np.array([j.position_start() for j in self._arm_joints])
         self._va = np.array([j.velocity_start() for j in self._arm_joints])
         js = lambda n: plant.GetJointByName(urdf._safe(n), self.robot)  # noqa: E731
-        grip = meta["gripper"]
-        self._finger_q = {n: js(n).position_start() for n in grip["joints"]}
-        self._finger_v = {n: js(n).velocity_start() for n in grip["joints"]}
-        self._g_main = grip["main"]
-        self._g_closed, self._g_open = grip["joints"][grip["main"]]
+        if self.has_gripper:
+            grip = meta["gripper"]
+            self._finger_q = {n: js(n).position_start() for n in grip["joints"]}
+            self._finger_v = {n: js(n).velocity_start() for n in grip["joints"]}
+            self._g_main = grip["main"]
+            self._g_closed, self._g_open = grip["joints"][grip["main"]]
         self._arm_lo = np.array([lo[i] for i in self._qa])
         self._arm_hi = np.array([hi[i] for i in self._qa])
         # Desired-state port: actuated joints of the robot instance, in actuator order.
@@ -393,8 +399,11 @@ class DrakeBackend(Backend):
             self._label[bi] = f"robot:{part or inv.get(body.name(), body.name())}"
         for name, body in self._bodies.items():
             self._label[body.index()] = name
-        self._hand = plant.GetBodyByName(meta["hand"], self.robot)
-        self._hand_offset = _hand_anchor(rm)
+        if rm.hand:
+            self._hand = plant.GetBodyByName(meta["hand"], self.robot)
+            self._hand_offset = _hand_anchor(rm)
+        if rm.floating:
+            self._base = plant.GetBodyByName(meta["root"], self.robot)
         self._cams = {c.name: c for c in self.spec.cameras}
 
     # --- robot ------------------------------------------------------------------
@@ -403,17 +412,21 @@ class DrakeBackend(Backend):
 
     def qpos(self):
         q = self.plant.GetPositions(self.pc)
+        if not self.has_gripper:
+            return q[self._qa]
         return np.append(q[self._qa], self._opening(q[self._finger_q[self._g_main]]))
 
     def qvel(self):
         v = self.plant.GetVelocities(self.pc)
+        if not self.has_gripper:
+            return v[self._va]
         return np.append(v[self._va], v[self._finger_v[self._g_main]] / (self._g_open - self._g_closed))
 
     def set_ctrl(self, target):
         target = np.asarray(target, float)
         arm = np.clip(target[: self.n_arm], self._arm_lo, self._arm_hi)
-        g = float(np.clip(target[self.n_arm], 0.0, 1.0))
-        self._ctrl = np.append(arm, g)
+        g = float(np.clip(target[self.n_arm], 0.0, 1.0)) if self.has_gripper else 0.0
+        self._ctrl = np.append(arm, g) if self.has_gripper else arm
         xd = np.zeros(2 * self._nact)
         for n, v in zip(self.robot_model.arm_joints, arm):
             xd[self._act_index[urdf._safe(n)]] = v
@@ -439,10 +452,11 @@ class DrakeBackend(Backend):
         vv = plant.GetVelocities(self.pc)
         qq[self._qa] = q[: self.n_arm]
         vv[self._va] = 0
-        s = float(np.clip(q[self.n_arm], 0, 1))
-        for n, (c, o) in self.meta["gripper"]["joints"].items():
-            qq[self._finger_q[n]] = c + s * (o - c)
-            vv[self._finger_v[n]] = 0
+        if self.has_gripper:
+            s = float(np.clip(q[self.n_arm], 0, 1))
+            for n, (c, o) in self.meta["gripper"]["joints"].items():
+                qq[self._finger_q[n]] = c + s * (o - c)
+                vv[self._finger_v[n]] = 0
         plant.SetPositions(self.pc, qq)
         plant.SetVelocities(self.pc, vv)
         self.set_ctrl(q)
@@ -453,23 +467,37 @@ class DrakeBackend(Backend):
         # The URDF link frame sits at the body's joint anchor; report MuJoCo's body frame.
         return X.translation() - R @ self._hand_offset, X.rotation().ToQuaternion().wxyz()
 
+    def base_pose(self):
+        X = self.plant.EvalBodyPoseInWorld(self.pc, self._base)
+        return X.translation().copy(), X.rotation().ToQuaternion().wxyz()
+
+    def base_velocity(self):
+        V = self.plant.EvalBodySpatialVelocityInWorld(self.pc, self._base)
+        return np.concatenate([V.translational(), V.rotational()])
+
+    def set_base_pose(self, pos, quat):
+        self.plant.SetFreeBodyPose(self.pc, self._base, _pose(pos, quat))
+        self.plant.SetFreeBodySpatialVelocity(self.pc, self._base, _zero_velocity())
+
     # --- time -------------------------------------------------------------------
     def step(self):
         plant, pc = self.plant, self.pc
         forces = []
         for name, f in self._pending.items():
-            body = self._bodies[name]
+            body = self._base if name == "robot" else self._bodies[name]
             F = ExternallyAppliedSpatialForce()
             F.body_index = body.index()
-            F.p_BoBq_B = np.zeros(3)
+            F.p_BoBq_B = body.default_com()  # at the centre of mass, like MuJoCo's xfrc_applied
             F.F_Bq_W = SpatialForce(np.zeros(3), f)
             forces.append(F)
         plant.get_applied_spatial_force_input_port().FixValue(pc, forces)
         tau, sim, dt = self._tau, self.simulator, self.spec.dt
+        gravcomp = self.robot_model.family == "arm"  # legged robots stand on their own weight
         for _ in range(self._substeps):
-            # Gravity compensation on the robot, like a real arm controller (and MuJoCo's gravcomp).
-            g = plant.CalcGravityGeneralizedForces(pc)
-            tau.GetMutableData().set_value(np.where(self._robot_v, -g, 0.0))
+            if gravcomp:
+                # Gravity compensation on the robot, like a real arm controller (and MuJoCo's gravcomp).
+                g = plant.CalcGravityGeneralizedForces(pc)
+                tau.GetMutableData().set_value(np.where(self._robot_v, -g, 0.0))
             # Count steps rather than add up times, so every period has exactly the same substeps.
             self._k += 1
             sim.AdvanceTo(self._k * dt)
@@ -552,7 +580,7 @@ class DrakeBackend(Backend):
 
     def set_state(self, state):
         state = np.asarray(state, float)
-        k = 1 + self.n_arm + 1
+        k = 1 + len(self.joint_names)
         self.context.SetTime(float(state[0]))
         self._k = round(float(state[0]) / self.spec.dt)
         ctrl, gscale = state[1:k], state[k : k + self.n_arm]
@@ -618,6 +646,17 @@ def _drake_urdf(path: Path) -> Path:
     return out
 
 
+def _matched_friction(r: float, o: float) -> float:
+    """Friction for a geom of MuJoCo friction ``r`` so that Drake's 2ab/(a+b) with ``o`` equals MuJoCo's max(r, o)."""
+    if r <= o:
+        return o
+    return r * o / (2 * o - r) if r < 2 * o else 1e3 * r  # past 2o Drake's rule cannot reach r; get as close as it can
+
+
+def _positions(joint) -> range:
+    return range(joint.position_start(), joint.position_start() + joint.num_positions())
+
+
 def _common_prefix(a: str, b: str) -> str:
     i = 0
     while i < min(len(a), len(b)) and a[i] == b[i]:
@@ -643,6 +682,8 @@ def _camera_pose(c) -> RigidTransform:
     z = look - pos
     z /= np.linalg.norm(z)
     x = np.cross(z, [0, 0, 1.0])
+    if np.linalg.norm(x) < 1e-6:  # looking straight up or down: image up is world +y
+        x = np.cross(z, [0, 1.0, 0])
     x /= np.linalg.norm(x)
     y = np.cross(z, x)
     return RigidTransform(RotationMatrix(np.column_stack([x, y, z])), pos)

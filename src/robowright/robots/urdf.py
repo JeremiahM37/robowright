@@ -26,7 +26,7 @@ import numpy as np
 from .model import RobotModel
 
 BASE = "robowright_base"
-VERSION = 9  # bump when the output format changes, to invalidate caches
+VERSION = 10  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
