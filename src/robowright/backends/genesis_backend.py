@@ -1,4 +1,8 @@
-"""Genesis backend: a GPU-oriented engine, run here on its CPU backend.
+"""Genesis backend: a GPU-oriented engine, on CUDA when there is one, else on CPU.
+
+One scene steps ~5x faster on Genesis's CPU backend than on a GPU (kernel
+launch latency dominates a single small world), and only the CPU backend is
+bit-for-bit deterministic; ``ROBOWRIGHT_GENESIS_DEVICE=cpu|gpu`` picks one.
 
 The robot is the URDF exported from its MuJoCo model (see
 :mod:`robowright.robots.urdf`), so kinematics, inertias and collision shapes
@@ -11,6 +15,7 @@ every linkage joint is tied to the reference finger by a URDF mimic joint.
 from __future__ import annotations
 
 import contextlib
+import gc
 import hashlib
 import io
 import os
@@ -20,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+# Headless offscreen rendering (Genesis renders through pyrender/PyOpenGL).
+os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
     warnings.simplefilter("ignore")
     import genesis as gs
@@ -35,13 +42,23 @@ from .mujoco_backend import bin_walls
 _DRIVE_SAT = 0.25
 
 
-def _init() -> None:
-    """Genesis can be initialised once per process; every backend instance shares it."""
+_DEVICE = "cpu"
+
+
+def _init() -> str:
+    """Genesis can be initialised once per process; every backend instance shares it. Returns the device."""
+    global _DEVICE
     if gs._initialized:
-        return
+        return _DEVICE
+    import torch
+
+    # ROBOWRIGHT_GENESIS_DEVICE=cpu|gpu overrides; by default the GPU when CUDA is there.
+    device = os.environ.get("ROBOWRIGHT_GENESIS_DEVICE") or ("gpu" if torch.cuda.is_available() else "cpu")
     # Double precision: stiff position servos (kp in the thousands) drift in float32.
-    gs.init(backend=gs.cpu, precision="64", logging_level="error")
+    gs.init(backend=gs.gpu if device == "gpu" else gs.cpu, precision="64", logging_level="error")
     _exclude_pairs_hook()
+    _DEVICE = device
+    return device
 
 
 def _exclude_pairs_hook() -> None:
@@ -136,7 +153,10 @@ class GenesisBackend(Backend):
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
-        _init()
+        if _init() == "gpu":
+            # CUDA reductions sum contact and constraint terms in whatever order threads
+            # finish: two identical runs agree to ~1e-7, not bit for bit.
+            self.capabilities = self.capabilities - {DETERMINISTIC}
         rm = self.robot_model
         path, meta = urdf.load(rm)
         path = _with_mimic(path, meta)
@@ -350,7 +370,7 @@ class GenesisBackend(Backend):
         for _ in range(self._substeps):
             for name, f in self._pending.items():
                 link = self._objects[name].links[0]
-                solver.apply_links_external_wrench(force=np.asarray(f)[None], links_idx=[link.idx], ref="link_com")
+                solver.apply_links_external_wrench(force=np.asarray(f)[None], links_idx=[link.idx], ref=gs.link_ref_frame.link_COM)
             self.scene.step()
         self._pending = {}
         self._t += self._substeps * self._dt
@@ -428,8 +448,17 @@ class GenesisBackend(Backend):
         self.set_ctrl(state[1 + nq + nv :])
 
     def close(self):
+        """Destroy the scene and drop every handle into it.
+
+        Genesis frees a scene's device buffers only once nothing references them;
+        an entity or camera kept alive here pins ~0.5 GB per world, which runs a
+        test session out of memory.
+        """
+        scene = getattr(self, "scene", None)
+        if scene is None:
+            return
         with contextlib.suppress(Exception):
-            self.scene.destroy()
-
-
-os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+            scene.destroy()
+        for k in ("scene", "robot", "_floor", "_hand", "_objects", "_walls", "_cams", "_label"):
+            setattr(self, k, None)
+        gc.collect()

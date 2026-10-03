@@ -1,3 +1,5 @@
+from importlib.util import find_spec
+
 import numpy as np
 import pytest
 
@@ -6,7 +8,7 @@ from robowright import expect
 from robowright.scene import ObjectSpec, SceneSpec, tabletop
 
 pytest.importorskip("pybullet")
-BACKENDS = ["mujoco", "pybullet"]
+BACKENDS = ["mujoco", "pybullet", *(["genesis"] if find_spec("genesis") else [])]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
