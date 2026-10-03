@@ -26,7 +26,7 @@ import numpy as np
 from .model import RobotModel
 
 BASE = "robowright_base"
-VERSION = 8  # bump when the output format changes, to invalidate caches
+VERSION = 9  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
@@ -205,7 +205,7 @@ def _write(model: RobotModel, out: Path) -> None:
     excluded = set()
     for i in range(m.nexclude):
         sig = int(m.exclude_signature[i])
-        excluded.add(tuple(sorted((_safe(m.body((sig >> 16) - 1).name), _safe(m.body((sig & 0xFFFF) - 1).name)))))
+        excluded.add(tuple(sorted((_safe(m.body(sig >> 16).name), _safe(m.body(sig & 0xFFFF).name)))))
     meta["excluded_pairs"] = sorted(excluded)
     meta["arm_joints"] = list(model.arm_joints)
     der = model.derived
