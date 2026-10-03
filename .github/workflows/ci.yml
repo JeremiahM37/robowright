@@ -64,10 +64,7 @@ jobs:
           path: ~/.cache/robowright
           key: robowright-models-${{ hashFiles('src/robowright/robots/**') }}
       - name: Robot x engine tests
-        # Genesis workers take ~4.5 GB each; two fit a hosted runner.
-        run: pytest tests/test_conformance.py tests/test_legged.py -n ${{ matrix.backend == 'genesis' && '2' || 'auto' }} --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }}
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: traces-${{ matrix.backend }}-${{ matrix.robots }}
-          path: robowright-traces/
+        # A Genesis worker takes ~4.5 GB; hosted runners have 7 GB, so Genesis runs in one process.
+        # Tracing off: recording camera frames through software rendering on two cores costs more
+        # than the physics; the unit job covers traces.
+        run: pytest tests/test_conformance.py tests/test_legged.py -n ${{ matrix.backend == 'genesis' && '0' || 'auto' }} --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }} --rw-trace off
