@@ -7,6 +7,11 @@ around it and steps PhysX directly, reading and writing state through
 PhysX's tensor API rather than Isaac's timeline, so a world costs one stage
 and no rendering.
 
+Floating-base (legged) robots import with a free root link, stand on their
+own weight (no gravity compensation) and are placed standing at
+``stand_height`` in ``stand_q()``; the base pose and velocity come from the
+articulation's root link.
+
 What URDF loses is put back as PhysX models it: the arm's servo gains,
 force limits, armature and damping become joint drives and DOF properties,
 the gripper's linkage becomes PhysX mimic joints (two-way, like MuJoCo's
@@ -46,7 +51,7 @@ from .mujoco_backend import bin_walls
 # Driven finger joints without an actuator gain of their own saturate this far off target (as in Genesis).
 _DRIVE_SAT = 0.25
 # Bump when the USD conversion changes, to invalidate cached robot USDs.
-_USD_VERSION = 1
+_USD_VERSION = 2
 
 _APP = None
 _DEVICE = "cpu"
@@ -140,7 +145,8 @@ def _isaac_urdf(path: Path, meta: dict) -> Path:
             k = (o - c) / (ro - rc)
             ET.SubElement(joints[urdf._safe(name)], "mimic", joint=urdf._safe(ref), multiplier=f"{k:.12g}", offset=f"{c - k * rc:.12g}")
     xml = ET.tostring(root, encoding="unicode")
-    out = path.with_name(f"robot.isaac-{hashlib.sha1(f'{_USD_VERSION}|{xml}'.encode()).hexdigest()[:12]}.urdf")
+    key = f"{_USD_VERSION}|{meta['floating']}|{xml}"
+    out = path.with_name(f"robot.isaac-{hashlib.sha1(key.encode()).hexdigest()[:12]}.urdf")
     if not out.exists():
         tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
         tmp.write_text(xml)
@@ -158,7 +164,7 @@ def _robot_usd(path: Path, meta: dict) -> Path:
 
     _, cfg = omni.kit.commands.execute("URDFCreateImportConfig")
     cfg.merge_fixed_joints = False  # the hand and finger links keep their names
-    cfg.fix_base = True
+    cfg.fix_base = not meta["floating"]
     cfg.self_collision = False
     cfg.import_inertia_tensor = True
     cfg.parse_mimic = True
@@ -215,8 +221,6 @@ class IsaacBackend(Backend):
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
         rm = self.robot_model
-        if rm.floating:
-            raise NotImplementedError("the isaac backend supports fixed-base arms only")
         gpu = _start() == "gpu"
         if gpu:
             # GPU PhysX sums contact and constraint terms in whatever order threads finish, and the
@@ -250,7 +254,8 @@ class IsaacBackend(Backend):
         # The step is undone below (objects back at their initial poses, joints reset).
         self._sim.simulate(self._dt, 0.0)
         self._sim.fetch_results()
-        if self._unmount_from_floor():
+        # A legged robot's feet belong on the floor: only an arm's mount is unmounted from it.
+        if not rm.floating and self._unmount_from_floor():
             self._sim.simulate(self._dt, 0.0)
             self._sim.fetch_results()
         self._view = omni.physics.tensors.create_simulation_view("warp" if gpu else "numpy", stage_id=ctx.get_stage_id())
@@ -268,6 +273,10 @@ class IsaacBackend(Backend):
         self._write_dofs(q, np.zeros(self._ndof))
         self._ctrl = np.zeros(len(self.joint_names))
         self._targets = q.copy()
+        if rm.floating:
+            yaw = rm.base_yaw
+            self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
+            self.set_joint_positions(rm.stand_q())
         self.set_ctrl(self.qpos())
 
     # --- construction ----------------------------------------------------------
@@ -400,9 +409,13 @@ class IsaacBackend(Backend):
                 name = prim.GetName()
                 self._links[name] = str(prim.GetPath())
                 # Arm controllers on real robots cancel gravity (MuJoCo's gravcomp): the links ignore it.
-                no_sleep(prim).CreateDisableGravityAttr(True)
+                # Legged robots stand on their own weight.
+                no_sleep(prim).CreateDisableGravityAttr(rm.family == "arm")
                 bind(prim, friction.get(name, 1.0))
                 report(prim)
+            if prim.HasAPI(UsdPhysics.ArticulationRootAPI) and not prim.IsA(UsdPhysics.Joint):
+                art_root = prim  # a floating base: the root link carries the articulation
+                self._configure_articulation(PhysxSchema.PhysxArticulationAPI.Apply(prim))
             if prim.IsA(UsdPhysics.Joint):
                 j = UsdPhysics.Joint(prim)
                 b0, b1 = j.GetBody0Rel().GetTargets(), j.GetBody1Rel().GetTargets()
@@ -412,12 +425,7 @@ class IsaacBackend(Backend):
                     # The importer anchors the fixed base at the world origin; put it at the model's base pose.
                     j.GetLocalPos0Attr().Set(Gf.Vec3f(*map(float, rm.base_pos)))
                     j.GetLocalRot0Attr().Set(Gf.Quatf(*map(float, base_q)))
-                    art = PhysxSchema.PhysxArticulationAPI(prim)
-                    art.CreateEnabledSelfCollisionsAttr(False)
-                    art.CreateSleepThresholdAttr(0.0)
-                    art.CreateStabilizationThresholdAttr(0.0)
-                    art.CreateSolverPositionIterationCountAttr(32)
-                    art.CreateSolverVelocityIterationCountAttr(4)
+                    self._configure_articulation(PhysxSchema.PhysxArticulationAPI(prim))
                 elif b0 and b1:
                     parent[b1[0].name] = b0[0].name
                     if prim.IsA(UsdPhysics.FixedJoint):
@@ -459,6 +467,14 @@ class IsaacBackend(Backend):
                 cur = parent.get(cur)
             body = name.split("__j")[0] if name not in safe_to_body else name
             self._label[p] = f"robot:{label or safe_to_body.get(body, body)}"
+
+    @staticmethod
+    def _configure_articulation(art) -> None:
+        art.CreateEnabledSelfCollisionsAttr(False)
+        art.CreateSleepThresholdAttr(0.0)
+        art.CreateStabilizationThresholdAttr(0.0)
+        art.CreateSolverPositionIterationCountAttr(32)
+        art.CreateSolverVelocityIterationCountAttr(4)
 
     def _unmount_from_floor(self) -> bool:
         """Stop the floor colliding with robot links that are sunk into it as the robot stands.
@@ -531,8 +547,11 @@ class IsaacBackend(Backend):
         self._qlo, self._qhi = lim[:, 0], lim[:, 1]
         self._lo, self._hi = self._qlo[self._arm], self._qhi[self._arm]
         link_names = list(mt.link_names)
-        self._hand = link_names.index(meta["hand"])
-        self._hand_anchor = _hand_anchor(rm)
+        self._hand = link_names.index(meta["hand"]) if rm.hand else None
+        self._hand_anchor = _hand_anchor(rm) if rm.hand else None
+        self._root = link_names.index(meta["root"])
+        self._nlinks = len(link_names)
+        self._root_com = self._row(art.get_coms()).reshape(-1, 7)[self._root, :3]  # in the root link's frame
         self._idx = np.zeros(1, dtype=np.int32) if not self._gpu else self._gpu_idx()
         self._obj_idx = self._idx
         self._cpu_idx = np.zeros(1, dtype=np.int32) if not self._gpu else self._gpu_idx("cpu")
@@ -709,7 +728,10 @@ class IsaacBackend(Backend):
         sim, dt = self._sim, self._dt
         for i in range(self._substeps):
             for name, f in self._pending.items():
-                self._bodies[name].apply_forces(self._t32(np.asarray(f)[None]), self._obj_idx, True)
+                if name == "robot":
+                    self._push_base(f)
+                else:
+                    self._bodies[name].apply_forces(self._t32(np.asarray(f)[None]), self._obj_idx, True)
             if i == self._substeps - 1:
                 q0 = self._row(self._art.get_dof_positions())
             # Count steps rather than add up times, so every period has exactly the same substeps.
@@ -774,10 +796,41 @@ class IsaacBackend(Backend):
     def apply_force(self, name, force):
         self._pending[name] = self._pending.get(name, np.zeros(3)) + np.asarray(force, float)
 
+    def _push_base(self, force) -> None:
+        """A world-frame force at the base's centre of mass, as MuJoCo's ``xfrc_applied`` acts."""
+        pos, quat = self.base_pose()
+        f = np.zeros((1, self._nlinks, 3))
+        at = np.zeros((1, self._nlinks, 3))
+        f[0, self._root] = force
+        at[0, self._root] = pos + _rotate(quat, self._root_com)
+        self._art.apply_forces_and_torques_at_position(self._t32(f), None, self._t32(at), self._idx, True)
+
+    # --- floating base -------------------------------------------------------------
+    def base_pose(self):
+        t = self._row(self._art.get_root_transforms())
+        return t[:3].copy(), _wxyz(t)
+
+    def base_velocity(self):
+        """World-frame linear (of the base frame's origin, not its centre of mass) then angular velocity."""
+        v = self._row(self._art.get_root_velocities())
+        _, quat = self.base_pose()
+        lin, ang = v[:3], v[3:6]
+        return np.concatenate([lin - np.cross(ang, _rotate(quat, self._root_com)), ang])
+
+    def set_base_pose(self, pos, quat):
+        w, x, y, z = (float(v) for v in quat)
+        t = np.array([*map(float, pos), x, y, z, w])
+        self._art.set_root_transforms(self._t32(t[None]), self._idx)
+        self._art.set_root_velocities(self._t32(np.zeros((1, 6))), self._idx)
+        self._view.update_articulations_kinematic()
+        self._vel = None
+
     # --- state -------------------------------------------------------------------
     def get_state(self):
         parts = [[self._k], self._ctrl, self._gscale]
         parts += [self._row(self._art.get_dof_positions()), self._row(self._art.get_dof_velocities())]
+        if self.robot_model.floating:
+            parts += [self._row(self._art.get_root_transforms()), self._row(self._art.get_root_velocities())]
         for b in self._bodies.values():
             parts += [self._row(b.get_transforms()), self._row(b.get_velocities())]
         return np.concatenate([np.asarray(p, float).ravel() for p in parts])
@@ -791,8 +844,13 @@ class IsaacBackend(Backend):
         i += nc
         self._gscale = s[i : i + na].copy()
         i += na
-        self._write_dofs(s[i : i + nd], s[i + nd : i + 2 * nd])
+        q, v = s[i : i + nd], s[i + nd : i + 2 * nd]
         i += 2 * nd
+        if self.robot_model.floating:
+            self._art.set_root_transforms(self._t32(s[i : i + 7][None]), self._idx)
+            self._art.set_root_velocities(self._t32(s[i + 7 : i + 13][None]), self._idx)
+            i += 13
+        self._write_dofs(q, v)
         for b in self._bodies.values():
             b.set_transforms(self._t32(s[i : i + 7][None]), self._obj_idx)
             b.set_velocities(self._t32(s[i + 7 : i + 13][None]), self._obj_idx)
