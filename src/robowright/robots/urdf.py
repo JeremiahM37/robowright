@@ -37,8 +37,7 @@ def cache_root() -> Path:
 
 def export(model: RobotModel) -> Path:
     """Directory holding ``robot.urdf``, ``robot.json`` and ``meshes/``; built once and cached."""
-    src = Path(model.mjcf())
-    h = hashlib.sha1(f"{VERSION}|{model!r}|{src.stat().st_mtime_ns}".encode()).hexdigest()[:12]
+    h = hashlib.sha1(f"{VERSION}|{_cache_key(model)}".encode()).hexdigest()[:12]
     out = cache_root() / f"{model.name}-{h}"
     if (out / "robot.json").exists():
         return out
@@ -52,6 +51,23 @@ def export(model: RobotModel) -> Path:
 
         shutil.rmtree(tmp, ignore_errors=True)
     return out
+
+
+def _cache_key(model: RobotModel) -> str:
+    """The model's fields with file loaders replaced by the files they load (a repr would hold addresses)."""
+    import dataclasses
+
+    parts = []
+    for f in dataclasses.fields(model):
+        v = getattr(model, f.name)
+        if f.name == "mjcf":
+            src = Path(v())
+            v = f"{src}@{src.stat().st_mtime_ns}"
+        elif f.name == "attach" and v is not None:
+            src = Path(v.mjcf())
+            v = f"{src}@{src.stat().st_mtime_ns}:{v.site}:{v.prefix}"
+        parts.append(f"{f.name}={v!r}")
+    return "|".join(parts)
 
 
 def load(model: RobotModel) -> tuple[Path, dict]:
