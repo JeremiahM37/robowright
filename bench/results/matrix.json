@@ -1,0 +1,200 @@
+{
+ "env": {
+  "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "cores": 32,
+  "python": "3.12.13",
+  "os": "Linux 6.17.13-2-pve",
+  "mujoco": "3.14.0",
+  "robowright": "0.1.0.dev0",
+  "date": "2026-10-02",
+  "pybullet": "installed"
+ },
+ "backends": [
+  "mujoco",
+  "pybullet"
+ ],
+ "trials": 2,
+ "seconds": 6.3,
+ "results": [
+  {
+   "backend": "pybullet",
+   "robot": "panda",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 1.497,
+     "ok": true,
+     "cube": [
+      0.2034,
+      0.1196,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.224,
+     "ok": true,
+     "cube": [
+      0.1942,
+      0.1198,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 2,
+   "n": 2,
+   "ci": [
+    0.342,
+    1.0
+   ],
+   "ms_per_step": 2.845,
+   "grip": {
+    "held": true,
+    "max_shove_n": 1.33
+   },
+   "cell_seconds": 6.1
+  },
+  {
+   "backend": "pybullet",
+   "robot": "piper",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 1.549,
+     "ok": false,
+     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
+     "cube": [
+      0.2399,
+      -0.0237,
+      0.0125
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.153,
+     "ok": false,
+     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
+     "cube": [
+      0.2547,
+      -0.0495,
+      0.0125
+     ]
+    }
+   ],
+   "passed": 0,
+   "n": 2,
+   "ci": [
+    0.0,
+    0.658
+   ],
+   "ms_per_step": 1.073,
+   "grip": {
+    "held": true,
+    "max_shove_n": 0.0
+   },
+   "cell_seconds": 4.3
+  },
+  {
+   "backend": "pybullet",
+   "robot": "go2",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.795,
+   "max_push_bw": 1.28,
+   "cell_seconds": 3.8
+  },
+  {
+   "backend": "mujoco",
+   "robot": "panda",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.385,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1218,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.068,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1209,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 2,
+   "n": 2,
+   "ci": [
+    0.342,
+    1.0
+   ],
+   "ms_per_step": 0.432,
+   "grip": {
+    "held": true,
+    "max_shove_n": 1.33
+   },
+   "cell_seconds": 1.8
+  },
+  {
+   "backend": "mujoco",
+   "robot": "piper",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.634,
+     "ok": true,
+     "cube": [
+      0.1934,
+      0.1116,
+      0.0184
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.107,
+     "ok": true,
+     "cube": [
+      0.1958,
+      0.1204,
+      0.0184
+     ]
+    }
+   ],
+   "passed": 2,
+   "n": 2,
+   "ci": [
+    0.342,
+    1.0
+   ],
+   "ms_per_step": 0.33,
+   "grip": {
+    "held": true,
+    "max_shove_n": 0.44
+   },
+   "cell_seconds": 2.6
+  },
+  {
+   "backend": "mujoco",
+   "robot": "go2",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.175,
+   "max_push_bw": 1.16,
+   "cell_seconds": 1.9
+  }
+ ],
+ "agreement": {
+  "panda/pybullet": 5.1,
+  "piper/pybullet": 161.6
+ }
+}

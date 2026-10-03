@@ -71,7 +71,7 @@ def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1
         for i in range(1, n):
             _apply(b, edits.get(i - 1, []))
             b.set_ctrl(a["ctrl"][i])
-            for k, name in enumerate(names):
+            for k, name in enumerate(meta.get("force_names", names)):
                 f = a["forces"][i][k]
                 if np.any(f):
                     b.apply_force(name, f)

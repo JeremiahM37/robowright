@@ -6,7 +6,7 @@ Fixtures: ``world``, ``robot``, ``scene`` (fresh per test), ``rw_scene``
 Options::
 
     --rw-backend mujoco,pybullet     run every robot test on each backend
-    --rw-robot so101,panda | all     run every robot test on each robot
+    --rw-robot so101,panda | all | legged   run every robot test on each robot ("all": every arm)
     --rw-trace on|off|retain-on-failure
     --rw-trace-dir DIR
     --rw-seed N                      base seed
@@ -30,7 +30,7 @@ import robowright as rw
 
 from . import robots as _robots
 from .errors import RobowrightError
-from .scene import SceneSpec, default_camera, tabletop
+from .scene import SceneSpec, default_camera, default_scene
 from .stats import TrialReport
 from .world import Settings, World, _safe
 
@@ -61,7 +61,10 @@ def _robot_names(config) -> list[str]:
     raw = [r.strip() for r in config.getoption("--rw-robot").split(",") if r.strip()]
     out = []
     for r in raw:
-        out.extend(_robots.names("arm") if r == "all" else [_robots.get(r).name])
+        if r in ("all", "arms", "legged"):
+            out.extend(_robots.names({"all": "arm", "arms": "arm", "legged": "legged"}[r]))
+        else:
+            out.append(_robots.get(r).name)
     return list(dict.fromkeys(out))
 
 
@@ -88,7 +91,7 @@ def rw_robot(request) -> str:  # parametrized by pytest_generate_tests when seve
 
 @pytest.fixture
 def rw_scene(rw_robot) -> SceneSpec:
-    return tabletop(robot=rw_robot)
+    return default_scene(rw_robot)
 
 
 def _scene_for(item, request) -> SceneSpec:

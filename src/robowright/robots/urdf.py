@@ -126,22 +126,25 @@ def _write(model: RobotModel, out: Path) -> None:
             return False
         return True
 
-    # A massless root at the robot's base frame: the model's first body may sit at an offset.
-    _inertial(ET.SubElement(root, "link", name=BASE), 1e-4, np.zeros(3), [1, 0, 0, 0], np.full(3, 1e-8))
+    floating = model.floating
+    if not floating:
+        # A massless root at the robot's base frame: the model's first body may sit at an offset.
+        _inertial(ET.SubElement(root, "link", name=BASE), 1e-4, np.zeros(3), [1, 0, 0, 0], np.full(3, 1e-8))
     for b in range(1, m.nbody):
         body = m.body(b)
         link = _safe(body.name)
         parent = m.body_parentid[b]
         joints = [j for j in range(m.njnt) if m.jnt_bodyid[j] == b and m.jnt_type[j] in (_HINGE, _SLIDE)]
-        if any(m.jnt_bodyid[j] == b and m.jnt_type[j] not in (_HINGE, _SLIDE) for j in range(m.njnt)):
-            raise ValueError(f"{model.name}: body {body.name} has a free or ball joint; only fixed-base robots export")
+        free = [j for j in range(m.njnt) if m.jnt_bodyid[j] == b and m.jnt_type[j] not in (_HINGE, _SLIDE)]
+        if free and not (floating and parent == 0 and body.name == model.base_body):
+            raise ValueError(f"{model.name}: body {body.name} has a free or ball joint; only the floating base may")
         # Joint axes in URDF pass through the child link origin, so the link frame
         # sits at the (first) joint's anchor; geoms and children are shifted to match.
         anchor = m.jnt_pos[joints[0]].copy() if joints else np.zeros(3)
         shift[b] = anchor
         R_body = _rot(m.body_quat[b])
         origin_xyz = m.body_pos[b] - shift[parent] + R_body @ anchor
-        prev = _safe(m.body(parent).name) if parent > 0 else BASE
+        prev = _safe(m.body(parent).name) if parent > 0 else (None if floating else BASE)
         chain = joints or [None]
         for k, j in enumerate(chain):
             child = link if k == len(chain) - 1 else f"{link}__j{k}"
@@ -208,19 +211,21 @@ def _write(model: RobotModel, out: Path) -> None:
         excluded.add(tuple(sorted((_safe(m.body(sig >> 16).name), _safe(m.body(sig & 0xFFFF).name)))))
     meta["excluded_pairs"] = sorted(excluded)
     meta["arm_joints"] = list(model.arm_joints)
-    der = model.derived
-    effort, driven = _grip_effort(m, model)
-    meta["gripper"] = {
-        "joints": {n: list(v) for n, v in der.gripper_joints.items()},
-        "main": der.gripper_joint,
-        "effort": effort,
-        # Joints the gripper actuator pushes directly. The rest are linkage joints that
-        # MuJoCo couples with equality constraints: drive them from the measured
-        # position of driven[0], or a blocked finger tilts its pad into the object.
-        "driven": driven,
-    }
+    if model.has_gripper:
+        der = model.derived
+        effort, driven = _grip_effort(m, model)
+        meta["gripper"] = {
+            "joints": {n: list(v) for n, v in der.gripper_joints.items()},
+            "main": der.gripper_joint,
+            "effort": effort,
+            # Joints the gripper actuator pushes directly. The rest are linkage joints that
+            # MuJoCo couples with equality constraints: drive them from the measured
+            # position of driven[0], or a blocked finger tilts its pad into the object.
+            "driven": driven,
+        }
     meta["hand"] = _safe(model.hand)
-    meta["root"] = BASE
+    meta["root"] = _safe(model.base_body) if floating else BASE
+    meta["floating"] = floating
     meta["fingers"] = {
         "left_finger": [_safe(n) for n in model.left_finger],
         "right_finger": [_safe(n) for n in model.right_finger],

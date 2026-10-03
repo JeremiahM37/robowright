@@ -50,7 +50,8 @@ class Backend(ABC):
         self.seed = seed
         self.robot_model = spec.robot_model
         self.n_arm = self.robot_model.n_arm
-        self.joint_names = [*self.robot_model.arm_joints, "gripper"]
+        self.has_gripper = self.robot_model.has_gripper
+        self.joint_names = [*self.robot_model.arm_joints, *(["gripper"] if self.has_gripper else [])]
 
     # --- robot -----------------------------------------------------------
     joint_names: list[str]
@@ -80,6 +81,19 @@ class Backend(ABC):
         """World position and (w, x, y, z) quaternion of the robot's hand body."""
         raise NotImplementedError(f"{self.name} does not report link poses")
 
+    # --- mobile robots (``robot_model.floating``) ----------------------------
+    def base_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """World position and (w, x, y, z) quaternion of the floating base."""
+        raise NotImplementedError(f"{self.name} does not support floating-base robots")
+
+    def base_velocity(self) -> np.ndarray:
+        """World-frame linear then angular velocity of the floating base."""
+        raise NotImplementedError(f"{self.name} does not support floating-base robots")
+
+    def set_base_pose(self, pos, quat) -> None:
+        """Teleport the floating base (setup only), at rest."""
+        raise NotImplementedError(f"{self.name} does not support floating-base robots")
+
     # --- time ------------------------------------------------------------
     @property
     def control_dt(self) -> float:
@@ -107,7 +121,7 @@ class Backend(ABC):
         raise NotImplementedError(f"{self.name} does not report contacts")
 
     def apply_force(self, name: str, force) -> None:
-        """Apply a world-frame force (N) to an object's centre for the next step."""
+        """Apply a world-frame force (N) to an object's centre (or ``"robot"``: the floating base) for the next step."""
         raise NotImplementedError(f"{self.name} cannot apply external forces")
 
     def render(self, camera: str, width: int, height: int) -> np.ndarray:

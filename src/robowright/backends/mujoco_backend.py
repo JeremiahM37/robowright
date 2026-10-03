@@ -30,11 +30,12 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
     s = mujoco.MjSpec()
     s.option.timestep = spec.dt
     spec.robot_model.add_to(s)
-    # Arm controllers on real robots cancel gravity; bare position servos sag
-    # under it instead, by more than a grasp can tolerate.
-    for b in s.bodies:
-        if b.name.startswith(PREFIX):
-            b.gravcomp = 1.0
+    if spec.robot_model.family == "arm":
+        # Arm controllers on real robots cancel gravity; bare position servos sag
+        # under it instead, by more than a grasp can tolerate.
+        for b in s.bodies:
+            if b.name.startswith(PREFIX):
+                b.gravcomp = 1.0
     s.visual.headlight.diffuse = [0.6, 0.6, 0.6]
     s.visual.headlight.ambient = [0.35, 0.35, 0.35]
     s.visual.global_.offwidth = 1280
@@ -121,14 +122,18 @@ class MujocoBackend(Backend):
         self._dadr = np.array([m.joint(n).dofadr[0] for n in arm])
         by_joint = {m.actuator_trnid[i, 0]: i for i in range(m.nu) if m.actuator_trntype[i] == mujoco.mjtTrn.mjTRN_JOINT}
         self._act = np.array([by_joint[m.joint(n).id] for n in arm])
-        self._gact = m.actuator(PREFIX + rm.gripper_actuator).id
-        self._act_all = np.append(self._act, self._gact)
         self._kp = m.actuator_gainprm[self._act, 0].copy()
         self._bias = m.actuator_biasprm[self._act, 1].copy()
-        der = rm.derived
-        gj = m.joint(PREFIX + der.gripper_joint)
-        self._g_qadr, self._g_dadr = gj.qposadr[0], gj.dofadr[0]
-        self._g_closed, self._g_open = der.gripper_joints[der.gripper_joint]
+        if self.has_gripper:
+            self._gact = m.actuator(PREFIX + rm.gripper_actuator).id
+            der = rm.derived
+            gj = m.joint(PREFIX + der.gripper_joint)
+            self._g_qadr, self._g_dadr = gj.qposadr[0], gj.dofadr[0]
+            self._g_closed, self._g_open = der.gripper_joints[der.gripper_joint]
+        if rm.floating:
+            self._base = m.body(PREFIX + rm.base_body).id
+            free = m.body_jntadr[self._base]
+            self._base_q, self._base_v = m.jnt_qposadr[free], m.jnt_dofadr[free]
         self._substeps = max(1, round((1.0 / spec.control_hz) / m.opt.timestep))
         self._body = {o.name: m.body(o.name).id for o in spec.objects}
         self._free = {o.name: m.joint(f"{o.name}/free") for o in spec.objects if not o.static}
@@ -137,9 +142,13 @@ class MujocoBackend(Backend):
             self._label[b] = f"robot:{part}"
         for b in range(1, m.nbody):
             self._label.setdefault(b, m.body(b).name)
-        self._hand = m.body(PREFIX + rm.hand).id
+        self._hand = m.body(PREFIX + rm.hand).id if rm.hand else None
         self._renderers: dict = {}
         reset_data(m, self.data)
+        if rm.floating:
+            yaw = rm.base_yaw
+            self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)))
+            self.set_joint_positions(rm.stand_q())
         self.set_ctrl(self.qpos())
 
     # robot
@@ -147,10 +156,12 @@ class MujocoBackend(Backend):
         return (q - self._g_closed) / (self._g_open - self._g_closed)
 
     def qpos(self):
-        return np.append(self.data.qpos[self._qadr], self._opening(self.data.qpos[self._g_qadr]))
+        q = self.data.qpos[self._qadr]
+        return np.append(q, self._opening(self.data.qpos[self._g_qadr])) if self.has_gripper else q.copy()
 
     def qvel(self):
-        return np.append(self.data.qvel[self._dadr], self.data.qvel[self._g_dadr] / (self._g_open - self._g_closed))
+        v = self.data.qvel[self._dadr]
+        return np.append(v, self.data.qvel[self._g_dadr] / (self._g_open - self._g_closed)) if self.has_gripper else v.copy()
 
     def set_ctrl(self, target):
         m, rm = self.model, self.robot_model
@@ -159,11 +170,14 @@ class MujocoBackend(Backend):
         lim = m.actuator_ctrllimited[self._act].astype(bool)
         lo, hi = m.actuator_ctrlrange[self._act].T
         self.data.ctrl[self._act] = np.where(lim, np.clip(arm, lo, hi), arm)
-        g = float(np.clip(target[self.n_arm], 0.0, 1.0))
-        self.data.ctrl[self._gact] = rm.gripper_closed + g * (rm.gripper_open - rm.gripper_closed)
+        if self.has_gripper:
+            g = float(np.clip(target[self.n_arm], 0.0, 1.0))
+            self.data.ctrl[self._gact] = rm.gripper_closed + g * (rm.gripper_open - rm.gripper_closed)
 
     def ctrl(self):
         rm = self.robot_model
+        if not self.has_gripper:
+            return self.data.ctrl[self._act].copy()
         g = (self.data.ctrl[self._gact] - rm.gripper_closed) / (rm.gripper_open - rm.gripper_closed)
         return np.append(self.data.ctrl[self._act], g)
 
@@ -177,13 +191,29 @@ class MujocoBackend(Backend):
         q = np.asarray(q, float)
         self.data.qpos[self._qadr] = q[: self.n_arm]
         self.data.qvel[self._dadr] = 0
-        # Put every finger joint where it sits at this opening, so the gripper starts at rest.
-        s = float(np.clip(q[self.n_arm], 0, 1))
-        for name, (c, o) in self.robot_model.derived.gripper_joints.items():
-            j = self.model.joint(PREFIX + name)
-            self.data.qpos[j.qposadr[0]] = c + s * (o - c)
-            self.data.qvel[j.dofadr[0]] = 0
+        if self.has_gripper:
+            # Put every finger joint where it sits at this opening, so the gripper starts at rest.
+            s = float(np.clip(q[self.n_arm], 0, 1))
+            for name, (c, o) in self.robot_model.derived.gripper_joints.items():
+                j = self.model.joint(PREFIX + name)
+                self.data.qpos[j.qposadr[0]] = c + s * (o - c)
+                self.data.qvel[j.dofadr[0]] = 0
         self.set_ctrl(q)
+        mujoco.mj_forward(self.model, self.data)
+
+    def base_pose(self):
+        return self.data.xpos[self._base].copy(), self.data.xquat[self._base].copy()
+
+    def base_velocity(self):
+        v = self.data.qvel[self._base_v : self._base_v + 6].copy()
+        R = self.data.xmat[self._base].reshape(3, 3)
+        return np.concatenate([v[:3], R @ v[3:]])  # MuJoCo's free-joint angular velocity is in the body frame
+
+    def set_base_pose(self, pos, quat):
+        a = self._base_q
+        self.data.qpos[a : a + 3] = pos
+        self.data.qpos[a + 3 : a + 7] = quat
+        self.data.qvel[self._base_v : self._base_v + 6] = 0
         mujoco.mj_forward(self.model, self.data)
 
     def hand_pose(self):
@@ -237,7 +267,8 @@ class MujocoBackend(Backend):
         return out
 
     def apply_force(self, name, force):
-        self.data.xfrc_applied[self._body[name], :3] += force
+        b = self._base if name == "robot" else self._body[name]
+        self.data.xfrc_applied[b, :3] += force
 
     def render(self, camera, width, height):
         r = self._renderers.get((width, height))

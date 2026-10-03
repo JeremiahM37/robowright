@@ -1,4 +1,4 @@
-"""Regenerate the README media: docs/demo.gif and docs/viewer.png.
+"""Regenerate the README media: docs/demo.gif, docs/gallery.png and docs/viewer.png.
 
     python docs/make_assets.py
 
@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 import robowright as rw
 from robowright import CameraSpec, expect, tabletop
@@ -50,6 +50,34 @@ def demo_gif():
     print(DOCS / "demo.gif", len(frames), "frames")
 
 
+def gallery(backend: str = "mujoco", out: str = "gallery.png", cols: int = 5):
+    """Every robot mid-task: arms holding the cube over the table, legged robots standing."""
+    tiles = []
+    for name in rw.robots.names():
+        m = rw.robots.get(name)
+        w = rw.launch(robot=name, backend=backend, settings=rw.Settings(trace="off"))
+        w.robot.reset_to()
+        if m.family == "arm":
+            w.robot.pick(w.scene["cube"])
+            w.robot.arm.move_to((0.2, 0.03, 0.09))
+        else:
+            w.wait(0.5)
+        img = Image.fromarray(w.backend.render("front", 400, 300))
+        w.close()
+        d = ImageDraw.Draw(img)
+        font = ImageFont.load_default(size=17)
+        d.rectangle((0, 0, 400, 26), fill=(255, 255, 255))
+        d.text((8, 4), m.title, fill=(20, 20, 20), font=font)
+        tiles.append(img)
+        print(" ", name)
+    rows = (len(tiles) + cols - 1) // cols
+    sheet = Image.new("RGB", (400 * cols, 300 * rows), "white")
+    for k, t in enumerate(tiles):
+        sheet.paste(t, ((k % cols) * 400, (k // cols) * 300))
+    sheet.save(DOCS / out, optimize=True)
+    print(DOCS / out)
+
+
 def viewer_png():
     out = Path(tempfile.mkdtemp())
     w = rw.launch(name="tests/test_bin.py::test_cube_lands_in_bin[mujoco]", settings=rw.Settings(trace="on", trace_dir=str(out)))
@@ -75,4 +103,5 @@ def viewer_png():
 
 if __name__ == "__main__":
     demo_gif()
+    gallery()
     viewer_png()

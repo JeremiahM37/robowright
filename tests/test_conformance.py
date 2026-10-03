@@ -17,6 +17,14 @@ from robowright.backends.base import CONTACTS, DETERMINISTIC, GROUND_TRUTH, REND
 from robowright.robot import DOWN
 
 
+@pytest.fixture(autouse=True)
+def _arms_only(rw_robot):
+    from robowright import robots
+
+    if robots.get(rw_robot).family != "arm":
+        pytest.skip("arm contract (legged robots: tests/test_legged.py)")
+
+
 def test_reports_the_robot_joints(world):
     b = world.backend
     m = b.robot_model

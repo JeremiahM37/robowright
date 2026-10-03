@@ -28,6 +28,7 @@ from .mujoco_backend import bin_walls
 
 POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error corrected per step
 GRAVITY = 9.81
+ARMATURE_FLOOR = 2e-3  # kg m^2, see __init__
 
 
 @register("pybullet")
@@ -58,7 +59,7 @@ class PybulletBackend(Backend):
                 str(path),
                 list(rm.base_pos),
                 [0, 0, np.sin(yaw / 2), np.cos(yaw / 2)],
-                useFixedBase=True,
+                useFixedBase=not rm.floating,
                 flags=p.URDF_USE_INERTIA_FROM_FILE,
                 physicsClientId=c,
             )
@@ -70,7 +71,7 @@ class PybulletBackend(Backend):
         self._links = links
         parent = {j: p.getJointInfo(self.robot, j, physicsClientId=c)[16] for j in links.values()}
         finger_root = {links[n]: part for part, names in meta["fingers"].items() for n in names}
-        self._link_label = {-1: "robot:base"}
+        self._link_label = {-1: f"robot:{meta['root']}" if rm.floating else "robot:base"}
         for name, j in links.items():
             r, part = j, None
             while r >= 0 and part is None:
@@ -78,21 +79,23 @@ class PybulletBackend(Backend):
             self._link_label[j] = f"robot:{part or name}"
         # Servo model: arm joints from the MuJoCo actuators; every finger joint follows its calibration.
         self._arm = [joints[urdf._safe(n)] for n in rm.arm_joints]
-        g = meta["gripper"]
-        driven = g["driven"]
-        linkage = [n for n in g["joints"] if n not in driven]
-        self._fingers = [joints[urdf._safe(n)] for n in driven]
-        self._finger_q = np.array([g["joints"][n] for n in driven])  # (k, 2): closed, open
-        self._finger_force = np.array([g["effort"][n] for n in driven])
-        # Linkage joints follow the first driven joint's measured travel, as MuJoCo's
-        # equality constraints make them; commanding them separately tilts blocked pads.
-        self._ref = self._fingers[0]
-        self._ref_q = g["joints"][driven[0]]
-        self._links_j = [joints[urdf._safe(n)] for n in linkage]
-        self._links_q = np.array([g["joints"][n] for n in linkage]).reshape(-1, 2)
-        self._links_force = [g["effort"][n] for n in linkage]
-        self._main = joints[urdf._safe(g["main"])]
-        self._main_q = g["joints"][g["main"]]
+        self._links_j = []
+        if self.has_gripper:
+            g = meta["gripper"]
+            driven = g["driven"]
+            linkage = [n for n in g["joints"] if n not in driven]
+            self._fingers = [joints[urdf._safe(n)] for n in driven]
+            self._finger_q = np.array([g["joints"][n] for n in driven])  # (k, 2): closed, open
+            self._finger_force = np.array([g["effort"][n] for n in driven])
+            # Linkage joints follow the first driven joint's measured travel, as MuJoCo's
+            # equality constraints make them; commanding them separately tilts blocked pads.
+            self._ref = self._fingers[0]
+            self._ref_q = g["joints"][driven[0]]
+            self._links_j = [joints[urdf._safe(n)] for n in linkage]
+            self._links_q = np.array([g["joints"][n] for n in linkage]).reshape(-1, 2)
+            self._links_force = [g["effort"][n] for n in linkage]
+            self._main = joints[urdf._safe(g["main"])]
+            self._main_q = g["joints"][g["main"]]
         self._arm_force = np.array([meta["joints"][n]["effort"] for n in rm.arm_joints])
         self._lo = np.array([(meta["joints"][n]["range"] or (-2 * np.pi, 2 * np.pi))[0] for n in rm.arm_joints])
         self._hi = np.array([(meta["joints"][n]["range"] or (-2 * np.pi, 2 * np.pi))[1] for n in rm.arm_joints])
@@ -101,34 +104,49 @@ class PybulletBackend(Backend):
             jm = meta["joints"].get(name.replace("__", "/"), meta["joints"].get(name))
             if jm is None:
                 continue
-            # PyBullet has no joint armature. Light links under stiff position control go
-            # unstable without the motor's reflected inertia, so fold it into the link inertia.
-            inertia = p.getDynamicsInfo(self.robot, j, physicsClientId=c)[2]
+            # PyBullet has no joint armature (the motor's reflected inertia). Its constraint-based
+            # motors need a little extra link inertia to stay stable on light links, but folding in
+            # MuJoCo's full armature makes the arm sluggish enough to fling a held object when a
+            # policy stops it. A small floor does both jobs (measured on the SO-101: 10/10 policy
+            # runs with it, 1/10 without, 6/10 with the full value).
+            info = p.getDynamicsInfo(self.robot, j, physicsClientId=c)
             p.changeDynamics(
                 self.robot,
                 j,
                 jointDamping=jm["damping"],
-                localInertiaDiagonal=[v + jm["armature"] for v in inertia],
+                localInertiaDiagonal=list(np.array(info[2]) + min(jm["armature"], ARMATURE_FLOOR)),
                 physicsClientId=c,
             )
-        for geom in meta["geoms"].values():
-            j = links.get(geom["link"], -1)
-            p.changeDynamics(self.robot, j, lateralFriction=geom["friction"], spinningFriction=0.005, physicsClientId=c)
+        # PyBullet multiplies the two bodies' friction coefficients; MuJoCo takes the larger.
+        # With robot links at 1, a contact's friction is the other body's own coefficient,
+        # which matches MuJoCo whenever the object is the grippier side (as scene objects are).
+        for j in [-1, *links.values()]:
+            p.changeDynamics(self.robot, j, lateralFriction=1.0, spinningFriction=0.005, physicsClientId=c)
         # PyBullet ignores URDF material colours on OBJ meshes; apply them per shape.
         for name, colors in meta["colors"].items():
             j = links.get(name, -1)
             for k, rgba in enumerate(colors):
                 p.changeVisualShape(self.robot, j, shapeIndex=k, rgbaColor=rgba, physicsClientId=c)
-        self._weights = [(j, p.getDynamicsInfo(self.robot, j, physicsClientId=c)[0] * GRAVITY) for j in [-1, *links.values()]]
-        self.joint_names = [*rm.arm_joints, "gripper"]
-        self._ctrl = np.zeros(self.n_arm + 1)
+        # Arms cancel their own weight like MuJoCo's gravcomp; legged robots stand on it.
+        all_links = [-1, *links.values()]
+        self._weights = (
+            [(j, p.getDynamicsInfo(self.robot, j, physicsClientId=c)[0] * GRAVITY) for j in all_links] if rm.family == "arm" else []
+        )
+        lip, lio = p.getDynamicsInfo(self.robot, -1, physicsClientId=c)[3:5]
+        self._com_in_base = (lip, lio)  # PyBullet reports a floating base at its centre of mass
+        self._ctrl = np.zeros(len(self.joint_names))
         self._bodies: dict[str, int] = {}
         for o in spec.objects:
             self._bodies[o.name] = self._make_object(o)
         self._label = {self.floor: "floor", self.robot: None, **{b: n for n, b in self._bodies.items()}}
         self._pending: dict[str, np.ndarray] = {}
         self._cams = {cs.name: cs for cs in spec.cameras}
-        self.set_joint_positions(np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0))
+        if rm.floating:
+            yaw = rm.base_yaw
+            self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)))
+            self.set_joint_positions(rm.stand_q())
+        else:
+            self.set_joint_positions(np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0))
 
     def _make_object(self, o) -> int:
         c = self.cid
@@ -168,10 +186,14 @@ class PybulletBackend(Backend):
         return (q - c) / (o - c)
 
     def qpos(self):
+        if not self.has_gripper:
+            return np.array([s[0] for s in p.getJointStates(self.robot, self._arm, physicsClientId=self.cid)])
         q = [s[0] for s in p.getJointStates(self.robot, [*self._arm, self._main], physicsClientId=self.cid)]
         return np.append(q[:-1], self._opening(q[-1]))
 
     def qvel(self):
+        if not self.has_gripper:
+            return np.array([s[1] for s in p.getJointStates(self.robot, self._arm, physicsClientId=self.cid)])
         v = [s[1] for s in p.getJointStates(self.robot, [*self._arm, self._main], physicsClientId=self.cid)]
         c, o = self._main_q
         return np.append(v[:-1], v[-1] / (o - c))
@@ -181,7 +203,20 @@ class PybulletBackend(Backend):
 
     def set_ctrl(self, target):
         target = np.asarray(target, float)
-        self._ctrl = np.append(np.clip(target[: self.n_arm], self._lo, self._hi), np.clip(target[self.n_arm], 0, 1))
+        arm = np.clip(target[: self.n_arm], self._lo, self._hi)
+        if not self.has_gripper:
+            self._ctrl = arm
+            p.setJointMotorControlArray(
+                self.robot,
+                self._arm,
+                p.POSITION_CONTROL,
+                targetPositions=list(arm),
+                forces=list(self._arm_force),
+                positionGains=list(self._gain),
+                physicsClientId=self.cid,
+            )
+            return
+        self._ctrl = np.append(arm, np.clip(target[self.n_arm], 0, 1))
         p.setJointMotorControlArray(
             self.robot,
             [*self._arm, *self._fingers],
@@ -203,6 +238,9 @@ class PybulletBackend(Backend):
         q = np.asarray(q, float)
         for j, v in zip(self._arm, q[: self.n_arm]):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
+        if not self.has_gripper:
+            self.set_ctrl(q)
+            return
         for j, v in zip(self._fingers, self._finger_targets(q[-1])):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
         s = float(np.clip(q[-1], 0, 1))
@@ -226,6 +264,24 @@ class PybulletBackend(Backend):
             physicsClientId=self.cid,
         )
 
+    def base_pose(self):
+        c = self.cid
+        com_p, com_q = p.getBasePositionAndOrientation(self.robot, physicsClientId=c)
+        pos, (x, y, z, w) = p.multiplyTransforms(com_p, com_q, *p.invertTransform(*self._com_in_base), physicsClientId=c)
+        return np.array(pos), np.array([w, x, y, z])
+
+    def base_velocity(self):
+        lin, ang = p.getBaseVelocity(self.robot, physicsClientId=self.cid)
+        com = np.array(p.getBasePositionAndOrientation(self.robot, physicsClientId=self.cid)[0])
+        lin = np.array(lin) + np.cross(ang, self.base_pose()[0] - com)
+        return np.concatenate([lin, ang])
+
+    def set_base_pose(self, pos, quat):
+        w, x, y, z = quat
+        com_p, com_q = p.multiplyTransforms(list(map(float, pos)), [x, y, z, w], *self._com_in_base, physicsClientId=self.cid)
+        p.resetBasePositionAndOrientation(self.robot, com_p, com_q, physicsClientId=self.cid)
+        p.resetBaseVelocity(self.robot, [0, 0, 0], [0, 0, 0], physicsClientId=self.cid)
+
     def hand_pose(self):
         ls = p.getLinkState(self.robot, self._links[self.meta["hand"]], computeForwardKinematics=True, physicsClientId=self.cid)
         x, y, z, w = ls[5]
@@ -245,8 +301,9 @@ class PybulletBackend(Backend):
                 )
                 p.applyExternalForce(self.robot, j, [0, 0, weight], com, p.WORLD_FRAME, physicsClientId=c)
             for name, f in self._pending.items():
-                pos, _ = p.getBasePositionAndOrientation(self._bodies[name], physicsClientId=self.cid)
-                p.applyExternalForce(self._bodies[name], -1, f.tolist(), pos, p.WORLD_FRAME, physicsClientId=self.cid)
+                body = self.robot if name == "robot" else self._bodies[name]
+                pos, _ = p.getBasePositionAndOrientation(body, physicsClientId=self.cid)
+                p.applyExternalForce(body, -1, f.tolist(), pos, p.WORLD_FRAME, physicsClientId=self.cid)
             p.stepSimulation(physicsClientId=self.cid)
         self._pending = {}
         self._t += self._substeps * self.spec.dt
