@@ -404,6 +404,10 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
   manipulation are not built in.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
+- **Isaac Sim state restore:** restoring a state saved while objects are in contact is
+  close but not exact (about 3e-5), because PhysX keeps contact-cache data its API cannot
+  save. Trace replay is unaffected (its start state is captured before contact) and is
+  bit-identical on Isaac Sim like every other engine.
 - **Gripper models:** Menagerie's grippers squeeze far less than the real ones in several
   cases (Franka Hand: 1.3 N in the model, 70 N real). Tests measure the models, not the
   hardware.
