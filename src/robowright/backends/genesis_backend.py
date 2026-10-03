@@ -1,4 +1,4 @@
-"""Genesis backend: a GPU-oriented engine, on CUDA when there is one, else on CPU.
+"""Genesis backend: a GPU-oriented engine, run on its CPU backend unless asked otherwise.
 
 One scene steps ~5x faster on Genesis's CPU backend than on a GPU (kernel
 launch latency dominates a single small world), and only the CPU backend is
@@ -50,10 +50,10 @@ def _init() -> str:
     global _DEVICE
     if gs._initialized:
         return _DEVICE
-    import torch
-
-    # ROBOWRIGHT_GENESIS_DEVICE=cpu|gpu overrides; by default the GPU when CUDA is there.
-    device = os.environ.get("ROBOWRIGHT_GENESIS_DEVICE") or ("gpu" if torch.cuda.is_available() else "cpu")
+    # CPU by default: for one scene it is ~5.6x faster than an RTX 5080 (1.1 vs 6.3 ms per
+    # control step, Panda) and the only bit-for-bit deterministic mode. The GPU pays off only
+    # with many scenes in parallel. ROBOWRIGHT_GENESIS_DEVICE=gpu opts in.
+    device = os.environ.get("ROBOWRIGHT_GENESIS_DEVICE") or "cpu"
     # Double precision: stiff position servos (kp in the thousands) drift in float32.
     gs.init(backend=gs.gpu if device == "gpu" else gs.cpu, precision="64", logging_level="error")
     _exclude_pairs_hook()

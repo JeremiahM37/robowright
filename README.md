@@ -7,6 +7,7 @@
 ```python
 from robowright import expect
 
+
 def test_pick_and_place(robot, scene):
     cube, bin = scene["cube"], scene["bin"]
 
@@ -111,7 +112,7 @@ not hand-tuned:
 
 ```python
 def test_go2_recovers_from_a_shove(world, robot):
-    expect(robot.base).always.to_be_upright(tol_deg=30)          # invariant: never tips over
+    expect(robot.base).always.to_be_upright(tol_deg=30)  # invariant: never tips over
     world.faults.push("robot", force=(0, 0.3 * robot.total_mass * 9.81, 0), duration=0.1)
     world.wait(1.5)
     expect(robot.base).to_be_upright(tol_deg=10)
