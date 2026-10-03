@@ -250,17 +250,29 @@ the first step where it does. `codegen` writes the run back out as plain robowri
 That includes the exact randomised start poses and injected faults, so a one-in-fifty
 failure becomes a test you can run every time.
 
-### Two physics engines
+### Several physics engines
 
 ```console
-$ pytest --rw-backend mujoco,pybullet
+$ pytest --rw-backend mujoco,pybullet,drake,genesis
 ```
 
-The robot, kinematics, actions and assertions are shared; only physics differs. That's
-useful because a test that passes on one engine and fails on the other usually means the
-behaviour depends on contact details neither engine models faithfully. For example,
-running the examples on PyBullet showed the cube tumbling 90 degrees as it drops into the
-bin, which didn't happen in any of the MuJoCo runs.
+| engine | install | notes |
+|---|---|---|
+| MuJoCo | included | the reference: robots run exactly as their Menagerie authors tuned them |
+| PyBullet | `pip install robowright[pybullet]` | Bullet, the long-standing open-source baseline |
+| Drake | `pip install robowright[drake]` (Python 3.12+) | Toyota Research Institute's simulator; SAP contact solver, soft-surface contact |
+| Genesis | `pip install robowright[genesis]` | CPU by default (faster than CUDA for one scene, and deterministic); `ROBOWRIGHT_GENESIS_DEVICE=gpu` |
+
+The robot, kinematics, actions and assertions are shared; only physics differs. Every
+engine loads the same description of each robot: a URDF and OBJ meshes exported from its
+MuJoCo model, plus a sidecar for what URDF can't express (servo gains, armature, finger
+calibration, excluded collision pairs). Each backend has to pass the same contract
+(`tests/test_conformance.py`, `tests/test_legged.py`) on every robot before it ships.
+
+A test that passes on one engine and fails on another usually means the behaviour depends
+on contact details that no engine models faithfully. Those cases are kept visible, not
+tuned away: [`conftest.py`](conftest.py) lists each known divergence as a strict expected
+failure with the measured reason, so CI fails the day one starts passing.
 
 ## Benchmarks
 
@@ -283,38 +295,47 @@ On an AMD Ryzen AI Max+ 395 (32 threads):
 ## How it works
 
 ```
- test code ──► Robot / expect / locators / faults          (backend-independent core)
-                   │  IK from the URDF, trajectories, waiting, invariants
+ test code ──► Robot / LeggedRobot / expect / locators / faults   (backend-independent core)
+                   │  IK on the MJCF model, trajectories, waiting, invariants
                    ▼
                World.step()  ── one 20 ms control period ──► Recorder ──► trace.zip
                    │                                             │
                    ▼                                             ├─► viewer (HTML)
-               Backend: MuJoCo | PyBullet | (hardware)           ├─► replay
-                 physics only: qpos, set_ctrl, contacts,         └─► codegen
-                 render, state save/restore
+     Backend: MuJoCo | PyBullet | Drake | Genesis | (hardware)   ├─► replay
+       physics only: joints, servo targets, contacts,            └─► codegen
+       render, state save/restore
+                   ▲
+     robots/: RobotModel (MJCF + a few names) ─► derived TCP, tool axis, gripper calibration
+                                              └► URDF + OBJ export for non-MuJoCo engines
 ```
 
-- Kinematics come from the SO-101 URDF and are shared by all backends. The URDF and MuJoCo
-  models agree to within 2.5 µm (`tests/test_kinematics.py`).
+- Kinematics run on each robot's MJCF model with analytic Jacobians and are shared by all
+  backends. Every engine's hand pose agrees with them to within 0.1 mm on every arm
+  (`test_kinematics_match_the_simulated_hand`).
+- Arms get gravity compensation in every engine, as real arm controllers do; legged robots
+  stand on their own weight.
 - Backends advertise capabilities (`ground_truth`, `contacts`, `render`, `state`, ...).
   A matcher that needs one fails with a clear message on a backend that lacks it, instead
   of passing silently. On hardware, object poses come from a perception hook:
   `world.perception["cube"] = lambda: (pos, quat)`.
-- Anything that changes the world mid-test (teleports, faults) is written to the trace,
-  which is what makes replay and codegen exact.
+- Anything that changes the world mid-test (teleports, faults, pushes) is written to the
+  trace, which is what makes replay and codegen exact.
 
 ## Limitations
 
-- **One robot:** the SO-101 arm, with top-down grasps. Its reachable top-down workspace is
-  roughly 13–31 cm out and 1–9 cm up.
 - **Simulation only:** no hardware backend yet. The backend interface is written with one
   in mind (capabilities, perception hooks, `Settings(realtime=True)`), but nothing has run
-  on a real arm.
+  on a real robot.
+- **Top-down grasps:** `pick`/`place` grasp from above. Side grasps and mobile
+  manipulation are not built in.
+- **No walking controller:** legged robots stand, crouch and recover from shoves on their
+  joint servos; locomotion has to come from a policy.
+- **Gripper models:** Menagerie's grippers squeeze far less than the real ones in several
+  cases (Franka Hand: 1.3 N in the model, 70 N real). Tests measure the models, not the
+  hardware.
 - **Privileged policies:** the bundled `ScriptedPickPlace` reads ground-truth object poses.
   Camera-based learned policies plug into the same `run_policy`, but no LeRobot adapter
   ships yet.
-- **`to_be_upright`** is too strict for symmetric objects: a cube lying on another face
-  is still a cube.
 
 ## Roadmap
 
@@ -322,7 +343,8 @@ On an AMD Ryzen AI Max+ 395 (32 threads):
    real SO-101.
 2. ROS 2 backend (topics/actions in, the same `expect` out), so existing robots can be
    tested without a simulator.
-3. More engines (Isaac Sim / Genesis) and more robots via URDF + MJCF pairs.
+3. Locomotion policies as first-class fixtures (walk a Go2 or G1 one metre, assert it
+   stays upright).
 4. An agent-facing MCP server: "pick up the red cube" becomes a recorded, assertable run.
 
 ## License

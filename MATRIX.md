@@ -5,41 +5,86 @@ Every cell is measured; nothing here is written by hand.
 
 ## Arms: randomised pick-and-place
 
-Each cell runs the same test 2 times with the cube's position (σ = 15 mm) and yaw (σ = 0.6 rad) randomised by seed, the same seeds in every column: `robot.pick(cube)`, `robot.place(on=bin)`, `expect(cube).to_be_inside(bin)`, `expect(cube).to_be_at_rest()`. The interval is a 95% Wilson interval.
+Each cell runs the same test 20 times with the cube's position (σ = 15 mm) and yaw (σ = 0.6 rad) randomised by seed, the same seeds in every column: `robot.pick(cube)`, `robot.place(on=bin)`, `expect(cube).to_be_inside(bin)`, `expect(cube).to_be_at_rest()`. The interval is a 95% Wilson interval.
 
-| robot | mujoco | pybullet |
-|---|---:|---:|
-| Franka Emika Panda | ✅ 2/2 (34–100%) | ✅ 2/2 (34–100%) |
-| AgileX PiPER | ✅ 2/2 (34–100%) | ❌ 0/2 (0–66%) |
+| robot | mujoco | pybullet | drake | genesis |
+|---|---:|---:|---:|---:|
+| SO-101 | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Franka Emika Panda | ⚠️ 18/20 (70–97%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Universal Robots UR5e + Robotiq 2F-85 | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Universal Robots UR10e + Robotiq 2F-85 | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Kinova Gen3 + Robotiq 2F-85 | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ⚠️ 17/20 (64–95%) |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | ⚠️ 8/20 (22–61%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ⚠️ 7/20 (18–57%) |
+| UFACTORY xArm 7 | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Trossen ViperX 300 S (ALOHA) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Trossen WidowX 250 S (Bridge) | ✅ 20/20 (84–100%) | ⚠️ 12/20 (39–78%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| AgileX PiPER | ✅ 20/20 (84–100%) | ❌ 0/20 (0–16%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| I2RT YAM | ✅ 20/20 (84–100%) | ⚠️ 12/20 (39–78%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| ARX L5 | ✅ 20/20 (84–100%) | ❌ 0/20 (0–16%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
+| Rethink Sawyer + Robotiq 2F-85 | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) | ✅ 20/20 (84–100%) |
 
 ## Arms: grip strength and step cost
 
 Grip: the largest sideways shove (0.1 s, at the cube's centre) a held 30 g cube survives, found by bisection. Step: wall-clock milliseconds per 20 ms control step during pick-and-place (physics only, no tracing).
 
-| robot | mujoco grip (N) | pybullet grip (N) | mujoco ms/step | pybullet ms/step |
-|---|---:|---:|---:|---:|
-| Franka Emika Panda | 1.33 | 1.33 | 0.43 | 2.85 |
-| AgileX PiPER | 0.44 | 0.0 | 0.33 | 1.07 |
+| robot | mujoco grip (N) | pybullet grip (N) | drake grip (N) | genesis grip (N) | mujoco ms/step | pybullet ms/step | drake ms/step | genesis ms/step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SO-101 | >20 | >20 | >20 | >20 | 0.89 | 1.24 | 9.52 | 1.89 |
+| Franka Emika Panda | 1.33 | 1.33 | 1.33 | 1.77 | 0.28 | 2.14 | 4.68 | 1.78 |
+| Universal Robots UR5e + Robotiq 2F-85 | >20 | 19.89 | >20 | >20 | 0.22 | 1.69 | 3.86 | 2.01 |
+| Universal Robots UR10e + Robotiq 2F-85 | >20 | 19.89 | >20 | >20 | 0.29 | 1.69 | 4.18 | 1.97 |
+| Kinova Gen3 + Robotiq 2F-85 | >20 | 13.7 | >20 | >20 | 0.32 | 1.81 | 3.99 | 2.63 |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | >20 | 15.91 | >20 | >20 | 0.26 | 1.81 | 4.12 | 2.06 |
+| UFACTORY xArm 7 | >20 | 26.52 | >20 | >20 | 0.21 | 1.39 | 3.43 | 2.46 |
+| Trossen ViperX 300 S (ALOHA) | 2.65 | 7.95 | 3.98 | 1.77 | 0.56 | 2.57 | 4.25 | 2.04 |
+| Trossen WidowX 250 S (Bridge) | 2.21 | 1.77 | 1.77 | 1.33 | 0.23 | 0.74 | 3.28 | 1.92 |
+| AgileX PiPER | 0.44 | 0.0 | 0.88 | 0.0 | 0.17 | 0.67 | 3.26 | 2.02 |
+| I2RT YAM | 0.88 | 1.77 | 1.33 | 0.88 | 0.54 | 1.34 | 4.18 | 2.38 |
+| ARX L5 | 0.44 | 0.44 | 0.88 | 0.0 | 0.18 | 0.66 | 2.29 | 2.15 |
+| Rethink Sawyer + Robotiq 2F-85 | >20 | 22.1 | >20 | >20 | 0.25 | 1.90 | 4.73 | 2.12 |
 
 ## Engines disagree about where the cube lands
 
 Median distance between the cube's final position in each engine and in MuJoCo, same robot, same seed, same commands.
 
-| robot | pybullet |
-|---|---:|
-| Franka Emika Panda | 5.1 mm |
-| AgileX PiPER | 161.6 mm |
+| robot | pybullet | drake | genesis |
+|---|---:|---:|---:|
+| SO-101 | 5.4 mm | 7.3 mm | 26.4 mm |
+| Franka Emika Panda | 4.5 mm | 1.3 mm | 1.2 mm |
+| Universal Robots UR5e + Robotiq 2F-85 | 7.2 mm | 0.1 mm | 0.2 mm |
+| Universal Robots UR10e + Robotiq 2F-85 | 6.2 mm | 0.1 mm | 0.2 mm |
+| Kinova Gen3 + Robotiq 2F-85 | 9.9 mm | 7.7 mm | 2.9 mm |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | 154.2 mm | 149.9 mm | 100.6 mm |
+| UFACTORY xArm 7 | 15.9 mm | 0.8 mm | 5.9 mm |
+| Trossen ViperX 300 S (ALOHA) | 3.2 mm | 5.2 mm | 1.5 mm |
+| Trossen WidowX 250 S (Bridge) | 26.7 mm | 0.5 mm | 0.5 mm |
+| AgileX PiPER | 162.8 mm | 7.5 mm | 3.9 mm |
+| I2RT YAM | 20.8 mm | 4.6 mm | 1.4 mm |
+| ARX L5 | 148.4 mm | 1.2 mm | 3.0 mm |
+| Rethink Sawyer + Robotiq 2F-85 | 8.1 mm | 0.1 mm | 0.2 mm |
 
 ## Legged robots: standing and push recovery
 
 Joint servos only, no balance controller. Push: the largest sideways shove (0.1 s, at the base, as a multiple of body weight) after which the robot is still upright two seconds later.
 
-| robot | mujoco | pybullet |
-|---|---:|---:|
-| Unitree Go2 | ✅ 1.16× weight, 0.17 ms/step | ✅ 1.28× weight, 0.80 ms/step |
+| robot | mujoco | pybullet | drake | genesis |
+|---|---:|---:|---:|---:|
+| Unitree Go2 | ✅ 1.16× weight, 0.11 ms/step | ✅ 1.25× weight, 0.63 ms/step | ✅ 1.12× weight, 1.34 ms/step | ✅ 1.19× weight, 1.38 ms/step |
+| Unitree Go1 | ✅ 0.97× weight, 0.20 ms/step | ✅ 1.09× weight, 0.72 ms/step | ✅ 0.91× weight, 1.16 ms/step | ✅ 0.94× weight, 2.03 ms/step |
+| Unitree A1 | ✅ 1.06× weight, 0.12 ms/step | ✅ 1.19× weight, 0.68 ms/step | ✅ 1.03× weight, 1.18 ms/step | ✅ 1.06× weight, 1.76 ms/step |
+| Boston Dynamics Spot | ✅ 0.91× weight, 0.10 ms/step | ✅ 1.03× weight, 0.65 ms/step | ✅ 0.91× weight, 1.63 ms/step | ✅ 0.94× weight, 1.39 ms/step |
+| ANYbotics ANYmal C | ✅ 1.28× weight, 0.18 ms/step | ✅ 1.62× weight, 0.66 ms/step | ✅ 1.22× weight, 1.70 ms/step | ✅ 1.25× weight, 1.99 ms/step |
+| Unitree G1 | ✅ 0.59× weight, 0.25 ms/step | ✅ 0.69× weight, 2.69 ms/step | ✅ 0.59× weight, 2.38 ms/step | ✅ 0.59× weight, 1.78 ms/step |
 
 ## Why trials failed
 
 First failure per cell:
 
+- **gen3 on genesis** (seed 1000): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`
+- **iiwa14 on genesis** (seed 1000): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`
+- **wx250s on pybullet** (seed 1000): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`
 - **piper on pybullet** (seed 1000): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`
+- **yam on pybullet** (seed 1001): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`
+- **arx_l5 on pybullet** (seed 1000): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`
+- **panda on mujoco** (seed 1016): `ActionTimeoutError: arm did not settle within 10.0s; worst joint joint7 is 0.005 rad off target`
+- **iiwa14 on mujoco** (seed 1000): `ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)`

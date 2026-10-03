@@ -113,8 +113,11 @@ class Arm:
         start = r._target[: r.n_arm].copy()
         speed = speed or self.world.settings.max_joint_speed
         # Long arms sweep the tool fast for small joint motions; cap tool speed too
-        # or a held object is flung out of the gripper.
-        tool = float(np.linalg.norm(r.kin.tcp(goal) - r.kin.tcp(start))) / self.world.settings.max_tcp_speed
+        # or a held object is flung out of the gripper. Measure the path the tool
+        # actually sweeps: a joint-space move that changes arm configuration arcs far
+        # from the straight line between its end points.
+        pts = np.array([r.kin.tcp(start + (goal - start) * s) for s in np.linspace(0, 1, 17)])
+        tool = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()) / self.world.settings.max_tcp_speed
         duration = max(float(np.max(np.abs(goal - start))) / speed, tool, self.world.dt)
         r._stream(lambda s: r._set_arm(start + (goal - start) * _minjerk(s)), duration)
         r._settle(goal, timeout)
@@ -140,10 +143,15 @@ class Arm:
         n = max(2, int(np.ceil(np.linalg.norm(p - p0) / 0.004)))
         qs, q = [], q_now
         for i in range(1, n + 1):
-            q, err = r._ik(p0 + (p - p0) * i / n, q, approach, yaw)
+            # Hold the current posture along a straight line: pulling a redundant arm
+            # toward home here makes its elbow and wrist drift while the hand moves.
+            q, err = r._ik(p0 + (p - p0) * i / n, q, approach, yaw, rest=q_now)
             qs.append(q)
         qs = np.array([q_now, *qs])
-        duration = max(float(np.linalg.norm(p - p0)) / speed, self.world.dt)
+        # A short straight line can still need a big wrist turn (to a new grasp yaw);
+        # bound joint speed as well, or the wrist spins fast enough to fling what it holds.
+        turn = float(np.max(np.abs(qs[-1] - qs[0]))) / self.world.settings.max_joint_speed
+        duration = max(float(np.linalg.norm(p - p0)) / speed, turn, self.world.dt)
 
         def at(s):
             x = _minjerk(s) * (len(qs) - 1)
@@ -234,6 +242,13 @@ class Robot:
         self._home_q = None
 
     @property
+    def grip_yaw(self) -> float:
+        """World angle of the finger-closing axis about z (modulo pi)."""
+        T = self.kin.fk(self.true_qpos()[: self.n_arm])
+        g = T[:3, :3] @ self.kin.grip_axis
+        return float(np.arctan2(g[1], g[0]))
+
+    @property
     def min_grasp_z(self) -> float:
         """Lowest TCP height for a top-down grasp that keeps the fingertips off the table."""
         return self.model.derived.finger_reach + TABLE_CLEARANCE
@@ -289,8 +304,11 @@ class Robot:
         n = self.n_arm
 
         def settled():
+            # Stopped near the goal - or held well inside the tolerance while a servo
+            # dithers (a held object can sustain a small limit cycle in a stiff wrist).
             q = self.qpos()[:n]
-            return np.max(np.abs(q - goal)) < tol and np.max(np.abs(w.backend.qvel()[:n])) < 0.08
+            err = np.max(np.abs(q - goal))
+            return err < tol / 4 or err < tol and np.max(np.abs(w.backend.qvel()[:n])) < 0.08
 
         if not w.run_until(settled, timeout, hold=0.06):
             err = np.abs(self.true_qpos()[:n] - goal)
@@ -298,8 +316,8 @@ class Robot:
             what = "arm" if self.model.family == "arm" else "robot"
             raise ActionTimeoutError(f"{what} did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
 
-    def _ik(self, p, seed, approach, yaw):
-        q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw)
+    def _ik(self, p, seed, approach, yaw, rest=None):
+        q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw, rest)
         if err > 5e-3:
             raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} (closest {err * 1000:.1f} mm)")
         return q, err
@@ -321,19 +339,27 @@ class Robot:
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, lift], yaw=yaw, linear=True, timeout=timeout)
 
     @action
-    def place(self, on, height: float | None = None, timeout: float | None = None):
+    def place(self, on, height: float | None = None, yaw: float | None = None, timeout: float | None = None):
         """Carry the held object above ``on`` (object or point), lower it and release.
 
         ``height`` is the TCP's height above ``on``'s top at release; by default
-        the fingertips stop just clear of it.
+        the fingertips stop just clear of it. ``yaw`` turns the grip to that angle
+        on the way; by default the hand keeps its orientation, because turning the
+        wrist under load is what most often shakes a weakly held object loose.
         """
         t = as_subject(self.world, on)
         p = t.position.copy()
         top = t.top if isinstance(t, ObjectHandle) else p[2]
-        yaw = t.yaw if isinstance(t, ObjectHandle) else None
+        if yaw is None:
+            yaw = self.grip_yaw
         if height is None:
             height = max(0.015, self.model.derived.finger_reach + 0.006)
         above = np.array([p[0], p[1], top + height + 0.03])
+        # Rise straight up to the transit height first: a joint-space move from a low
+        # lift dips on its way across and drags the held object through the target's rim.
+        here = self.tcp.position
+        if here[2] < above[2] - 0.005:
+            self.arm.move_to.__wrapped__(self.arm, [here[0], here[1], above[2]], linear=True, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper)
@@ -405,20 +431,26 @@ def _kinematics(name: str) -> Kinematics:
     return Kinematics(robots.get(name))
 
 
-def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None):
-    """IK that tries the grasp yaw's symmetric variants and two seeds, preferring small joint motion."""
-    best = None
-    yaws = [None] if yaw is None else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
+def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None):
+    """IK over the grasp yaw's symmetric variants and two seeds.
+
+    Among the solutions that reach the target, take the one that moves the
+    joints least: a square object can be gripped (or set down) at any multiple
+    of 90 degrees, and turning the wrist further than needed while holding it
+    shakes it loose. ``rest`` is the posture redundant arms drift toward
+    (default ``home``).
+    """
+    rest = home if rest is None else rest
     seed = np.asarray(seed, float)
+    yaws = [None] if yaw is None else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
+    cands = []
     for y in yaws:
         for s in (seed, home):
-            q, err = kin.ik(p, s, approach, y, rest=home)
-            score = err + 0.002 * float(np.abs(q - seed).sum())
-            if best is None or score < best[0]:
-                best = (score, q, err)
-        if best[2] < 1e-3:
-            break
-    return best[1], best[2]
+            q, err = kin.ik(p, s, approach, y, rest=rest)
+            cands.append((float(np.abs(q - seed).sum()), err, q))
+    reached = [c for c in cands if c[1] < 1e-3]
+    _, err, q = min(reached, key=lambda c: c[0]) if reached else min(cands, key=lambda c: c[1])
+    return q, err
 
 
 @functools.cache
