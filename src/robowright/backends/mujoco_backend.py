@@ -137,6 +137,7 @@ class MujocoBackend(Backend):
             self._label[b] = f"robot:{part}"
         for b in range(1, m.nbody):
             self._label.setdefault(b, m.body(b).name)
+        self._hand = m.body(PREFIX + rm.hand).id
         self._renderers: dict = {}
         reset_data(m, self.data)
         self.set_ctrl(self.qpos())
@@ -184,6 +185,9 @@ class MujocoBackend(Backend):
             self.data.qvel[j.dofadr[0]] = 0
         self.set_ctrl(q)
         mujoco.mj_forward(self.model, self.data)
+
+    def hand_pose(self):
+        return self.data.xpos[self._hand].copy(), self.data.xquat[self._hand].copy()
 
     # time
     def step(self):

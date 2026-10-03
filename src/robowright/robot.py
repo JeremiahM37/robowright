@@ -13,7 +13,7 @@ import time as _time
 
 import numpy as np
 
-from .errors import ActionTimeoutError, CapabilityError, UnreachableError
+from .errors import ActionTimeoutError, UnreachableError
 from .locators import ObjectHandle, Subject, as_subject
 from .robots import Kinematics
 
@@ -265,8 +265,6 @@ class Robot:
         ``gripper`` is an opening between 0 (closed) and 1 (open).
         """
         q = np.concatenate([self.home_q if q_arm is None else np.asarray(q_arm, float), [gripper]])
-        if not hasattr(self.world.backend, "set_joint_positions"):
-            raise CapabilityError(f"{self.world.backend.name} cannot teleport joints")
         self.world.backend.set_joint_positions(q)
         self._target = q.copy()
         if self.world.trace:

@@ -72,6 +72,14 @@ class Backend(ABC):
     def set_gain_scale(self, joint: str, scale: float) -> None:
         raise NotImplementedError(f"{self.name} cannot scale actuator gains")
 
+    def set_joint_positions(self, q: np.ndarray) -> None:
+        """Teleport the arm joints and gripper opening (setup only), at rest, with matching targets."""
+        raise NotImplementedError(f"{self.name} cannot teleport joints")
+
+    def hand_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """World position and (w, x, y, z) quaternion of the robot's hand body."""
+        raise NotImplementedError(f"{self.name} does not report link poses")
+
     # --- time ------------------------------------------------------------
     @property
     def control_dt(self) -> float:
