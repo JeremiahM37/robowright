@@ -26,7 +26,7 @@ import numpy as np
 from .model import RobotModel
 
 BASE = "robowright_base"
-VERSION = 4  # bump when the output format changes, to invalidate caches
+VERSION = 8  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
@@ -90,7 +90,7 @@ def _write(model: RobotModel, out: Path) -> None:
     m = spec.compile()
     d = mujoco.MjData(m)
     root = ET.Element("robot", name=model.name)
-    meta: dict = {"robot": model.name, "links": {}, "joints": {}, "geoms": {}}
+    meta: dict = {"robot": model.name, "links": {}, "joints": {}, "geoms": {}, "colors": {}}
     has_visual_only = any(not (m.geom_contype[g] or m.geom_conaffinity[g]) for g in range(m.ngeom))
     written_meshes: dict[int, str] = {}
     shift: dict[int, np.ndarray] = {0: np.zeros(3)}  # link-frame origin within each body frame
@@ -188,13 +188,15 @@ def _write(model: RobotModel, out: Path) -> None:
                     meta["geoms"][f"g{g}"] = {"link": link, "friction": float(m.geom_friction[g, 0])}
                 else:
                     le.remove(ce)
-            if (not collides and m.geom_group[g] != 3) or (collides and not has_visual_only):
+            # MuJoCo renders groups 0-2 by default; Menagerie hides collision-only geoms in group 3.
+            if m.geom_group[g] <= 2 or not has_visual_only:
                 ve = ET.SubElement(le, "visual")
                 ET.SubElement(ve, "origin", xyz=pos, rpy=rpy)
                 if geometry(ve, g):
                     rgba = m.mat_rgba[m.geom_matid[g]] if m.geom_matid[g] >= 0 else m.geom_rgba[g]
                     mat = ET.SubElement(ve, "material", name=f"m{g}")
                     ET.SubElement(mat, "color", rgba=_fmt(rgba))
+                    meta["colors"].setdefault(link, []).append([float(x) for x in rgba])
                 else:
                     le.remove(ve)
 
@@ -207,10 +209,15 @@ def _write(model: RobotModel, out: Path) -> None:
     meta["excluded_pairs"] = sorted(excluded)
     meta["arm_joints"] = list(model.arm_joints)
     der = model.derived
+    effort, driven = _grip_effort(m, model)
     meta["gripper"] = {
         "joints": {n: list(v) for n, v in der.gripper_joints.items()},
         "main": der.gripper_joint,
-        "effort": _grip_effort(m, model),
+        "effort": effort,
+        # Joints the gripper actuator pushes directly. The rest are linkage joints that
+        # MuJoCo couples with equality constraints: drive them from the measured
+        # position of driven[0], or a blocked finger tilts its pad into the object.
+        "driven": driven,
     }
     meta["hand"] = _safe(model.hand)
     meta["root"] = BASE
@@ -265,12 +272,17 @@ def _joint_meta(m, j, effort) -> dict:
     return out
 
 
-def _grip_effort(m, model: RobotModel) -> dict:
-    """Force (N) or torque (N m) on each finger joint when closing on a mid-sized object, as MuJoCo models it.
+MAX_PAD_FORCE = 30.0  # N; roughly what real parallel grippers squeeze with
 
-    Backends without tendons cap each finger joint's motor at this, so the
-    squeeze matches the MuJoCo model rather than whatever a stiff position
-    servo would produce.
+
+def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
+    """Drive effort for each finger joint, and which joints the actuator drives directly.
+
+    The effort is the joint force (N) or torque (N m) MuJoCo's model applies when
+    closing on a mid-sized object, so the squeeze matches - capped so the force at
+    the fingertips stays under ``MAX_PAD_FORCE``. Some models squeeze far harder
+    than a real gripper (xArm 7: ~400 N at the pads); MuJoCo's soft contacts absorb
+    that, stiffer engines push the pads through the object.
     """
     d = mujoco.MjData(m)
     mujoco.mj_resetData(m, d)
@@ -279,12 +291,24 @@ def _grip_effort(m, model: RobotModel) -> dict:
         d.qpos[m.joint(name).qposadr[0]] = c + 0.5 * (o - c)
     d.ctrl[m.actuator(model.gripper_actuator).id] = model.gripper_closed
     mujoco.mj_forward(m, d)
+    hand = m.body(model.hand).id
+    tcp = d.xpos[hand] + d.xmat[hand].reshape(3, 3) @ der.tcp_offset
+
+    def cap(name):
+        j = m.joint(name).id
+        if m.jnt_type[j] == _SLIDE:
+            return MAX_PAD_FORCE
+        r = tcp - d.xanchor[j]
+        lever = np.linalg.norm(r - (r @ d.xaxis[j]) * d.xaxis[j])
+        return MAX_PAD_FORCE * max(lever, 0.01)
+
     own = {name: float(abs(d.qfrc_actuator[m.joint(name).dofadr[0]])) for name in der.gripper_joints}
+    driven = sorted((n for n, f in own.items() if f > 1e-6), key=lambda n: (n != der.gripper_joint, n))
     # Joints MuJoCo couples to the driven one (equality, tendon) get no actuator force
     # of their own; driven individually, they get the strongest joint's of the same kind.
     out = {}
     for name, f in own.items():
         kind = m.jnt_type[m.joint(name).id]
         peers = [g for n, g in own.items() if m.jnt_type[m.joint(n).id] == kind]
-        out[name] = f if f > 1e-6 else max(peers)
-    return out
+        out[name] = min(f if f > 1e-6 else max(peers), cap(name))
+    return out, driven

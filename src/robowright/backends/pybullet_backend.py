@@ -1,82 +1,33 @@
 """PyBullet backend: a second, independent physics engine.
 
 Running the same test on two engines separates "my code is wrong" from
-"this simulator happens to let it work". The robot is the same SO-101 URDF
-the kinematics use; the gripper's collision geometry is replaced with the
-convex pieces and primitives MuJoCo Menagerie uses, because a single convex
-hull per jaw would fill the gap between the fingers.
+"this simulator happens to let it work". The robot is loaded from the URDF
+robowright exports from its MuJoCo model (see ``robowright.robots.urdf``),
+so both engines see the same links, inertias and collision shapes. What
+the URDF cannot carry is reproduced here: each finger joint is driven to
+its calibrated position with MuJoCo's grip effort as the force cap (in
+place of MuJoCo's tendons and equality constraints), and the robot's
+weight is cancelled with per-link forces, as MuJoCo's gravity compensation
+does.
 """
 
 from __future__ import annotations
 
 import contextlib
 import ctypes
-import hashlib
 import os
-import re
 import sys
-import tempfile
-import xml.etree.ElementTree as ET
-from pathlib import Path
 
 import numpy as np
 import pybullet as p
 
-from .. import assets
+from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, Backend, Contact, register
+from .mujoco_backend import bin_walls
 
-ROBOT_JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
-ARMATURE = 2e-3  # kg m^2 added to each joint's link inertia, see __init__
-_PART = {"gripper_link": "fixed_jaw", "gripper_frame_link": "fixed_jaw", "moving_jaw_so101_v1_link": "moving_jaw"}
-
-# (link, type, size, xyz, rpy[, mesh]) - the gripper collision set from MuJoCo Menagerie's so101.xml.
-_GRIPPER_COLLISION = [
-    ("gripper_link", "box", (0.0325, 0.015, 0.015), (-0.0025, 0, -0.022), (0, 0, 0)),
-    ("gripper_link", "box", (0.01, 0.015, 0.005), (-0.024, 0, -0.04), (0, 0, 0)),
-    ("gripper_link", "box", (0.001, 0.004, 0.004), (-0.009, 0, -0.0982), (0, 0, 0)),
-    ("gripper_link", "box", (0.001, 0.005, 0.006), (-0.0108, 0, -0.0905), (0, 0, 0)),
-    ("gripper_link", "box", (0.001, 0.009, 0.008), (-0.0125, 0, -0.0727), (0, 0, 0)),
-    ("gripper_link", "box", (0.001, 0.01, 0.008), (-0.0143, 0, -0.053), (0, 0, 0)),
-    ("gripper_link", "mesh", None, (0, -0.000218, 0.00095), (np.pi, 0, 0), "wrist_roll_follower_so101_gripper_part0_v1.stl"),
-    ("moving_jaw_so101_v1_link", "box", (0.01, 0.01, 0.015), (0, -0.013, 0.019), (0, 0, 0)),
-    ("moving_jaw_so101_v1_link", "box", (0.001, 0.004, 0.004), (-0.0113, -0.076, 0.01875), (0, 0, 0)),
-    ("moving_jaw_so101_v1_link", "box", (0.001, 0.005, 0.006), (-0.0093, -0.067, 0.01875), (0, 0, 0)),
-    ("moving_jaw_so101_v1_link", "mesh", None, (0, 0, 0.0189), (0, 0, 0), "moving_jaw_so101_gripper_part0_v1.stl"),
-    ("moving_jaw_so101_v1_link", "mesh", None, (0, 0, 0.0189), (0, 0, 0), "moving_jaw_so101_gripper_part1_v1.stl"),
-]
-
-
-def _robot_urdf() -> str:
-    """Write (once) a copy of the SO-101 URDF with absolute mesh paths and grasp-ready jaw collisions."""
-    src = assets.so101_urdf()
-    mesh_dir = src.parent / "assets"
-    key = hashlib.sha1(src.read_bytes() + repr(_GRIPPER_COLLISION).encode()).hexdigest()[:12]
-    out = Path(tempfile.gettempdir()) / f"robowright-so101-{key}.urdf"
-    if out.exists():
-        return str(out)
-    tree = ET.parse(src)
-    root = tree.getroot()
-    for link in root.findall("link"):
-        if link.get("name") in ("gripper_link", "moving_jaw_so101_v1_link"):
-            for c in link.findall("collision"):
-                link.remove(c)
-        for c in _GRIPPER_COLLISION:
-            if c[0] != link.get("name"):
-                continue
-            col = ET.SubElement(link, "collision")
-            ET.SubElement(col, "origin", xyz=" ".join(map(str, c[3])), rpy=" ".join(map(str, c[4])))
-            geom = ET.SubElement(col, "geometry")
-            if c[1] == "box":
-                ET.SubElement(geom, "box", size=" ".join(str(2 * v) for v in c[2]))
-            else:
-                ET.SubElement(geom, "mesh", filename=str(mesh_dir / c[5]))
-    xml = ET.tostring(root, encoding="unicode")
-    xml = re.sub(r'filename="assets/', f'filename="{mesh_dir}/', xml)
-    tmp = out.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(xml)
-    tmp.replace(out)
-    return str(out)
+POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error corrected per step
+GRAVITY = 9.81
 
 
 @register("pybullet")
@@ -85,73 +36,105 @@ class PybulletBackend(Backend):
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
+        rm = self.robot_model
+        path, meta = urdf.load(rm)
+        self.meta = meta
         self.cid = p.connect(p.DIRECT)
         c = self.cid
         p.resetSimulation(physicsClientId=c)
-        p.setGravity(0, 0, -9.81, physicsClientId=c)
-        p.setTimeStep(spec.physics_dt, physicsClientId=c)
+        p.setGravity(0, 0, -GRAVITY, physicsClientId=c)
+        p.setTimeStep(spec.dt, physicsClientId=c)
         p.setPhysicsEngineParameter(numSolverIterations=50, deterministicOverlappingPairs=1, physicsClientId=c)
         self._renderer = _load_egl(c)  # must precede body creation or bodies are invisible to it
-        self._substeps = max(1, round((1.0 / spec.control_hz) / spec.physics_dt))
+        self._substeps = max(1, round((1.0 / spec.control_hz) / spec.dt))
         self._t = 0.0
         plane = p.createCollisionShape(p.GEOM_PLANE, physicsClientId=c)
         vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[1, 1, 0.001], rgbaColor=[0.8, 0.8, 0.78, 1], physicsClientId=c)
         self.floor = p.createMultiBody(0, plane, vis, physicsClientId=c)
         p.changeDynamics(self.floor, -1, lateralFriction=1.0, physicsClientId=c)
-        self.robot = p.loadURDF(_robot_urdf(), useFixedBase=True, flags=p.URDF_USE_INERTIA_FROM_FILE, physicsClientId=c)
-        self._jidx, self._link_label = {}, {-1: "robot:base_link"}
-        self._lo, self._hi = [], []
+        yaw = rm.base_yaw
+        with _quiet():
+            self.robot = p.loadURDF(
+                str(path),
+                list(rm.base_pos),
+                [0, 0, np.sin(yaw / 2), np.cos(yaw / 2)],
+                useFixedBase=True,
+                flags=p.URDF_USE_INERTIA_FROM_FILE,
+                physicsClientId=c,
+            )
+        joints, links = {}, {}
         for j in range(p.getNumJoints(self.robot, physicsClientId=c)):
             info = p.getJointInfo(self.robot, j, physicsClientId=c)
-            name, link = info[1].decode(), info[12].decode()
-            self._link_label[j] = f"robot:{_PART.get(link, link)}"
-            if name in ROBOT_JOINTS:
-                self._jidx[name] = j
-                # PyBullet has no joint armature. Without the servo's reflected rotor
-                # inertia (MuJoCo's model uses armature=0.028) the light links go unstable
-                # under position control, so fold an approximation into the link inertia.
-                inertia = p.getDynamicsInfo(self.robot, j, physicsClientId=c)[2]
-                p.changeDynamics(
-                    self.robot,
-                    j,
-                    jointDamping=0.6,
-                    lateralFriction=1.0,
-                    spinningFriction=0.005,
-                    rollingFriction=0.0005,
-                    localInertiaDiagonal=[v + ARMATURE for v in inertia],
-                    physicsClientId=c,
-                )
-        self.joint_names = list(ROBOT_JOINTS)
-        self._j = [self._jidx[n] for n in ROBOT_JOINTS]
-        for n in ROBOT_JOINTS:
-            info = p.getJointInfo(self.robot, self._jidx[n], physicsClientId=c)
-            self._lo.append(info[8])
-            self._hi.append(info[9])
-        self._lo, self._hi = np.array(self._lo), np.array(self._hi)
-        self._gain = np.full(6, 0.3)
-        self._max_force = np.full(6, 2.94)
-        self._ctrl = np.zeros(6)
+            joints[info[1].decode()] = j
+            links[info[12].decode()] = j
+        self._links = links
+        parent = {j: p.getJointInfo(self.robot, j, physicsClientId=c)[16] for j in links.values()}
+        finger_root = {links[n]: part for part, names in meta["fingers"].items() for n in names}
+        self._link_label = {-1: "robot:base"}
+        for name, j in links.items():
+            r, part = j, None
+            while r >= 0 and part is None:
+                part, r = finger_root.get(r), parent[r]
+            self._link_label[j] = f"robot:{part or name}"
+        # Servo model: arm joints from the MuJoCo actuators; every finger joint follows its calibration.
+        self._arm = [joints[urdf._safe(n)] for n in rm.arm_joints]
+        g = meta["gripper"]
+        driven = g["driven"]
+        linkage = [n for n in g["joints"] if n not in driven]
+        self._fingers = [joints[urdf._safe(n)] for n in driven]
+        self._finger_q = np.array([g["joints"][n] for n in driven])  # (k, 2): closed, open
+        self._finger_force = np.array([g["effort"][n] for n in driven])
+        # Linkage joints follow the first driven joint's measured travel, as MuJoCo's
+        # equality constraints make them; commanding them separately tilts blocked pads.
+        self._ref = self._fingers[0]
+        self._ref_q = g["joints"][driven[0]]
+        self._links_j = [joints[urdf._safe(n)] for n in linkage]
+        self._links_q = np.array([g["joints"][n] for n in linkage]).reshape(-1, 2)
+        self._links_force = [g["effort"][n] for n in linkage]
+        self._main = joints[urdf._safe(g["main"])]
+        self._main_q = g["joints"][g["main"]]
+        self._arm_force = np.array([meta["joints"][n]["effort"] for n in rm.arm_joints])
+        self._lo = np.array([(meta["joints"][n]["range"] or (-2 * np.pi, 2 * np.pi))[0] for n in rm.arm_joints])
+        self._hi = np.array([(meta["joints"][n]["range"] or (-2 * np.pi, 2 * np.pi))[1] for n in rm.arm_joints])
+        self._gain = np.full(self.n_arm, POSITION_GAIN)
+        for name, j in joints.items():
+            jm = meta["joints"].get(name.replace("__", "/"), meta["joints"].get(name))
+            if jm is None:
+                continue
+            # PyBullet has no joint armature. Light links under stiff position control go
+            # unstable without the motor's reflected inertia, so fold it into the link inertia.
+            inertia = p.getDynamicsInfo(self.robot, j, physicsClientId=c)[2]
+            p.changeDynamics(
+                self.robot,
+                j,
+                jointDamping=jm["damping"],
+                localInertiaDiagonal=[v + jm["armature"] for v in inertia],
+                physicsClientId=c,
+            )
+        for geom in meta["geoms"].values():
+            j = links.get(geom["link"], -1)
+            p.changeDynamics(self.robot, j, lateralFriction=geom["friction"], spinningFriction=0.005, physicsClientId=c)
+        # PyBullet ignores URDF material colours on OBJ meshes; apply them per shape.
+        for name, colors in meta["colors"].items():
+            j = links.get(name, -1)
+            for k, rgba in enumerate(colors):
+                p.changeVisualShape(self.robot, j, shapeIndex=k, rgbaColor=rgba, physicsClientId=c)
+        self._weights = [(j, p.getDynamicsInfo(self.robot, j, physicsClientId=c)[0] * GRAVITY) for j in [-1, *links.values()]]
+        self.joint_names = [*rm.arm_joints, "gripper"]
+        self._ctrl = np.zeros(self.n_arm + 1)
         self._bodies: dict[str, int] = {}
         for o in spec.objects:
             self._bodies[o.name] = self._make_object(o)
         self._label = {self.floor: "floor", self.robot: None, **{b: n for n, b in self._bodies.items()}}
         self._pending: dict[str, np.ndarray] = {}
         self._cams = {cs.name: cs for cs in spec.cameras}
-        self.set_ctrl(np.zeros(6))
+        self.set_joint_positions(np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0))
 
     def _make_object(self, o) -> int:
         c = self.cid
         pos = list(o.initial_pos)
         if o.kind == "bin":
-            sx, sy, sz = o.size
-            t = 0.003
-            parts = [
-                ((0, 0, t), (sx, sy, t)),
-                ((sx - t, 0, sz), (t, sy, sz)),
-                ((-sx + t, 0, sz), (t, sy, sz)),
-                ((0, sy - t, sz), (sx, t, sz)),
-                ((0, -sy + t, sz), (sx, t, sz)),
-            ]
+            parts = bin_walls(o.size)
             col = p.createCollisionShapeArray(
                 [p.GEOM_BOX] * 5,
                 halfExtents=[list(h) for _, h in parts],
@@ -180,21 +163,32 @@ class PybulletBackend(Backend):
         return b
 
     # robot
+    def _opening(self, q):
+        c, o = self._main_q
+        return (q - c) / (o - c)
+
     def qpos(self):
-        return np.array([s[0] for s in p.getJointStates(self.robot, self._j, physicsClientId=self.cid)])
+        q = [s[0] for s in p.getJointStates(self.robot, [*self._arm, self._main], physicsClientId=self.cid)]
+        return np.append(q[:-1], self._opening(q[-1]))
 
     def qvel(self):
-        return np.array([s[1] for s in p.getJointStates(self.robot, self._j, physicsClientId=self.cid)])
+        v = [s[1] for s in p.getJointStates(self.robot, [*self._arm, self._main], physicsClientId=self.cid)]
+        c, o = self._main_q
+        return np.append(v[:-1], v[-1] / (o - c))
+
+    def _finger_targets(self, s):
+        return self._finger_q[:, 0] + float(np.clip(s, 0, 1)) * (self._finger_q[:, 1] - self._finger_q[:, 0])
 
     def set_ctrl(self, target):
-        self._ctrl = np.clip(np.asarray(target, float), self._lo, self._hi)
+        target = np.asarray(target, float)
+        self._ctrl = np.append(np.clip(target[: self.n_arm], self._lo, self._hi), np.clip(target[self.n_arm], 0, 1))
         p.setJointMotorControlArray(
             self.robot,
-            self._j,
+            [*self._arm, *self._fingers],
             p.POSITION_CONTROL,
-            targetPositions=self._ctrl.tolist(),
-            forces=self._max_force.tolist(),
-            positionGains=self._gain.tolist(),
+            targetPositions=[*self._ctrl[: self.n_arm], *self._finger_targets(self._ctrl[-1])],
+            forces=[*self._arm_force, *self._finger_force],
+            positionGains=[*self._gain, *[POSITION_GAIN] * len(self._fingers)],
             physicsClientId=self.cid,
         )
 
@@ -202,23 +196,64 @@ class PybulletBackend(Backend):
         return self._ctrl.copy()
 
     def set_gain_scale(self, joint, scale):
-        self._gain[self.joint_names.index(joint)] = 0.3 * scale
+        self._gain[self.joint_names.index(joint)] = POSITION_GAIN * scale
         self.set_ctrl(self._ctrl)
 
     def set_joint_positions(self, q):
-        for j, v in zip(self._j, q):
+        q = np.asarray(q, float)
+        for j, v in zip(self._arm, q[: self.n_arm]):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
+        for j, v in zip(self._fingers, self._finger_targets(q[-1])):
+            p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
+        s = float(np.clip(q[-1], 0, 1))
+        for j, (c, o) in zip(self._links_j, self._links_q):
+            p.resetJointState(self.robot, j, float(c + s * (o - c)), 0.0, physicsClientId=self.cid)
         self.set_ctrl(q)
+        self._follow()
+
+    def _follow(self):
+        if not self._links_j:
+            return
+        c, o = self._ref_q
+        s = (p.getJointState(self.robot, self._ref, physicsClientId=self.cid)[0] - c) / (o - c)
+        p.setJointMotorControlArray(
+            self.robot,
+            self._links_j,
+            p.POSITION_CONTROL,
+            targetPositions=list(self._links_q[:, 0] + s * (self._links_q[:, 1] - self._links_q[:, 0])),
+            forces=self._links_force,
+            positionGains=[POSITION_GAIN] * len(self._links_j),
+            physicsClientId=self.cid,
+        )
+
+    def hand_pose(self):
+        ls = p.getLinkState(self.robot, self._links[self.meta["hand"]], computeForwardKinematics=True, physicsClientId=self.cid)
+        x, y, z, w = ls[5]
+        return np.array(ls[4]), np.array([w, x, y, z])
 
     # time
     def step(self):
+        c = self.cid
         for _ in range(self._substeps):
+            self._follow()
+            # Gravity compensation: hold each robot link up at its centre of mass.
+            for j, weight in self._weights:
+                com = (
+                    p.getBasePositionAndOrientation(self.robot, physicsClientId=c)[0]
+                    if j < 0
+                    else p.getLinkState(self.robot, j, physicsClientId=c)[0]
+                )
+                p.applyExternalForce(self.robot, j, [0, 0, weight], com, p.WORLD_FRAME, physicsClientId=c)
             for name, f in self._pending.items():
                 pos, _ = p.getBasePositionAndOrientation(self._bodies[name], physicsClientId=self.cid)
                 p.applyExternalForce(self._bodies[name], -1, f.tolist(), pos, p.WORLD_FRAME, physicsClientId=self.cid)
             p.stepSimulation(physicsClientId=self.cid)
         self._pending = {}
-        self._t += self._substeps * self.spec.physics_dt
+        self._t += self._substeps * self.spec.dt
+
+    @property
+    def control_dt(self):
+        return self._substeps * self.spec.dt
 
     @property
     def time(self):
