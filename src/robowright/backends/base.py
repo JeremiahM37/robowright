@@ -32,26 +32,39 @@ class Contact:
 
 
 class Backend(ABC):
+    """Physics for one scene.
+
+    The robot's state is the arm joints (radians or metres, in the model's
+    ``arm_joints`` order) followed by one gripper value: its opening, from
+    0 (closed) to 1 (open). How a backend moves the fingers to a commanded
+    opening is its own business; ``robot_model.derived.gripper_joints`` gives
+    every finger joint's closed and open position for backends that drive
+    the joints individually.
+    """
+
     name: str = "base"
     capabilities: frozenset = frozenset()
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         self.spec = spec
         self.seed = seed
+        self.robot_model = spec.robot_model
+        self.n_arm = self.robot_model.n_arm
+        self.joint_names = [*self.robot_model.arm_joints, "gripper"]
 
     # --- robot -----------------------------------------------------------
     joint_names: list[str]
 
     @abstractmethod
     def qpos(self) -> np.ndarray:
-        """Measured robot joint positions (radians), in ``joint_names`` order."""
+        """Measured arm joint positions, then the gripper opening (0..1)."""
 
     @abstractmethod
     def qvel(self) -> np.ndarray: ...
 
     @abstractmethod
     def set_ctrl(self, target: np.ndarray) -> None:
-        """Position targets for every robot joint."""
+        """Position targets for the arm joints, then the commanded gripper opening (0..1)."""
 
     @abstractmethod
     def ctrl(self) -> np.ndarray: ...
@@ -119,7 +132,7 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
         # Import lazily so an optional backend's dependency is only needed when used.
         import importlib
 
-        mod = {"mujoco": "mujoco_backend", "pybullet": "pybullet_backend", "lerobot": "lerobot_backend"}.get(name)
+        mod = _MODULES.get(name)
         if mod:
             importlib.import_module(f"robowright.backends.{mod}")
     if name not in _REGISTRY:
@@ -127,14 +140,12 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     return _REGISTRY[name](spec, seed=seed, **kw)
 
 
-def available() -> list[str]:
-    import importlib
+_MODULES = {"mujoco": "mujoco_backend", "pybullet": "pybullet_backend", "genesis": "genesis_backend", "drake": "drake_backend"}
+_REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake"}
 
-    out = []
-    for name, mod in (("mujoco", "mujoco"), ("pybullet", "pybullet")):
-        try:
-            importlib.import_module(mod)
-            out.append(name)
-        except ImportError:
-            pass
-    return out
+
+def available() -> list[str]:
+    import importlib.util
+
+    # find_spec, not import: importing genesis or drake takes seconds.
+    return [name for name, mod in _REQUIRES.items() if importlib.util.find_spec(mod) is not None]

@@ -70,7 +70,7 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
         t, a = e["type"], e.get("args", {})
         if t == "edit" and e["name"] == "reset_to":
             q = a["q"]
-            body.append(f"robot.reset_to({_value(q[:5])}, gripper={_value(q[5])})")
+            body.append(f"robot.reset_to({_value(q[:-1])}, gripper={_value(q[-1])})")
         elif t == "edit" and e["name"] == "move_object":
             body.append(f"world.move_object({a['object']!r}, {_value(a['pos'])}, {_value(a['quat'])})")
         elif t == "fault":

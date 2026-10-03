@@ -78,11 +78,21 @@ class CameraSpec:
 
 @dataclass
 class SceneSpec:
-    robot: str = "so101"
+    robot: str = "so101"  # a name from robowright.robots
     objects: list[ObjectSpec] = field(default_factory=list)
     cameras: list[CameraSpec] = field(default_factory=lambda: [CameraSpec("front")])
     control_hz: float = 50.0
-    physics_dt: float = 0.005
+    physics_dt: float | None = None  # None: the robot model's own timestep
+
+    @property
+    def robot_model(self):
+        from . import robots
+
+        return robots.get(self.robot)
+
+    @property
+    def dt(self) -> float:
+        return self.physics_dt or self.robot_model.timestep
 
     def object(self, name: str) -> ObjectSpec:
         for o in self.objects:
@@ -103,14 +113,36 @@ class SceneSpec:
         return cls(**d)
 
 
-def tabletop(*objects: ObjectSpec, cameras=None, **kw) -> SceneSpec:
-    """The default SO-101 tabletop. With no arguments: a red cube and a blue bin."""
+def tabletop(*objects: ObjectSpec, cameras=None, robot: str = "so101", **kw) -> SceneSpec:
+    """The default tabletop. With no objects: a red cube and a blue bin.
+
+    The layout is the same for every robot; each robot is mounted where its
+    top-down workspace covers it (see ``robowright.robots``), and the default
+    camera is pulled back to frame the whole arm.
+    """
     if not objects:
         objects = (
             ObjectSpec("cube", "box", (0.0125, 0.0125, 0.0125), (0.22, -0.06, None), color="red"),
             ObjectSpec("bin", "bin", (0.05, 0.05, 0.02), (0.2, 0.12, 0.0), color="blue", mass=0.0),
         )
-    spec = SceneSpec(objects=list(objects), **kw)
+    spec = SceneSpec(robot=robot, objects=list(objects), **kw)
     if cameras is not None:
         spec.cameras = list(cameras)
+    else:
+        spec.cameras = [default_camera(robot)]
     return spec
+
+
+def default_camera(robot: str = "so101") -> CameraSpec:
+    """A front-three-quarter view of the task area that keeps the whole arm in frame."""
+    from . import robots
+
+    m = robots.get(robot)
+    bx = m.base_pos[0]
+    if bx > -0.06:
+        return CameraSpec("front")
+    # Frame the span from the robot base to the far edge of the task area.
+    cx = (bx + 0.3) / 2
+    span = 0.3 - bx
+    k = span / 0.3
+    return CameraSpec("front", pos=(cx + 0.43 * k, -0.44 * k - 0.02, 0.18 + 0.3 * k), lookat=(cx, 0.02, 0.1), fovy=45.0)

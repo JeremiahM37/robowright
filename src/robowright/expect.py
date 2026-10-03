@@ -183,7 +183,7 @@ class Expectation:
             ok = (name in held) if name else bool(held)
             return (
                 ok,
-                f"fixed jaw touching {sorted(fixed) or 'nothing'}, moving jaw touching {sorted(moving) or 'nothing'}, "
+                f"left finger touching {sorted(fixed) or 'nothing'}, right finger touching {sorted(moving) or 'nothing'}, "
                 f"opening {g.opening:.2f}",
             )
 
@@ -219,7 +219,7 @@ class Expectation:
         return self._run("to_have_joint", check, kw.get("timeout"), kw.get("hold", 0.0), {"joint": joint, "value": value, "tol": tol})
 
     def to_have_no_collisions(self, allow=("floor",), *, timeout=None, hold=0.0):
-        """No arm link touches anything except ``allow`` (the jaws may touch objects)."""
+        """No arm link touches anything except ``allow`` (the fingers may touch objects)."""
         r = self._robot()
         allow = set(allow)
 
@@ -228,7 +228,7 @@ class Expectation:
             for c in r.world.backend.contacts():
                 for me, other in ((c.a, c.b), (c.b, c.a)):
                     if me.startswith("robot:") and not other.startswith("robot:") and other not in allow:
-                        if me in ("robot:fixed_jaw", "robot:moving_jaw") and other != "floor":
+                        if me in ("robot:left_finger", "robot:right_finger") and other != "floor":
                             continue
                         bad.append(f"{me}<->{other} ({c.force:.2f} N)")
             return not bad, ("collisions: " + ", ".join(sorted(set(bad)))) if bad else "no collisions"

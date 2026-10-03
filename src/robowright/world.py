@@ -30,6 +30,7 @@ class Settings:
     expect_timeout: float = 2.0  # simulated seconds an expect() retries for
     action_timeout: float = 10.0  # simulated seconds an action may take
     max_joint_speed: float = 2.0  # rad/s for planned joint moves
+    max_tcp_speed: float = 0.4  # m/s average tool speed for planned joint moves
     trace: str = "on"  # on | off | retain-on-failure
     trace_dir: str = "robowright-traces"
     frame_every: int = 5  # control steps between trace frames
@@ -206,7 +207,22 @@ def _safe(name: str) -> str:
 
 
 def launch(
-    scene: SceneSpec | None = None, backend: str = "mujoco", seed: int = 0, name: str = "world", settings: Settings | None = None, **kw
+    scene: SceneSpec | None = None,
+    backend: str = "mujoco",
+    seed: int = 0,
+    name: str = "world",
+    settings: Settings | None = None,
+    robot: str | None = None,
+    **kw,
 ) -> World:
-    """Build a world. ``scene`` defaults to the SO-101 tabletop with a cube and a bin."""
-    return World(scene or tabletop(), backend=backend, seed=seed, name=name, settings=settings, **kw)
+    """Build a world. ``scene`` defaults to the tabletop with a cube and a bin.
+
+    ``robot`` picks the robot for the default scene, or overrides ``scene.robot``.
+    """
+    if scene is None:
+        scene = tabletop(robot=robot or "so101")
+    elif robot is not None and robot != scene.robot:
+        import dataclasses
+
+        scene = dataclasses.replace(scene, robot=robot)
+    return World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)

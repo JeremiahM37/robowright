@@ -6,6 +6,7 @@ Fixtures: ``world``, ``robot``, ``scene`` (fresh per test), ``rw_scene``
 Options::
 
     --rw-backend mujoco,pybullet     run every robot test on each backend
+    --rw-robot so101,panda | all     run every robot test on each robot
     --rw-trace on|off|retain-on-failure
     --rw-trace-dir DIR
     --rw-seed N                      base seed
@@ -15,6 +16,7 @@ Markers::
     @pytest.mark.scene(spec_or_factory)
     @pytest.mark.seed(7)
     @pytest.mark.backends("mujoco")              # restrict
+    @pytest.mark.robots("panda", "ur5e")         # restrict
     @pytest.mark.trials(20, min_success=0.9)     # run across 20 seeds, judge the rate
 """
 
@@ -26,8 +28,9 @@ import pytest
 
 import robowright as rw
 
+from . import robots as _robots
 from .errors import RobowrightError
-from .scene import SceneSpec, tabletop
+from .scene import SceneSpec, default_camera, tabletop
 from .stats import TrialReport
 from .world import Settings, World, _safe
 
@@ -38,6 +41,7 @@ _REPORTS = pytest.StashKey[dict]()
 def pytest_addoption(parser):
     g = parser.getgroup("robowright")
     g.addoption("--rw-backend", default="mujoco", help="comma-separated backends to run robot tests on")
+    g.addoption("--rw-robot", default="so101", help="comma-separated robots to run robot tests on, or 'all'")
     g.addoption("--rw-trace", default="retain-on-failure", choices=["on", "off", "retain-on-failure"])
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
@@ -47,32 +51,60 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "scene(spec): scene spec or zero-arg factory for this test")
     config.addinivalue_line("markers", "seed(n): seed for this test")
     config.addinivalue_line("markers", "backends(*names): only run on these backends")
+    config.addinivalue_line("markers", "robots(*names): only run on these robots")
     config.addinivalue_line("markers", "trials(n, min_success=1.0, lower_bound=False): run across n seeds and judge the success rate")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
 
 
+def _robot_names(config) -> list[str]:
+    raw = [r.strip() for r in config.getoption("--rw-robot").split(",") if r.strip()]
+    out = []
+    for r in raw:
+        out.extend(_robots.names("arm") if r == "all" else [_robots.get(r).name])
+    return list(dict.fromkeys(out))
+
+
 def pytest_generate_tests(metafunc):
-    if "rw_backend" not in metafunc.fixturenames:
-        return
-    names = [b.strip() for b in metafunc.config.getoption("--rw-backend").split(",") if b.strip()]
-    m = metafunc.definition.get_closest_marker("backends")
-    if m:
-        names = [n for n in names if n in m.args] or list(m.args[:1])
-    metafunc.parametrize("rw_backend", names, ids=names, scope="function")
+    if "rw_backend" in metafunc.fixturenames:
+        names = [b.strip() for b in metafunc.config.getoption("--rw-backend").split(",") if b.strip()]
+        m = metafunc.definition.get_closest_marker("backends")
+        if m:
+            names = [n for n in names if n in m.args] or list(m.args[:1])
+        metafunc.parametrize("rw_backend", names, ids=names, scope="function")
+    if "rw_robot" in metafunc.fixturenames:
+        names = _robot_names(metafunc.config)
+        m = metafunc.definition.get_closest_marker("robots")
+        if m:
+            names = [n for n in names if n in m.args] or list(m.args[:1])
+        if len(names) > 1 or m:
+            metafunc.parametrize("rw_robot", names, ids=names, scope="function")
 
 
 @pytest.fixture
-def rw_scene() -> SceneSpec:
-    return tabletop()
+def rw_robot(request) -> str:  # parametrized by pytest_generate_tests when several robots are selected
+    return _robot_names(request.config)[0]
+
+
+@pytest.fixture
+def rw_scene(rw_robot) -> SceneSpec:
+    return tabletop(robot=rw_robot)
 
 
 def _scene_for(item, request) -> SceneSpec:
     m = item.get_closest_marker("scene")
     if m:
         s = m.args[0]
-        return s() if callable(s) else s
-    return request.getfixturevalue("rw_scene")
+        spec = s() if callable(s) else s
+    else:
+        spec = request.getfixturevalue("rw_scene")
+    robot = request.getfixturevalue("rw_robot")
+    if spec.robot != robot:
+        import dataclasses
+
+        cams = [default_camera(robot)] if spec.cameras == [default_camera(spec.robot)] else spec.cameras
+        spec = dataclasses.replace(spec, robot=robot, cameras=cams)
+    return spec
 
 
 def _settings(config) -> Settings:
@@ -100,7 +132,7 @@ def rw_backend():  # parametrized by pytest_generate_tests
 
 
 @pytest.fixture
-def world(request, rw_backend):
+def world(request, rw_backend, rw_robot):
     item = request.node
     if item.get_closest_marker("trials"):
         yield None  # pytest_pyfunc_call builds one world per trial

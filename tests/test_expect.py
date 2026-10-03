@@ -24,7 +24,7 @@ def test_failure_waits_for_timeout_and_reports_state(quiet_world):
 def test_waits_for_condition_to_become_true(quiet_world):
     w = quiet_world()
     w.robot.gripper.close()
-    w.robot._target[5] = 1.2  # start opening without waiting
+    w.robot._target[-1] = 1.0  # start opening without waiting
     expect(w.robot.gripper).to_be_open(timeout=2.0)
     assert w.robot.gripper.opening >= 0.8
 
@@ -82,7 +82,7 @@ def test_holding_and_collisions(quiet_world):
     w.robot.pick(cube)
     expect(w.robot.gripper).to_be_holding(cube)
     expect(w.robot).to_have_no_collisions()
-    expect(cube).to_be_touching("robot:fixed_jaw")
+    expect(cube).to_be_touching("robot:left_finger")
 
 
 def test_joint_matcher(quiet_world):

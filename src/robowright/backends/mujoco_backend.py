@@ -1,16 +1,19 @@
-"""MuJoCo backend: the reference simulator."""
+"""MuJoCo backend: the reference simulator.
+
+The robot is its MuJoCo Menagerie model, attached under the ``robot/`` prefix,
+so it runs exactly as its authors tuned it: same actuators, tendons and
+equality constraints.
+"""
 
 from __future__ import annotations
 
-import mujoco  # noqa: E402
-import numpy as np  # noqa: E402
+import mujoco
+import numpy as np
 
-from .. import assets  # noqa: E402
-from ..scene import SceneSpec  # noqa: E402
-from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, register  # noqa: E402
-
-ROBOT_JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
-_PART = {"gripper": "fixed_jaw", "camera_mount": "fixed_jaw", "moving_jaw_so101_v1": "moving_jaw"}
+from ..robots import PREFIX, body_labels
+from ..robots.model import reset_data
+from ..scene import SceneSpec
+from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, register
 
 
 def _lookat_xyaxes(pos, lookat):
@@ -24,12 +27,19 @@ def _lookat_xyaxes(pos, lookat):
 
 
 def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
-    s = mujoco.MjSpec.from_file(str(assets.so101_mjcf()))
-    s.option.timestep = spec.physics_dt
+    s = mujoco.MjSpec()
+    s.option.timestep = spec.dt
+    spec.robot_model.add_to(s)
+    # Arm controllers on real robots cancel gravity; bare position servos sag
+    # under it instead, by more than a grasp can tolerate.
+    for b in s.bodies:
+        if b.name.startswith(PREFIX):
+            b.gravcomp = 1.0
     s.visual.headlight.diffuse = [0.6, 0.6, 0.6]
     s.visual.headlight.ambient = [0.35, 0.35, 0.35]
     s.visual.global_.offwidth = 1280
     s.visual.global_.offheight = 960
+    s.stat.extent = 1.0
     wb = s.worldbody
     tex = s.add_texture(
         name="grid",
@@ -59,16 +69,7 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
         pos = o.initial_pos
         if o.kind == "bin":
             b = wb.add_body(name=o.name, pos=list(pos), quat=list(o.quat))
-            sx, sy, sz = o.size
-            t = 0.003
-            walls = [
-                ((0, 0, t), (sx, sy, t)),
-                ((sx - t, 0, sz), (t, sy, sz)),
-                ((-sx + t, 0, sz), (t, sy, sz)),
-                ((0, sy - t, sz), (sx, t, sz)),
-                ((0, -sy + t, sz), (sx, t, sz)),
-            ]
-            for i, (p, hs) in enumerate(walls):
+            for i, (p, hs) in enumerate(bin_walls(o.size)):
                 b.add_geom(name=f"{o.name}/wall{i}", type=mujoco.mjtGeom.mjGEOM_BOX, pos=list(p), size=list(hs), rgba=list(o.rgba))
             continue
         b = wb.add_body(name=o.name, pos=list(pos), quat=list(o.quat))
@@ -92,64 +93,95 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
     return s
 
 
+def bin_walls(size, t: float = 0.003):
+    """(centre, half-extents) of a bin's floor and four walls, in the bin frame."""
+    sx, sy, sz = size
+    return [
+        ((0, 0, t), (sx, sy, t)),
+        ((sx - t, 0, sz), (t, sy, sz)),
+        ((-sx + t, 0, sz), (t, sy, sz)),
+        ((0, sy - t, sz), (sx, t, sz)),
+        ((0, -sy + t, sz), (sx, t, sz)),
+    ]
+
+
 @register("mujoco")
 class MujocoBackend(Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, STATE, DETERMINISTIC, FORCES})
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
+        rm = self.robot_model
         self.mjspec = build_spec(spec)
         self.model = self.mjspec.compile()
         self.data = mujoco.MjData(self.model)
         m = self.model
-        self.joint_names = list(ROBOT_JOINTS)
-        self._qadr = np.array([m.joint(n).qposadr[0] for n in ROBOT_JOINTS])
-        self._dadr = np.array([m.joint(n).dofadr[0] for n in ROBOT_JOINTS])
-        self._act = np.array([m.actuator(n).id for n in ROBOT_JOINTS])
+        arm = [PREFIX + j for j in rm.arm_joints]
+        self._qadr = np.array([m.joint(n).qposadr[0] for n in arm])
+        self._dadr = np.array([m.joint(n).dofadr[0] for n in arm])
+        by_joint = {m.actuator_trnid[i, 0]: i for i in range(m.nu) if m.actuator_trntype[i] == mujoco.mjtTrn.mjTRN_JOINT}
+        self._act = np.array([by_joint[m.joint(n).id] for n in arm])
+        self._gact = m.actuator(PREFIX + rm.gripper_actuator).id
+        self._act_all = np.append(self._act, self._gact)
         self._kp = m.actuator_gainprm[self._act, 0].copy()
+        self._bias = m.actuator_biasprm[self._act, 1].copy()
+        der = rm.derived
+        gj = m.joint(PREFIX + der.gripper_joint)
+        self._g_qadr, self._g_dadr = gj.qposadr[0], gj.dofadr[0]
+        self._g_closed, self._g_open = der.gripper_joints[der.gripper_joint]
         self._substeps = max(1, round((1.0 / spec.control_hz) / m.opt.timestep))
         self._body = {o.name: m.body(o.name).id for o in spec.objects}
         self._free = {o.name: m.joint(f"{o.name}/free") for o in spec.objects if not o.static}
-        robot_root = m.body("base").id
-        self._label = {}
-        for b in range(m.nbody):
-            name = m.body(b).name
-            if name in self._body:
-                self._label[b] = name
-            elif b == 0:
-                self._label[b] = "floor"
-            else:
-                r = b
-                while r not in (0, robot_root):
-                    r = m.body_parentid[r]
-                self._label[b] = f"robot:{_PART.get(name, name)}" if r == robot_root else name
+        self._label = {0: "floor"}
+        for b, part in body_labels(m, rm, PREFIX).items():
+            self._label[b] = f"robot:{part}"
+        for b in range(1, m.nbody):
+            self._label.setdefault(b, m.body(b).name)
         self._renderers: dict = {}
-        mujoco.mj_resetData(m, self.data)
-        mujoco.mj_forward(m, self.data)
+        reset_data(m, self.data)
+        self.set_ctrl(self.qpos())
 
     # robot
+    def _opening(self, q):
+        return (q - self._g_closed) / (self._g_open - self._g_closed)
+
     def qpos(self):
-        return self.data.qpos[self._qadr].copy()
+        return np.append(self.data.qpos[self._qadr], self._opening(self.data.qpos[self._g_qadr]))
 
     def qvel(self):
-        return self.data.qvel[self._dadr].copy()
+        return np.append(self.data.qvel[self._dadr], self.data.qvel[self._g_dadr] / (self._g_open - self._g_closed))
 
     def set_ctrl(self, target):
-        lo, hi = self.model.actuator_ctrlrange[self._act].T
-        self.data.ctrl[self._act] = np.clip(target, lo, hi)
+        m, rm = self.model, self.robot_model
+        target = np.asarray(target, float)
+        arm = target[: self.n_arm]
+        lim = m.actuator_ctrllimited[self._act].astype(bool)
+        lo, hi = m.actuator_ctrlrange[self._act].T
+        self.data.ctrl[self._act] = np.where(lim, np.clip(arm, lo, hi), arm)
+        g = float(np.clip(target[self.n_arm], 0.0, 1.0))
+        self.data.ctrl[self._gact] = rm.gripper_closed + g * (rm.gripper_open - rm.gripper_closed)
 
     def ctrl(self):
-        return self.data.ctrl[self._act].copy()
+        rm = self.robot_model
+        g = (self.data.ctrl[self._gact] - rm.gripper_closed) / (rm.gripper_open - rm.gripper_closed)
+        return np.append(self.data.ctrl[self._act], g)
 
     def set_gain_scale(self, joint, scale):
-        a = self._act[self.joint_names.index(joint)]
-        kp = self._kp[self.joint_names.index(joint)] * scale
-        self.model.actuator_gainprm[a, 0] = kp
-        self.model.actuator_biasprm[a, 1] = -kp
+        i = self.joint_names.index(joint)
+        a = self._act[i]
+        self.model.actuator_gainprm[a, 0] = self._kp[i] * scale
+        self.model.actuator_biasprm[a, 1] = self._bias[i] * scale
 
     def set_joint_positions(self, q):
-        self.data.qpos[self._qadr] = q
+        q = np.asarray(q, float)
+        self.data.qpos[self._qadr] = q[: self.n_arm]
         self.data.qvel[self._dadr] = 0
+        # Put every finger joint where it sits at this opening, so the gripper starts at rest.
+        s = float(np.clip(q[self.n_arm], 0, 1))
+        for name, (c, o) in self.robot_model.derived.gripper_joints.items():
+            j = self.model.joint(PREFIX + name)
+            self.data.qpos[j.qposadr[0]] = c + s * (o - c)
+            self.data.qvel[j.dofadr[0]] = 0
         self.set_ctrl(q)
         mujoco.mj_forward(self.model, self.data)
 
@@ -158,6 +190,10 @@ class MujocoBackend(Backend):
         for _ in range(self._substeps):
             mujoco.mj_step(self.model, self.data)
         self.data.xfrc_applied[:] = 0
+
+    @property
+    def control_dt(self):
+        return self._substeps * self.model.opt.timestep
 
     @property
     def time(self):

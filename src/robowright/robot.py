@@ -13,22 +13,19 @@ import time as _time
 
 import numpy as np
 
-from . import assets
 from .errors import ActionTimeoutError, CapabilityError, UnreachableError
-from .kinematics import Chain
 from .locators import ObjectHandle, Subject, as_subject
+from .robots import Kinematics
 
 # Keep robowright internals out of pytest failure tracebacks (--full-trace shows them).
 __tracebackhide__ = True
 
-# Tool centre point in the gripper_link frame: midway between the jaw pads.
-TCP_OFFSET = (0.0054, 0.0, -0.09)
-GRIPPER_OPEN = 1.2
-GRIPPER_CLOSED = -0.17
+# The gripper is commanded and read as an opening: 0 is closed, 1 is fully open.
+GRIPPER_OPEN = 1.0
+GRIPPER_CLOSED = 0.0
 DOWN = (0.0, 0.0, -1.0)
-# Lowest tool-centre height for a top-down grasp: the fixed jaw reaches ~11 mm
-# below the TCP, so anything lower drives it into the table.
-MIN_GRASP_Z = 0.017
+# Fingertips must clear the table by this much at the bottom of a top-down grasp.
+TABLE_CLEARANCE = 0.004
 
 
 def _jsonable(v):
@@ -93,7 +90,8 @@ class TCP(Subject):
 
     @property
     def position(self):
-        return self.robot.chain.fk(self.robot.true_qpos()[:5])[:3, 3]
+        r = self.robot
+        return r.kin.tcp(r.true_qpos()[: r.n_arm])
 
 
 class Arm:
@@ -109,12 +107,15 @@ class Arm:
 
     @action
     def move_joints(self, q, speed: float | None = None, timeout: float | None = None):
-        """Move the five arm joints to ``q`` (radians) and wait until settled."""
+        """Move the arm joints to ``q`` (radians) and wait until settled."""
         r = self.robot
         goal = np.asarray(q, float)
-        start = r._target[:5].copy()
+        start = r._target[: r.n_arm].copy()
         speed = speed or self.world.settings.max_joint_speed
-        duration = max(float(np.max(np.abs(goal - start))) / speed, self.world.dt)
+        # Long arms sweep the tool fast for small joint motions; cap tool speed too
+        # or a held object is flung out of the gripper.
+        tool = float(np.linalg.norm(r.kin.tcp(goal) - r.kin.tcp(start))) / self.world.settings.max_tcp_speed
+        duration = max(float(np.max(np.abs(goal - start))) / speed, tool, self.world.dt)
         r._stream(lambda s: r._set_arm(start + (goal - start) * _minjerk(s)), duration)
         r._settle(goal, timeout)
 
@@ -130,12 +131,12 @@ class Arm:
         """
         r = self.robot
         p = as_subject(self.world, target).position
-        q_now = r._target[:5].copy()
+        q_now = r._target[: r.n_arm].copy()
         if not linear:
             q, err = r._ik(p, q_now, approach, yaw)
             self.move_joints.__wrapped__(self, q, timeout=timeout)
             return
-        p0 = r.chain.fk(q_now)[:3, 3]
+        p0 = r.kin.tcp(q_now)
         n = max(2, int(np.ceil(np.linalg.norm(p - p0) / 0.004)))
         qs, q = [], q_now
         for i in range(1, n + 1):
@@ -170,23 +171,19 @@ class Gripper(Subject):
         return self.robot.tcp.position
 
     @property
-    def angle(self) -> float:
-        return float(self.robot.true_qpos()[5])
-
-    @property
     def opening(self) -> float:
         """0 = fully closed, 1 = fully open."""
-        return float(np.clip((self.angle - GRIPPER_CLOSED) / (GRIPPER_OPEN - GRIPPER_CLOSED), 0, 1))
+        return float(np.clip(self.robot.true_qpos()[-1], 0, 1))
 
     def touching(self) -> tuple[set, set]:
-        """Objects touching (fixed jaw, moving jaw)."""
+        """Objects touching (left finger, right finger)."""
         self.world.require("contacts", "gripper contact sensing")
         fixed, moving = set(), set()
         for c in self.world.backend.contacts():
             for me, other in ((c.a, c.b), (c.b, c.a)):
-                if me == "robot:fixed_jaw" and not other.startswith("robot:"):
+                if me == "robot:left_finger" and not other.startswith("robot:"):
                     fixed.add(other)
-                elif me == "robot:moving_jaw" and not other.startswith("robot:"):
+                elif me == "robot:right_finger" and not other.startswith("robot:"):
                     moving.add(other)
         return fixed, moving
 
@@ -204,35 +201,42 @@ class Gripper(Subject):
         """Close until the jaws stop moving - on an object or fully shut."""
         self._go(GRIPPER_CLOSED, timeout, stall_ok=True)
 
-    def _go(self, angle, timeout, stall_ok=False):
+    def _go(self, opening, timeout, stall_ok=False):
         r = self.robot
-        start = r._target[5]
-        duration = max(abs(angle - start) / 4.0, self.world.dt)
-        r._stream(lambda s: r._set_gripper(start + (angle - start) * _minjerk(s)), duration)
+        start = r._target[-1]
+        duration = max(abs(opening - start) * 0.35, self.world.dt)
+        r._stream(lambda s: r._set_gripper(start + (opening - start) * _minjerk(s)), duration)
         timeout = timeout or self.world.settings.action_timeout
 
         def done():
-            v = abs(self.world.backend.qvel()[5])
-            return v < 0.05 and (stall_ok or abs(r.true_qpos()[5] - angle) < 0.05)
+            v = abs(self.world.backend.qvel()[-1])
+            return v < 0.04 and (stall_ok or abs(r.true_qpos()[-1] - opening) < 0.05)
 
         if not self.world.run_until(done, timeout, hold=0.1):
-            raise ActionTimeoutError(f"gripper did not reach {angle:.2f} rad within {timeout}s (at {r.true_qpos()[5]:.2f})")
+            raise ActionTimeoutError(f"gripper did not reach opening {opening:.2f} within {timeout}s (at {r.true_qpos()[-1]:.2f})")
 
 
 class Robot:
     _label = "robot"
     name = "robot"
 
-    def __init__(self, world, chain: Chain | None = None):
+    def __init__(self, world):
         self.world = world
-        self.chain = chain or Chain(assets.so101_urdf(), "base_link", "gripper_link", TCP_OFFSET)
+        self.model = world.backend.robot_model
+        self.kin = _kinematics(self.model.name)
+        self.n_arm = self.model.n_arm
         self.arm = Arm(self)
         self.gripper = Gripper(self)
         self.tcp = TCP(self)
         b = world.backend
         self._target = b.qpos().copy()
-        self._target[5] = GRIPPER_OPEN
+        self._target[-1] = GRIPPER_OPEN
         self._home_q = None
+
+    @property
+    def min_grasp_z(self) -> float:
+        """Lowest TCP height for a top-down grasp that keeps the fingertips off the table."""
+        return self.model.derived.finger_reach + TABLE_CLEARANCE
 
     @property
     def joint_names(self) -> list[str]:
@@ -241,8 +245,7 @@ class Robot:
     @property
     def home_q(self) -> np.ndarray:
         if self._home_q is None:
-            q, _ = self.chain.ik((0.2, 0.0, 0.08), np.array([0, -1.0, 1.0, 1.2, 0]), DOWN, yaw=0.0)
-            self._home_q = q
+            self._home_q = home_q(self.model.name)
         return self._home_q
 
     def true_qpos(self) -> np.ndarray:
@@ -257,7 +260,10 @@ class Robot:
         return dict(zip(self.joint_names, map(float, self.qpos())))
 
     def reset_to(self, q_arm=None, gripper: float = GRIPPER_OPEN):
-        """Teleport to a joint configuration (setup only; simulators with state support)."""
+        """Teleport to a joint configuration (setup only; simulators with state support).
+
+        ``gripper`` is an opening between 0 (closed) and 1 (open).
+        """
         q = np.concatenate([self.home_q if q_arm is None else np.asarray(q_arm, float), [gripper]])
         if not hasattr(self.world.backend, "set_joint_positions"):
             raise CapabilityError(f"{self.world.backend.name} cannot teleport joints")
@@ -268,10 +274,10 @@ class Robot:
 
     # internals --------------------------------------------------------------
     def _set_arm(self, q):
-        self._target[:5] = q
+        self._target[: self.n_arm] = q
 
     def _set_gripper(self, a):
-        self._target[5] = a
+        self._target[-1] = a
 
     def _stream(self, at, duration):
         n = max(1, int(round(duration / self.world.dt)))
@@ -283,27 +289,19 @@ class Robot:
         timeout = timeout or self.world.settings.action_timeout
         w = self.world
 
+        n = self.n_arm
+
         def settled():
-            q = self.qpos()[:5]
-            return np.max(np.abs(q - goal)) < 0.03 and np.max(np.abs(w.backend.qvel()[:5])) < 0.08
+            q = self.qpos()[:n]
+            return np.max(np.abs(q - goal)) < 0.03 and np.max(np.abs(w.backend.qvel()[:n])) < 0.08
 
         if not w.run_until(settled, timeout, hold=0.06):
-            err = np.abs(self.true_qpos()[:5] - goal)
+            err = np.abs(self.true_qpos()[:n] - goal)
             j = self.joint_names[int(np.argmax(err))]
             raise ActionTimeoutError(f"arm did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
 
     def _ik(self, p, seed, approach, yaw):
-        best = None
-        yaws = [None] if yaw is None else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
-        for y in yaws:
-            for s in (seed, self.home_q):
-                q, err = self.chain.ik(p, s, approach, y)
-                score = err + 0.002 * abs(q[4])
-                if best is None or score < best[0]:
-                    best = (score, q, err)
-            if best[2] < 1e-3:
-                break
-        _, q, err = best
+        q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw)
         if err > 5e-3:
             raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} (closest {err * 1000:.1f} mm)")
         return q, err
@@ -318,20 +316,26 @@ class Robot:
         self.gripper.open.__wrapped__(self.gripper)
         grasp = p.copy()
         if isinstance(o, ObjectHandle):
-            grasp[2] = max(p[2], MIN_GRASP_Z)
+            grasp[2] = max(p[2], self.min_grasp_z)
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, 0.05], yaw=yaw, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, grasp, yaw=yaw, linear=True, timeout=timeout)
         self.gripper.close.__wrapped__(self.gripper)
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, lift], yaw=yaw, linear=True, timeout=timeout)
 
     @action
-    def place(self, on, height: float = 0.015, timeout: float | None = None):
-        """Carry the held object above ``on`` (object or point), lower it and release."""
+    def place(self, on, height: float | None = None, timeout: float | None = None):
+        """Carry the held object above ``on`` (object or point), lower it and release.
+
+        ``height`` is the TCP's height above ``on``'s top at release; by default
+        the fingertips stop just clear of it.
+        """
         t = as_subject(self.world, on)
         p = t.position.copy()
         top = t.top if isinstance(t, ObjectHandle) else p[2]
         yaw = t.yaw if isinstance(t, ObjectHandle) else None
-        above = np.array([p[0], p[1], top + 0.04])
+        if height is None:
+            height = max(0.015, self.model.derived.finger_reach + 0.006)
+        above = np.array([p[0], p[1], top + height + 0.03])
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper)
@@ -340,7 +344,7 @@ class Robot:
     def observe(self, cameras=(), privileged: bool = False, task: str | None = None) -> dict:
         """What a policy sees: joint readings, optional camera images, optional ground truth."""
         w = self.world
-        obs = {"qpos": self.qpos(), "t": w.time, "task": task}
+        obs = {"qpos": self.qpos(), "t": w.time, "task": task, "robot": self.model.name}
         if cameras:
             obs["images"] = {c: w.faults.filter_image(w.backend.render(c, *w.settings.image_size)) for c in cameras}
         if privileged:
@@ -394,6 +398,45 @@ class Rollout:
 
     def __repr__(self):
         return f"<Rollout success={self.success} steps={self.steps} sim={self.sim_seconds:.2f}s>"
+
+
+@functools.cache
+def _kinematics(name: str) -> Kinematics:
+    from . import robots
+
+    return Kinematics(robots.get(name))
+
+
+def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None):
+    """IK that tries the grasp yaw's symmetric variants and two seeds, preferring small joint motion."""
+    best = None
+    yaws = [None] if yaw is None else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
+    seed = np.asarray(seed, float)
+    for y in yaws:
+        for s in (seed, home):
+            q, err = kin.ik(p, s, approach, y, rest=home)
+            score = err + 0.002 * float(np.abs(q - seed).sum())
+            if best is None or score < best[0]:
+                best = (score, q, err)
+        if best[2] < 1e-3:
+            break
+    return best[1], best[2]
+
+
+@functools.cache
+def home_q(name: str) -> np.ndarray:
+    from . import robots
+
+    m = robots.get(name)
+    kin = _kinematics(name)
+    seed = np.asarray(m.seed, float) if m.seed is not None else m.keyframe_q()
+    if seed is None:
+        seed = np.clip(np.zeros(m.n_arm), kin.lower, kin.upper)
+    q, err = kin.ik(m.home, seed, DOWN, yaw=0.0, rest=seed)
+    if err > 1e-3:
+        raise UnreachableError(f"{name}: home pose {m.home} unreachable (closest {err * 1000:.1f} mm)")
+    q.setflags(write=False)
+    return q
 
 
 def _minjerk(s: float) -> float:
