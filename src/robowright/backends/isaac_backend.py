@@ -22,7 +22,9 @@ It is started without the RTX renderer, which crashes at start-up on some
 drivers and is not needed for physics; this backend does not render.
 ``ROBOWRIGHT_ISAAC_DEVICE=cpu|gpu`` picks the PhysX pipeline: CPU by
 default, ~17x faster for one small scene (1.5 vs 25 ms per control step,
-Panda, RTX 5080) and bit-for-bit deterministic.
+Panda, RTX 5080), bit-for-bit deterministic and the only one with contact
+reports (the GPU pipeline delivers none, so it also cannot unmount links
+sunk into the floor, below).
 """
 
 from __future__ import annotations
@@ -217,8 +219,9 @@ class IsaacBackend(Backend):
             raise NotImplementedError("the isaac backend supports fixed-base arms only")
         gpu = _start() == "gpu"
         if gpu:
-            # GPU PhysX sums contact and constraint terms in whatever order threads finish.
-            self.capabilities = self.capabilities - {DETERMINISTIC}
+            # GPU PhysX sums contact and constraint terms in whatever order threads finish, and the
+            # GPU pipeline (which needs readback suppressed) delivers no contact reports.
+            self.capabilities = self.capabilities - {DETERMINISTIC, CONTACTS}
         self._gpu = gpu
         import omni.physics.tensors
         import omni.physx
