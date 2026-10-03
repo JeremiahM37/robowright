@@ -5,13 +5,13 @@ build-backend = "hatchling.build"
 [project]
 name = "robowright"
 version = "0.1.0.dev0"
-description = "Playwright-style testing for robots: auto-waiting actions, expect() assertions, traces, replay and codegen across simulators."
+description = "Playwright-style testing for robots: one test, 19 robots, four physics engines. Auto-waiting actions, expect() assertions, traces, replay and codegen."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "src/robowright/assets/so101/LICENSE-so101"]
 requires-python = ">=3.10"
 authors = [{ name = "Jeremiah Mackey" }]
-keywords = ["robotics", "testing", "pytest", "mujoco", "pybullet", "lerobot", "simulation", "so-101"]
+keywords = ["robotics", "testing", "pytest", "mujoco", "pybullet", "genesis", "drake", "simulation", "lerobot", "franka", "ur5e", "unitree"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Framework :: Pytest",
@@ -30,6 +30,8 @@ dependencies = [
 
 [project.optional-dependencies]
 pybullet = ["pybullet>=3.2.6"]
+genesis = ["genesis-world>=1.4", "torch>=2.4"]
+drake = ["drake>=1.30; python_version >= '3.12'"]
 video = ["imageio>=2.31", "imageio-ffmpeg>=0.4"]
 dev = ["pybullet>=3.2.6", "pytest-xdist>=3", "ruff>=0.5", "imageio>=2.31", "imageio-ffmpeg>=0.4"]
 

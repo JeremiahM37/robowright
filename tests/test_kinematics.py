@@ -4,7 +4,7 @@ import pytest
 from robowright import robots
 from robowright.robot import DOWN, _kinematics, home_q, solve_ik
 
-ALL = robots.names()
+ALL = robots.names("arm")
 
 
 @pytest.mark.parametrize("name", ALL)

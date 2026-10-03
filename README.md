@@ -7,6 +7,7 @@
 ```python
 from robowright import expect
 
+
 def test_pick_and_place(robot, scene):
     cube, bin = scene["cube"], scene["bin"]
 
@@ -71,10 +72,11 @@ still run and traces are still recorded, just without camera frames.
 ### Actions wait
 
 ```python
-robot.arm.move_to((0.22, 0.05, 0.04))              # IK, joint-space trajectory, then wait until settled
-robot.arm.move_to(cube, linear=True, speed=0.05)   # straight-line Cartesian approach
-robot.gripper.close()                              # returns when the jaws stop: on an object, or shut
-robot.pick(cube); robot.place(on=bin)              # skills built from the above
+robot.arm.move_to((0.22, 0.05, 0.04))  # IK, joint-space trajectory, then wait until settled
+robot.arm.move_to(cube, linear=True, speed=0.05)  # straight-line Cartesian approach
+robot.gripper.close()  # returns when the jaws stop: on an object, or shut
+robot.pick(cube)
+robot.place(on=bin)  # skills built from the above
 ```
 
 When an action can't finish, it says why:
@@ -87,12 +89,12 @@ UnreachableError: no joint configuration reaches [0.5, 0.0, 0.3] (closest 264.6 
 ### Assertions wait, then explain
 
 ```python
-expect(cube).to_be_inside(bin)                     # retries for up to 2 s of simulated time
-expect(cube).to_be_at_rest(hold=0.3)               # ...and must stay true for 0.3 s
-expect(robot.gripper).to_be_holding(cube)          # both jaws in contact
+expect(cube).to_be_inside(bin)  # retries for up to 2 s of simulated time
+expect(cube).to_be_at_rest(hold=0.3)  # ...and must stay true for 0.3 s
+expect(robot.gripper).to_be_holding(cube)  # both jaws in contact
 expect(cube).not_.to_be_touching("floor")
-expect(robot).always.to_have_no_collisions()       # invariant for the rest of the test
-expect.soft(cube).to_be_upright()                  # record and keep going; fail at the end
+expect(robot).always.to_have_no_collisions()  # invariant for the rest of the test
+expect.soft(cube).to_be_upright()  # record and keep going; fail at the end
 ```
 
 ```
@@ -140,12 +142,12 @@ so you can rerun exactly that one.
 ### Faults
 
 ```python
-world.faults.joint_noise(std=0.02)            # encoder noise, seen by robot and policy, not by physics
-world.faults.action_delay(steps=3)            # 60 ms command latency
-world.faults.weak_joint("shoulder_lift", 0.3) # a tired servo
+world.faults.joint_noise(std=0.02)  # encoder noise, seen by robot and policy, not by physics
+world.faults.action_delay(steps=3)  # 60 ms command latency
+world.faults.weak_joint("shoulder_lift", 0.3)  # a tired servo
 world.faults.push("cube", force=(0, 1.5, 0), duration=0.1)
 world.faults.camera_dropout(p=0.1)
-world.faults.jitter("cube", xy_std=0.02)      # domain randomisation, seeded
+world.faults.jitter("cube", xy_std=0.02)  # domain randomisation, seeded
 ```
 
 ### Traces, replay, codegen

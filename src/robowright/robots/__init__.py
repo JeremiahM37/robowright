@@ -265,3 +265,97 @@ register(
         **_2F85,
     )
 )
+
+
+# Legged robots -----------------------------------------------------------------
+def _legs(*prefixes, names=("hip_joint", "thigh_joint", "calf_joint")):
+    return tuple(f"{p}_{n}" for p in prefixes for n in names)
+
+
+_LEGGED = dict(family="legged", base_pos=(0.0, 0.0, 0.0))
+register(
+    RobotModel(
+        "go2",
+        "Unitree Go2",
+        _m("unitree_go2/go2.xml"),
+        _legs("FL", "FR", "RL", "RR"),
+        base_body="base",
+        servo=(60.0, 3.0),
+        maker="Unitree Robotics",
+        tags=("quadruped",),
+        license="BSD-3-Clause",
+        **_LEGGED,
+    )
+)
+register(
+    RobotModel(
+        "go1",
+        "Unitree Go1",
+        _m("unitree_go1/go1.xml"),
+        _legs("FR", "FL", "RR", "RL"),
+        base_body="trunk",
+        maker="Unitree Robotics",
+        tags=("quadruped",),
+        license="BSD-3-Clause",
+        **_LEGGED,
+    )
+)
+register(
+    RobotModel(
+        "a1",
+        "Unitree A1",
+        _m("unitree_a1/a1.xml"),
+        _legs("FR", "FL", "RR", "RL"),
+        base_body="trunk",
+        maker="Unitree Robotics",
+        tags=("quadruped",),
+        license="MPL-2.0",
+        **_LEGGED,
+    )
+)
+register(
+    RobotModel(
+        "spot",
+        "Boston Dynamics Spot",
+        _m("boston_dynamics_spot/spot.xml"),
+        _legs("fl", "fr", "hl", "hr", names=("hx", "hy", "kn")),
+        base_body="body",
+        maker="Boston Dynamics",
+        tags=("quadruped",),
+        license="BSD-3-Clause",
+        **_LEGGED,
+    )
+)
+register(
+    RobotModel(
+        "anymal_c",
+        "ANYbotics ANYmal C",
+        _m("anybotics_anymal_c/anymal_c.xml"),
+        _legs("LF", "RF", "LH", "RH", names=("HAA", "HFE", "KFE")),
+        base_body="base",
+        stand=(0.0, 0.4, -0.8, 0.0, 0.4, -0.8, 0.0, -0.4, 0.8, 0.0, -0.4, 0.8),
+        maker="ANYbotics",
+        tags=("quadruped",),
+        license="BSD-3-Clause",
+        **_LEGGED,
+    )
+)
+_G1_LEG = ("hip_pitch", "hip_roll", "hip_yaw", "knee", "ankle_pitch", "ankle_roll")
+_G1_ARM = ("shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow", "wrist_roll", "wrist_pitch", "wrist_yaw")
+register(
+    RobotModel(
+        "g1",
+        "Unitree G1",
+        _m("unitree_g1/g1.xml"),
+        tuple(f"{side}_{j}_joint" for side in ("left", "right") for j in _G1_LEG)
+        + ("waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint")
+        + tuple(f"{side}_{j}_joint" for side in ("left", "right") for j in _G1_ARM),
+        base_body="pelvis",
+        # squat: hips and ankles pitch against the knees so the torso stays over the feet
+        crouch=(-0.8, 0, 0, 1.6, -0.8, 0) * 2 + (0,) * 17,
+        maker="Unitree Robotics",
+        tags=("humanoid",),
+        license="BSD-3-Clause",
+        **_LEGGED,
+    )
+)
