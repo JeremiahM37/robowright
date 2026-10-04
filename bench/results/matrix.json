@@ -17,2934 +17,8 @@
   "isaac"
  ],
  "trials": 20,
- "seconds": 518.6,
+ "seconds": 50.1,
  "results": [
-  {
-   "backend": "pybullet",
-   "robot": "so101",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.445,
-     "ok": true,
-     "cube": [
-      0.2094,
-      0.1315,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.13,
-     "ok": true,
-     "cube": [
-      0.2095,
-      0.1323,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.129,
-     "ok": true,
-     "cube": [
-      0.1995,
-      0.1267,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.137,
-     "ok": true,
-     "cube": [
-      0.2062,
-      0.1273,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.133,
-     "ok": true,
-     "cube": [
-      0.2104,
-      0.1289,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.138,
-     "ok": true,
-     "cube": [
-      0.1993,
-      0.1203,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.143,
-     "ok": true,
-     "cube": [
-      0.2069,
-      0.1199,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.124,
-     "ok": true,
-     "cube": [
-      0.2012,
-      0.1283,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.124,
-     "ok": true,
-     "cube": [
-      0.1929,
-      0.117,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.122,
-     "ok": true,
-     "cube": [
-      0.1978,
-      0.1181,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.126,
-     "ok": true,
-     "cube": [
-      0.2034,
-      0.1236,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.121,
-     "ok": true,
-     "cube": [
-      0.1969,
-      0.1194,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.124,
-     "ok": true,
-     "cube": [
-      0.2046,
-      0.1275,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.124,
-     "ok": true,
-     "cube": [
-      0.2,
-      0.1202,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.127,
-     "ok": true,
-     "cube": [
-      0.2001,
-      0.1196,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.125,
-     "ok": true,
-     "cube": [
-      0.2001,
-      0.1192,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.122,
-     "ok": true,
-     "cube": [
-      0.2102,
-      0.1263,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.128,
-     "ok": true,
-     "cube": [
-      0.2049,
-      0.1288,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.125,
-     "ok": true,
-     "cube": [
-      0.2051,
-      0.1243,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.123,
-     "ok": true,
-     "cube": [
-      0.2002,
-      0.1202,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.761,
-   "grip": {
-    "held": true,
-    "max_shove_n": ">20"
-   },
-   "cell_seconds": 10.0
-  },
-  {
-   "backend": "pybullet",
-   "robot": "panda",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.754,
-     "ok": true,
-     "cube": [
-      0.1998,
-      0.1233,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.112,
-     "ok": true,
-     "cube": [
-      0.2136,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.113,
-     "ok": true,
-     "cube": [
-      0.2137,
-      0.1213,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.109,
-     "ok": true,
-     "cube": [
-      0.2001,
-      0.1262,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.112,
-     "ok": true,
-     "cube": [
-      0.2021,
-      0.1188,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.113,
-     "ok": true,
-     "cube": [
-      0.2099,
-      0.1252,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.113,
-     "ok": true,
-     "cube": [
-      0.1956,
-      0.1216,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.113,
-     "ok": true,
-     "cube": [
-      0.1917,
-      0.1248,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.112,
-     "ok": true,
-     "cube": [
-      0.1932,
-      0.1223,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.112,
-     "ok": true,
-     "cube": [
-      0.1971,
-      0.1105,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.111,
-     "ok": true,
-     "cube": [
-      0.217,
-      0.1207,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.113,
-     "ok": true,
-     "cube": [
-      0.1978,
-      0.1219,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.114,
-     "ok": true,
-     "cube": [
-      0.1979,
-      0.1241,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.111,
-     "ok": true,
-     "cube": [
-      0.2075,
-      0.127,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.11,
-     "ok": true,
-     "cube": [
-      0.1939,
-      0.1234,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.111,
-     "ok": true,
-     "cube": [
-      0.1992,
-      0.1216,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.113,
-     "ok": true,
-     "cube": [
-      0.209,
-      0.1178,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.115,
-     "ok": true,
-     "cube": [
-      0.2022,
-      0.1176,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.117,
-     "ok": true,
-     "cube": [
-      0.1979,
-      0.1106,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.11,
-     "ok": true,
-     "cube": [
-      0.202,
-      0.1146,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.592,
-   "grip": {
-    "held": true,
-    "max_shove_n": ">20"
-   },
-   "cell_seconds": 9.7
-  },
-  {
-   "backend": "pybullet",
-   "robot": "ur5e",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.506,
-     "ok": true,
-     "cube": [
-      0.1935,
-      0.123,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.168,
-     "ok": true,
-     "cube": [
-      0.1959,
-      0.1234,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.17,
-     "ok": true,
-     "cube": [
-      0.2011,
-      0.1208,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.171,
-     "ok": true,
-     "cube": [
-      0.1955,
-      0.1302,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.178,
-     "ok": true,
-     "cube": [
-      0.1951,
-      0.1199,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.171,
-     "ok": true,
-     "cube": [
-      0.1973,
-      0.1206,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.169,
-     "ok": true,
-     "cube": [
-      0.1959,
-      0.118,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.166,
-     "ok": true,
-     "cube": [
-      0.1965,
-      0.1196,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.175,
-     "ok": true,
-     "cube": [
-      0.1925,
-      0.1214,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.166,
-     "ok": true,
-     "cube": [
-      0.1852,
-      0.1146,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.169,
-     "ok": true,
-     "cube": [
-      0.1844,
-      0.1227,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.167,
-     "ok": true,
-     "cube": [
-      0.1949,
-      0.1171,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.171,
-     "ok": true,
-     "cube": [
-      0.2019,
-      0.1181,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.167,
-     "ok": true,
-     "cube": [
-      0.2008,
-      0.12,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.17,
-     "ok": true,
-     "cube": [
-      0.1987,
-      0.12,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.172,
-     "ok": true,
-     "cube": [
-      0.1978,
-      0.12,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.169,
-     "ok": true,
-     "cube": [
-      0.1965,
-      0.1168,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.169,
-     "ok": true,
-     "cube": [
-      0.1885,
-      0.1299,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.247,
-     "ok": true,
-     "cube": [
-      0.2027,
-      0.1213,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.17,
-     "ok": true,
-     "cube": [
-      0.1974,
-      0.1226,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.887,
-   "grip": {
-    "held": true,
-    "max_shove_n": 17.24
-   },
-   "cell_seconds": 13.9
-  },
-  {
-   "backend": "pybullet",
-   "robot": "ur10e",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.53,
-     "ok": true,
-     "cube": [
-      0.1973,
-      0.1233,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.182,
-     "ok": true,
-     "cube": [
-      0.191,
-      0.1279,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.179,
-     "ok": true,
-     "cube": [
-      0.197,
-      0.1288,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.183,
-     "ok": true,
-     "cube": [
-      0.2024,
-      0.1174,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.178,
-     "ok": true,
-     "cube": [
-      0.1913,
-      0.1189,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.1966,
-      0.1221,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.172,
-     "ok": true,
-     "cube": [
-      0.1971,
-      0.1184,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.172,
-     "ok": true,
-     "cube": [
-      0.1993,
-      0.1192,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.177,
-     "ok": true,
-     "cube": [
-      0.1983,
-      0.1201,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.175,
-     "ok": true,
-     "cube": [
-      0.192,
-      0.1158,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.2036,
-      0.1203,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.1948,
-      0.1171,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.177,
-     "ok": true,
-     "cube": [
-      0.2053,
-      0.1161,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.177,
-     "ok": true,
-     "cube": [
-      0.1916,
-      0.1243,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.1846,
-      0.1184,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.1979,
-      0.12,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.1912,
-      0.1157,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.1955,
-      0.1243,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.176,
-     "ok": true,
-     "cube": [
-      0.1918,
-      0.1161,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.175,
-     "ok": true,
-     "cube": [
-      0.2053,
-      0.1166,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.9,
-   "grip": {
-    "held": true,
-    "max_shove_n": 15.91
-   },
-   "cell_seconds": 14.0
-  },
-  {
-   "backend": "pybullet",
-   "robot": "gen3",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.387,
-     "ok": true,
-     "cube": [
-      0.2064,
-      0.1162,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.168,
-     "ok": true,
-     "cube": [
-      0.2054,
-      0.1168,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.165,
-     "ok": true,
-     "cube": [
-      0.2056,
-      0.1148,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.171,
-     "ok": true,
-     "cube": [
-      0.2015,
-      0.1185,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.172,
-     "ok": true,
-     "cube": [
-      0.1973,
-      0.1201,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.174,
-     "ok": true,
-     "cube": [
-      0.2029,
-      0.1182,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.169,
-     "ok": true,
-     "cube": [
-      0.2054,
-      0.1244,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.168,
-     "ok": true,
-     "cube": [
-      0.2043,
-      0.1209,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.17,
-     "ok": true,
-     "cube": [
-      0.1972,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.167,
-     "ok": true,
-     "cube": [
-      0.2153,
-      0.1267,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.167,
-     "ok": true,
-     "cube": [
-      0.2001,
-      0.1239,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.167,
-     "ok": true,
-     "cube": [
-      0.2101,
-      0.1192,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.168,
-     "ok": true,
-     "cube": [
-      0.2064,
-      0.1158,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.162,
-     "ok": true,
-     "cube": [
-      0.198,
-      0.1201,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.164,
-     "ok": true,
-     "cube": [
-      0.2051,
-      0.1195,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.164,
-     "ok": true,
-     "cube": [
-      0.1996,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.175,
-     "ok": true,
-     "cube": [
-      0.196,
-      0.1217,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.169,
-     "ok": true,
-     "cube": [
-      0.204,
-      0.1169,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.167,
-     "ok": true,
-     "cube": [
-      0.2107,
-      0.1273,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.171,
-     "ok": true,
-     "cube": [
-      0.2033,
-      0.1163,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 2.001,
-   "grip": {
-    "held": true,
-    "max_shove_n": 22.1
-   },
-   "cell_seconds": 14.3
-  },
-  {
-   "backend": "pybullet",
-   "robot": "iiwa14",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.274,
-     "ok": true,
-     "cube": [
-      0.2046,
-      0.1175,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.104,
-     "ok": true,
-     "cube": [
-      0.2106,
-      0.1115,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.2045,
-      0.117,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2034,
-      0.116,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2096,
-      0.1213,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.205,
-      0.1181,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.2043,
-      0.1235,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.098,
-     "ok": true,
-     "cube": [
-      0.2044,
-      0.1195,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.158,
-     "ok": true,
-     "cube": [
-      0.2053,
-      0.1196,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.2054,
-      0.121,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.097,
-     "ok": true,
-     "cube": [
-      0.2044,
-      0.119,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2054,
-      0.1232,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.2029,
-      0.1178,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.2071,
-      0.1175,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.207,
-      0.1211,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2082,
-      0.1207,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2037,
-      0.1236,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.2059,
-      0.1184,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2026,
-      0.1247,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.103,
-     "ok": true,
-     "cube": [
-      0.2065,
-      0.1145,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.971,
-   "grip": {
-    "held": true,
-    "max_shove_n": 21.21
-   },
-   "cell_seconds": 12.2
-  },
-  {
-   "backend": "pybullet",
-   "robot": "xarm7",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.638,
-     "ok": true,
-     "cube": [
-      0.1988,
-      0.1211,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.095,
-     "ok": true,
-     "cube": [
-      0.199,
-      0.1211,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.093,
-     "ok": true,
-     "cube": [
-      0.2039,
-      0.1164,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.09,
-     "ok": true,
-     "cube": [
-      0.2208,
-      0.0958,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.091,
-     "ok": true,
-     "cube": [
-      0.2021,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.094,
-     "ok": true,
-     "cube": [
-      0.1981,
-      0.1209,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.091,
-     "ok": true,
-     "cube": [
-      0.2272,
-      0.1372,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.092,
-     "ok": true,
-     "cube": [
-      0.2023,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.091,
-     "ok": true,
-     "cube": [
-      0.2012,
-      0.1195,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.094,
-     "ok": true,
-     "cube": [
-      0.2275,
-      0.1327,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.094,
-     "ok": true,
-     "cube": [
-      0.1981,
-      0.1205,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.089,
-     "ok": true,
-     "cube": [
-      0.2017,
-      0.1206,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.091,
-     "ok": true,
-     "cube": [
-      0.2028,
-      0.1194,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.094,
-     "ok": true,
-     "cube": [
-      0.2008,
-      0.12,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.091,
-     "ok": true,
-     "cube": [
-      0.202,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.092,
-     "ok": true,
-     "cube": [
-      0.2015,
-      0.1203,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.09,
-     "ok": true,
-     "cube": [
-      0.2011,
-      0.1204,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.09,
-     "ok": true,
-     "cube": [
-      0.1986,
-      0.1215,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.09,
-     "ok": true,
-     "cube": [
-      0.201,
-      0.1206,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.1995,
-      0.1209,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.694,
-   "grip": {
-    "held": true,
-    "max_shove_n": 18.56
-   },
-   "cell_seconds": 11.1
-  },
-  {
-   "backend": "pybullet",
-   "robot": "vx300s",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.107,
-     "ok": true,
-     "cube": [
-      0.2038,
-      0.1174,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2036,
-      0.1179,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2034,
-      0.1177,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.034,
-     "ok": true,
-     "cube": [
-      0.2031,
-      0.1171,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.034,
-     "ok": true,
-     "cube": [
-      0.2049,
-      0.121,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.034,
-     "ok": true,
-     "cube": [
-      0.2041,
-      0.1181,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.033,
-     "ok": true,
-     "cube": [
-      0.2046,
-      0.1224,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.034,
-     "ok": true,
-     "cube": [
-      0.2036,
-      0.1205,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2043,
-      0.1192,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.1977,
-      0.119,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.036,
-     "ok": true,
-     "cube": [
-      0.2055,
-      0.119,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.034,
-     "ok": true,
-     "cube": [
-      0.2044,
-      0.1219,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2043,
-      0.1176,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2047,
-      0.1185,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2033,
-      0.1196,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.033,
-     "ok": true,
-     "cube": [
-      0.203,
-      0.1197,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2033,
-      0.1215,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.035,
-     "ok": true,
-     "cube": [
-      0.2039,
-      0.1174,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.034,
-     "ok": true,
-     "cube": [
-      0.2034,
-      0.122,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.033,
-     "ok": true,
-     "cube": [
-      0.2014,
-      0.1194,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 3.235,
-   "grip": {
-    "held": true,
-    "max_shove_n": 7.51
-   },
-   "cell_seconds": 14.7
-  },
-  {
-   "backend": "pybullet",
-   "robot": "wx250s",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.078,
-     "ok": true,
-     "cube": [
-      0.1889,
-      0.1085,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.02,
-     "ok": true,
-     "cube": [
-      0.1948,
-      0.1161,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.022,
-     "ok": true,
-     "cube": [
-      0.1945,
-      0.1166,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1909,
-      0.1131,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.195,
-      0.089,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.02,
-     "ok": true,
-     "cube": [
-      0.1834,
-      0.0983,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.02,
-     "ok": true,
-     "cube": [
-      0.1954,
-      0.1278,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1874,
-      0.1003,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.022,
-     "ok": true,
-     "cube": [
-      0.1955,
-      0.0933,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.02,
-     "ok": true,
-     "cube": [
-      0.2083,
-      0.0981,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.02,
-     "ok": true,
-     "cube": [
-      0.1686,
-      0.1086,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.2077,
-      0.1047,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1869,
-      0.1109,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1897,
-      0.1017,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.196,
-      0.0885,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.018,
-     "ok": true,
-     "cube": [
-      0.2043,
-      0.0985,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1877,
-      0.1169,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1962,
-      0.111,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1987,
-      0.1188,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.019,
-     "ok": true,
-     "cube": [
-      0.1876,
-      0.1093,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.442,
-   "grip": {
-    "held": true,
-    "max_shove_n": 2.65
-   },
-   "cell_seconds": 7.0
-  },
-  {
-   "backend": "pybullet",
-   "robot": "piper",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 1.076,
-     "ok": true,
-     "cube": [
-      0.198,
-      0.1133,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.1928,
-      0.1157,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.102,
-     "ok": true,
-     "cube": [
-      0.1962,
-      0.1188,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.102,
-     "ok": true,
-     "cube": [
-      0.1957,
-      0.1163,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.1981,
-      0.1115,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.104,
-     "ok": true,
-     "cube": [
-      0.1949,
-      0.1135,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.1937,
-      0.118,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.2003,
-      0.1173,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.201,
-      0.1112,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.102,
-     "ok": true,
-     "cube": [
-      0.1911,
-      0.1186,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.1972,
-      0.1152,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.161,
-     "ok": true,
-     "cube": [
-      0.2008,
-      0.1139,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.102,
-     "ok": true,
-     "cube": [
-      0.1985,
-      0.117,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.102,
-     "ok": true,
-     "cube": [
-      0.1953,
-      0.1132,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.1988,
-      0.1167,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.2008,
-      0.117,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.1982,
-      0.1265,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.099,
-     "ok": true,
-     "cube": [
-      0.1965,
-      0.1183,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.101,
-     "ok": true,
-     "cube": [
-      0.2032,
-      0.125,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.1,
-     "ok": true,
-     "cube": [
-      0.1928,
-      0.1162,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 1.532,
-   "grip": {
-    "held": true,
-    "max_shove_n": ">20"
-   },
-   "cell_seconds": 9.1
-  },
-  {
-   "backend": "pybullet",
-   "robot": "yam",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.157,
-     "ok": true,
-     "cube": [
-      0.1741,
-      0.1345,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.042,
-     "ok": true,
-     "cube": [
-      0.1883,
-      0.1439,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.04,
-     "ok": true,
-     "cube": [
-      0.1737,
-      0.1418,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.041,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2204,
-      0.0541,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.042,
-     "ok": true,
-     "cube": [
-      0.1843,
-      0.1119,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.04,
-     "ok": true,
-     "cube": [
-      0.2101,
-      0.1244,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.04,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2142,
-      -0.0031,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.04,
-     "ok": true,
-     "cube": [
-      0.1796,
-      0.1172,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.043,
-     "ok": true,
-     "cube": [
-      0.1842,
-      0.1243,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.041,
-     "ok": true,
-     "cube": [
-      0.1851,
-      0.1196,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.041,
-     "ok": true,
-     "cube": [
-      0.204,
-      0.1232,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.042,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2005,
-      0.0524,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.044,
-     "ok": true,
-     "cube": [
-      0.1795,
-      0.1357,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.042,
-     "ok": true,
-     "cube": [
-      0.2044,
-      0.1168,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.043,
-     "ok": true,
-     "cube": [
-      0.1822,
-      0.1134,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.04,
-     "ok": true,
-     "cube": [
-      0.1841,
-      0.1152,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.043,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.1899,
-      0.047,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.052,
-     "ok": true,
-     "cube": [
-      0.1863,
-      0.1377,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.05,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.226,
-      0.0245,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.042,
-     "ok": true,
-     "cube": [
-      0.1742,
-      0.1462,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 15,
-   "n": 20,
-   "ci": [
-    0.531,
-    0.888
-   ],
-   "ms_per_step": 3.689,
-   "grip": {
-    "held": true,
-    "max_shove_n": 1.77
-   },
-   "cell_seconds": 18.8
-  },
-  {
-   "backend": "pybullet",
-   "robot": "arx_l5",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.207,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2174,
-      -0.071,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.053,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2309,
-      -0.0604,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.219,
-      -0.0829,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.052,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2043,
-      -0.066,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.051,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2239,
-      -0.058,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.053,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2178,
-      -0.0683,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.053,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2365,
-      -0.0885,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.052,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2077,
-      -0.0769,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.052,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2228,
-      -0.0797,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2279,
-      -0.0425,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.051,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.1916,
-      -0.051,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2108,
-      -0.0495,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.051,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2158,
-      -0.066,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2272,
-      -0.074,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2079,
-      -0.071,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2026,
-      -0.0697,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.054,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2029,
-      -0.0502,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.053,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2332,
-      -0.0918,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.13,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2307,
-      -0.0401,
-      0.0125
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.052,
-     "ok": false,
-     "error": "ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)",
-     "cube": [
-      0.2085,
-      -0.0589,
-      0.0125
-     ]
-    }
-   ],
-   "passed": 0,
-   "n": 20,
-   "ci": [
-    0.0,
-    0.161
-   ],
-   "ms_per_step": 1.57,
-   "grip": {
-    "held": true,
-    "max_shove_n": 0.44
-   },
-   "cell_seconds": 11.4
-  },
-  {
-   "backend": "pybullet",
-   "robot": "sawyer",
-   "kind": "arm",
-   "trials": [
-    {
-     "seed": 1000,
-     "build_s": 0.516,
-     "ok": true,
-     "cube": [
-      0.2036,
-      0.1179,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1001,
-     "build_s": 0.162,
-     "ok": true,
-     "cube": [
-      0.1964,
-      0.1238,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1002,
-     "build_s": 0.16,
-     "ok": true,
-     "cube": [
-      0.1992,
-      0.1214,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1003,
-     "build_s": 0.156,
-     "ok": true,
-     "cube": [
-      0.1943,
-      0.1268,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1004,
-     "build_s": 0.262,
-     "ok": true,
-     "cube": [
-      0.1956,
-      0.1199,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1005,
-     "build_s": 0.156,
-     "ok": true,
-     "cube": [
-      0.196,
-      0.1223,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1006,
-     "build_s": 0.159,
-     "ok": true,
-     "cube": [
-      0.1893,
-      0.1151,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1007,
-     "build_s": 0.159,
-     "ok": true,
-     "cube": [
-      0.1959,
-      0.1186,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1008,
-     "build_s": 0.201,
-     "ok": true,
-     "cube": [
-      0.1961,
-      0.1218,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1009,
-     "build_s": 0.16,
-     "ok": true,
-     "cube": [
-      0.1906,
-      0.1153,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1010,
-     "build_s": 0.159,
-     "ok": true,
-     "cube": [
-      0.1931,
-      0.1243,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1011,
-     "build_s": 0.161,
-     "ok": true,
-     "cube": [
-      0.2004,
-      0.1203,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1012,
-     "build_s": 0.165,
-     "ok": true,
-     "cube": [
-      0.1931,
-      0.1269,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1013,
-     "build_s": 0.159,
-     "ok": true,
-     "cube": [
-      0.1934,
-      0.1226,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1014,
-     "build_s": 0.159,
-     "ok": true,
-     "cube": [
-      0.1946,
-      0.1198,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1015,
-     "build_s": 0.19,
-     "ok": true,
-     "cube": [
-      0.1947,
-      0.1198,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1016,
-     "build_s": 0.162,
-     "ok": true,
-     "cube": [
-      0.194,
-      0.1153,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1017,
-     "build_s": 0.163,
-     "ok": true,
-     "cube": [
-      0.1886,
-      0.1276,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1018,
-     "build_s": 0.16,
-     "ok": true,
-     "cube": [
-      0.1885,
-      0.1103,
-      0.0185
-     ]
-    },
-    {
-     "seed": 1019,
-     "build_s": 0.223,
-     "ok": true,
-     "cube": [
-      0.2048,
-      0.1159,
-      0.0185
-     ]
-    }
-   ],
-   "passed": 20,
-   "n": 20,
-   "ci": [
-    0.839,
-    1.0
-   ],
-   "ms_per_step": 2.657,
-   "grip": {
-    "held": true,
-    "max_shove_n": 19.89
-   },
-   "cell_seconds": 16.9
-  },
-  {
-   "backend": "pybullet",
-   "robot": "go2",
-   "kind": "legged",
-   "stands": true,
-   "ms_per_step": 0.618,
-   "max_push_bw": 1.25,
-   "cell_seconds": 2.1
-  },
-  {
-   "backend": "pybullet",
-   "robot": "go1",
-   "kind": "legged",
-   "stands": true,
-   "ms_per_step": 0.675,
-   "max_push_bw": 1.09,
-   "cell_seconds": 2.2
-  },
-  {
-   "backend": "pybullet",
-   "robot": "a1",
-   "kind": "legged",
-   "stands": true,
-   "ms_per_step": 0.642,
-   "max_push_bw": 1.19,
-   "cell_seconds": 1.6
-  },
-  {
-   "backend": "pybullet",
-   "robot": "spot",
-   "kind": "legged",
-   "stands": true,
-   "ms_per_step": 0.81,
-   "max_push_bw": 1.03,
-   "cell_seconds": 2.2
-  },
-  {
-   "backend": "pybullet",
-   "robot": "anymal_c",
-   "kind": "legged",
-   "stands": true,
-   "ms_per_step": 0.646,
-   "max_push_bw": 1.62,
-   "cell_seconds": 1.4
-  },
-  {
-   "backend": "pybullet",
-   "robot": "g1",
-   "kind": "legged",
-   "stands": true,
-   "ms_per_step": 2.611,
-   "max_push_bw": 0.69,
-   "cell_seconds": 6.1
-  },
   {
    "backend": "mujoco",
    "robot": "so101",
@@ -14559,6 +11633,2907 @@
    "ms_per_step": 1.844,
    "max_push_bw": 0.62,
    "cell_seconds": 3.9
+  },
+  {
+   "backend": "pybullet",
+   "robot": "so101",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.453,
+     "ok": true,
+     "cube": [
+      0.2045,
+      0.1433,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.133,
+     "ok": true,
+     "cube": [
+      0.2063,
+      0.1388,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.129,
+     "ok": true,
+     "cube": [
+      0.2092,
+      0.1242,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.139,
+     "ok": true,
+     "cube": [
+      0.2073,
+      0.127,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.139,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.125,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.121,
+     "ok": true,
+     "cube": [
+      0.2078,
+      0.1158,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.132,
+     "ok": true,
+     "cube": [
+      0.2043,
+      0.1393,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.131,
+     "ok": true,
+     "cube": [
+      0.2021,
+      0.1297,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.131,
+     "ok": true,
+     "cube": [
+      0.1954,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.137,
+     "ok": true,
+     "cube": [
+      0.2024,
+      0.1268,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.129,
+     "ok": true,
+     "cube": [
+      0.1997,
+      0.1208,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.133,
+     "ok": true,
+     "cube": [
+      0.198,
+      0.1208,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.136,
+     "ok": true,
+     "cube": [
+      0.2048,
+      0.1325,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.135,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1195,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.13,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1192,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.131,
+     "ok": true,
+     "cube": [
+      0.1998,
+      0.1213,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.141,
+     "ok": true,
+     "cube": [
+      0.1976,
+      0.1178,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.135,
+     "ok": true,
+     "cube": [
+      0.2121,
+      0.132,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.128,
+     "ok": true,
+     "cube": [
+      0.1991,
+      0.1211,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.782,
+   "grip": {
+    "held": true,
+    "max_shove_n": ">20"
+   },
+   "cell_seconds": 10.1
+  },
+  {
+   "backend": "pybullet",
+   "robot": "panda",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.765,
+     "ok": true,
+     "cube": [
+      0.1978,
+      0.1241,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.115,
+     "ok": true,
+     "cube": [
+      0.2157,
+      0.1266,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.115,
+     "ok": true,
+     "cube": [
+      0.2006,
+      0.1169,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.118,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1249,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.112,
+     "ok": true,
+     "cube": [
+      0.2021,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.112,
+     "ok": true,
+     "cube": [
+      0.21,
+      0.1247,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.109,
+     "ok": true,
+     "cube": [
+      0.194,
+      0.1138,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.115,
+     "ok": true,
+     "cube": [
+      0.1964,
+      0.1223,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.113,
+     "ok": true,
+     "cube": [
+      0.1949,
+      0.1238,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.112,
+     "ok": true,
+     "cube": [
+      0.1962,
+      0.111,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.111,
+     "ok": true,
+     "cube": [
+      0.2168,
+      0.1207,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.112,
+     "ok": true,
+     "cube": [
+      0.2067,
+      0.1236,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.114,
+     "ok": true,
+     "cube": [
+      0.1986,
+      0.1251,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.112,
+     "ok": true,
+     "cube": [
+      0.2029,
+      0.128,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.113,
+     "ok": true,
+     "cube": [
+      0.1933,
+      0.1249,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.114,
+     "ok": true,
+     "cube": [
+      0.1961,
+      0.121,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.113,
+     "ok": true,
+     "cube": [
+      0.2014,
+      0.1178,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.116,
+     "ok": true,
+     "cube": [
+      0.202,
+      0.1177,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.115,
+     "ok": true,
+     "cube": [
+      0.1968,
+      0.1074,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.115,
+     "ok": true,
+     "cube": [
+      0.2018,
+      0.1092,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.679,
+   "grip": {
+    "held": true,
+    "max_shove_n": ">20"
+   },
+   "cell_seconds": 10.0
+  },
+  {
+   "backend": "pybullet",
+   "robot": "ur5e",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.517,
+     "ok": true,
+     "cube": [
+      0.1931,
+      0.1278,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.175,
+     "ok": true,
+     "cube": [
+      0.1941,
+      0.1268,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.174,
+     "ok": true,
+     "cube": [
+      0.1963,
+      0.1247,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.178,
+     "ok": true,
+     "cube": [
+      0.1939,
+      0.127,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.174,
+     "ok": true,
+     "cube": [
+      0.1935,
+      0.1192,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.178,
+     "ok": true,
+     "cube": [
+      0.1931,
+      0.1232,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.172,
+     "ok": true,
+     "cube": [
+      0.1956,
+      0.1164,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.171,
+     "ok": true,
+     "cube": [
+      0.1986,
+      0.1254,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.174,
+     "ok": true,
+     "cube": [
+      0.195,
+      0.1207,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.168,
+     "ok": true,
+     "cube": [
+      0.2059,
+      0.1233,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.166,
+     "ok": true,
+     "cube": [
+      0.1923,
+      0.1219,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.173,
+     "ok": true,
+     "cube": [
+      0.1975,
+      0.1183,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.171,
+     "ok": true,
+     "cube": [
+      0.194,
+      0.1233,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.167,
+     "ok": true,
+     "cube": [
+      0.1943,
+      0.1225,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.166,
+     "ok": true,
+     "cube": [
+      0.1963,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.169,
+     "ok": true,
+     "cube": [
+      0.1952,
+      0.117,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.172,
+     "ok": true,
+     "cube": [
+      0.1954,
+      0.1155,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.165,
+     "ok": true,
+     "cube": [
+      0.2006,
+      0.1189,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.169,
+     "ok": true,
+     "cube": [
+      0.1937,
+      0.1165,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.18,
+     "ok": true,
+     "cube": [
+      0.1955,
+      0.1244,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.968,
+   "grip": {
+    "held": true,
+    "max_shove_n": 16.79
+   },
+   "cell_seconds": 14.1
+  },
+  {
+   "backend": "pybullet",
+   "robot": "ur10e",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.552,
+     "ok": true,
+     "cube": [
+      0.2008,
+      0.1261,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.181,
+     "ok": true,
+     "cube": [
+      0.1919,
+      0.1255,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.178,
+     "ok": true,
+     "cube": [
+      0.1945,
+      0.1214,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.182,
+     "ok": true,
+     "cube": [
+      0.1975,
+      0.1234,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.178,
+     "ok": true,
+     "cube": [
+      0.1946,
+      0.1193,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.173,
+     "ok": true,
+     "cube": [
+      0.192,
+      0.1251,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.176,
+     "ok": true,
+     "cube": [
+      0.2063,
+      0.1231,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.175,
+     "ok": true,
+     "cube": [
+      0.2044,
+      0.1194,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.177,
+     "ok": true,
+     "cube": [
+      0.1967,
+      0.1204,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.175,
+     "ok": true,
+     "cube": [
+      0.1881,
+      0.1142,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.174,
+     "ok": true,
+     "cube": [
+      0.1893,
+      0.1224,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.176,
+     "ok": true,
+     "cube": [
+      0.2065,
+      0.1219,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.175,
+     "ok": true,
+     "cube": [
+      0.1975,
+      0.1234,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.172,
+     "ok": true,
+     "cube": [
+      0.1971,
+      0.122,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.176,
+     "ok": true,
+     "cube": [
+      0.1929,
+      0.1164,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.175,
+     "ok": true,
+     "cube": [
+      0.1945,
+      0.117,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.173,
+     "ok": true,
+     "cube": [
+      0.1931,
+      0.1151,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.178,
+     "ok": true,
+     "cube": [
+      0.2054,
+      0.1159,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.171,
+     "ok": true,
+     "cube": [
+      0.1887,
+      0.112,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.18,
+     "ok": true,
+     "cube": [
+      0.2036,
+      0.1184,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.968,
+   "grip": {
+    "held": true,
+    "max_shove_n": 17.68
+   },
+   "cell_seconds": 14.3
+  },
+  {
+   "backend": "pybullet",
+   "robot": "gen3",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.368,
+     "ok": true,
+     "cube": [
+      0.2082,
+      0.1144,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.17,
+     "ok": true,
+     "cube": [
+      0.206,
+      0.1148,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.169,
+     "ok": true,
+     "cube": [
+      0.2078,
+      0.1118,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.166,
+     "ok": true,
+     "cube": [
+      0.211,
+      0.109,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.17,
+     "ok": true,
+     "cube": [
+      0.2141,
+      0.1221,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.172,
+     "ok": true,
+     "cube": [
+      0.206,
+      0.1166,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.169,
+     "ok": true,
+     "cube": [
+      0.2055,
+      0.1237,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.17,
+     "ok": true,
+     "cube": [
+      0.2052,
+      0.1212,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.164,
+     "ok": true,
+     "cube": [
+      0.2055,
+      0.1185,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.169,
+     "ok": true,
+     "cube": [
+      0.2089,
+      0.1239,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.167,
+     "ok": true,
+     "cube": [
+      0.2007,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.168,
+     "ok": true,
+     "cube": [
+      0.2147,
+      0.1249,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.168,
+     "ok": true,
+     "cube": [
+      0.1911,
+      0.1263,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.168,
+     "ok": true,
+     "cube": [
+      0.2135,
+      0.1158,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.165,
+     "ok": true,
+     "cube": [
+      0.2076,
+      0.1183,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.164,
+     "ok": true,
+     "cube": [
+      0.205,
+      0.1212,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.166,
+     "ok": true,
+     "cube": [
+      0.2018,
+      0.1218,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.169,
+     "ok": true,
+     "cube": [
+      0.2038,
+      0.1151,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.166,
+     "ok": true,
+     "cube": [
+      0.2111,
+      0.1289,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.168,
+     "ok": true,
+     "cube": [
+      0.207,
+      0.1131,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 2.081,
+   "grip": {
+    "held": true,
+    "max_shove_n": 20.33
+   },
+   "cell_seconds": 14.5
+  },
+  {
+   "backend": "pybullet",
+   "robot": "iiwa14",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.297,
+     "ok": true,
+     "cube": [
+      0.2069,
+      0.1159,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.103,
+     "ok": true,
+     "cube": [
+      0.1989,
+      0.1191,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2052,
+      0.118,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.098,
+     "ok": true,
+     "cube": [
+      0.2046,
+      0.1148,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2055,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.107,
+     "ok": true,
+     "cube": [
+      0.2142,
+      0.1148,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.102,
+     "ok": true,
+     "cube": [
+      0.2073,
+      0.1244,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.102,
+     "ok": true,
+     "cube": [
+      0.2044,
+      0.1188,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.103,
+     "ok": true,
+     "cube": [
+      0.2048,
+      0.118,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.099,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.1,
+     "ok": true,
+     "cube": [
+      0.207,
+      0.119,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.099,
+     "ok": true,
+     "cube": [
+      0.2045,
+      0.1228,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.099,
+     "ok": true,
+     "cube": [
+      0.2041,
+      0.1169,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.103,
+     "ok": true,
+     "cube": [
+      0.2054,
+      0.1174,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2051,
+      0.1209,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.099,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1191,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.099,
+     "ok": true,
+     "cube": [
+      0.2064,
+      0.1242,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.102,
+     "ok": true,
+     "cube": [
+      0.2129,
+      0.1061,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.106,
+     "ok": true,
+     "cube": [
+      0.2119,
+      0.1298,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.099,
+     "ok": true,
+     "cube": [
+      0.2081,
+      0.1131,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 2.023,
+   "grip": {
+    "held": true,
+    "max_shove_n": 20.77
+   },
+   "cell_seconds": 12.4
+  },
+  {
+   "backend": "pybullet",
+   "robot": "xarm7",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.566,
+     "ok": true,
+     "cube": [
+      0.1992,
+      0.1208,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.098,
+     "ok": true,
+     "cube": [
+      0.1994,
+      0.1208,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.093,
+     "ok": true,
+     "cube": [
+      0.1992,
+      0.1211,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.094,
+     "ok": true,
+     "cube": [
+      0.219,
+      0.096,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.092,
+     "ok": true,
+     "cube": [
+      0.2029,
+      0.122,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.1991,
+      0.1206,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.092,
+     "ok": true,
+     "cube": [
+      0.1997,
+      0.1232,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.094,
+     "ok": true,
+     "cube": [
+      0.2032,
+      0.1212,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.093,
+     "ok": true,
+     "cube": [
+      0.2012,
+      0.1189,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.091,
+     "ok": true,
+     "cube": [
+      0.2216,
+      0.1292,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.092,
+     "ok": true,
+     "cube": [
+      0.1986,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.095,
+     "ok": true,
+     "cube": [
+      0.2009,
+      0.1215,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.094,
+     "ok": true,
+     "cube": [
+      0.2023,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.097,
+     "ok": true,
+     "cube": [
+      0.199,
+      0.1206,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.092,
+     "ok": true,
+     "cube": [
+      0.2013,
+      0.1216,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.091,
+     "ok": true,
+     "cube": [
+      0.2004,
+      0.1214,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.093,
+     "ok": true,
+     "cube": [
+      0.2008,
+      0.1213,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.094,
+     "ok": true,
+     "cube": [
+      0.1994,
+      0.1209,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.093,
+     "ok": true,
+     "cube": [
+      0.1993,
+      0.1232,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.092,
+     "ok": true,
+     "cube": [
+      0.1994,
+      0.1208,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.804,
+   "grip": {
+    "held": true,
+    "max_shove_n": 18.56
+   },
+   "cell_seconds": 11.5
+  },
+  {
+   "backend": "pybullet",
+   "robot": "vx300s",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.107,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.034,
+     "ok": true,
+     "cube": [
+      0.1996,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.033,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1206,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.037,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.035,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.037,
+     "ok": true,
+     "cube": [
+      0.1996,
+      0.1198,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.034,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.034,
+     "ok": true,
+     "cube": [
+      0.1997,
+      0.1197,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.035,
+     "ok": true,
+     "cube": [
+      0.1995,
+      0.1195,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.034,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.035,
+     "ok": true,
+     "cube": [
+      0.1997,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.036,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1197,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.036,
+     "ok": true,
+     "cube": [
+      0.1997,
+      0.1206,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.033,
+     "ok": true,
+     "cube": [
+      0.1996,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.035,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1197,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.035,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.034,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1196,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.033,
+     "ok": true,
+     "cube": [
+      0.1998,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.034,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.037,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1202,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 3.253,
+   "grip": {
+    "held": true,
+    "max_shove_n": 15.03
+   },
+   "cell_seconds": 14.8
+  },
+  {
+   "backend": "pybullet",
+   "robot": "wx250s",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.08,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.022,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.02,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2004,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.018,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.088,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.02,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1198,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.021,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.023,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.019,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1202,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.457,
+   "grip": {
+    "held": true,
+    "max_shove_n": 5.3
+   },
+   "cell_seconds": 6.9
+  },
+  {
+   "backend": "pybullet",
+   "robot": "piper",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 1.125,
+     "ok": true,
+     "cube": [
+      0.1998,
+      0.121,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2018,
+      0.118,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2013,
+      0.1189,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2029,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2013,
+      0.1204,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.1,
+     "ok": true,
+     "cube": [
+      0.2015,
+      0.1198,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.113,
+     "ok": true,
+     "cube": [
+      0.2015,
+      0.1181,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.102,
+     "ok": true,
+     "cube": [
+      0.2012,
+      0.1229,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.102,
+     "ok": true,
+     "cube": [
+      0.2013,
+      0.1209,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2072,
+      0.1152,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.102,
+     "ok": true,
+     "cube": [
+      0.2019,
+      0.122,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.103,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1208,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.105,
+     "ok": true,
+     "cube": [
+      0.2017,
+      0.1185,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.2016,
+      0.1195,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.103,
+     "ok": true,
+     "cube": [
+      0.2017,
+      0.1174,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.104,
+     "ok": true,
+     "cube": [
+      0.2005,
+      0.1197,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.105,
+     "ok": true,
+     "cube": [
+      0.1988,
+      0.119,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.1,
+     "ok": true,
+     "cube": [
+      0.2025,
+      0.125,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.101,
+     "ok": true,
+     "cube": [
+      0.1992,
+      0.1127,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.1,
+     "ok": true,
+     "cube": [
+      0.2015,
+      0.1208,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 1.586,
+   "grip": {
+    "held": true,
+    "max_shove_n": ">20"
+   },
+   "cell_seconds": 9.4
+  },
+  {
+   "backend": "pybullet",
+   "robot": "yam",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.154,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.042,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1204,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.04,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.041,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.041,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.041,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.041,
+     "ok": true,
+     "cube": [
+      0.2004,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.041,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1198,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.042,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.042,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1198,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.042,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.044,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.043,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.041,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.043,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1198,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.042,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.043,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.043,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.046,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.043,
+     "ok": true,
+     "cube": [
+      0.1999,
+      0.12,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 4.269,
+   "grip": {
+    "held": true,
+    "max_shove_n": 4.42
+   },
+   "cell_seconds": 18.6
+  },
+  {
+   "backend": "pybullet",
+   "robot": "arx_l5",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.201,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.054,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.053,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1203,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.054,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.053,
+     "ok": true,
+     "cube": [
+      0.2004,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.055,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.051,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.051,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1201,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.056,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.12,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.051,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.052,
+     "ok": true,
+     "cube": [
+      0.2001,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.055,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1202,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.053,
+     "ok": true,
+     "cube": [
+      0.2002,
+      0.1203,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 2.322,
+   "grip": {
+    "held": true,
+    "max_shove_n": 1.77
+   },
+   "cell_seconds": 11.0
+  },
+  {
+   "backend": "pybullet",
+   "robot": "sawyer",
+   "kind": "arm",
+   "trials": [
+    {
+     "seed": 1000,
+     "build_s": 0.518,
+     "ok": true,
+     "cube": [
+      0.1859,
+      0.1298,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1001,
+     "build_s": 0.163,
+     "ok": true,
+     "cube": [
+      0.1873,
+      0.128,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1002,
+     "build_s": 0.157,
+     "ok": true,
+     "cube": [
+      0.197,
+      0.1214,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1003,
+     "build_s": 0.157,
+     "ok": true,
+     "cube": [
+      0.2015,
+      0.1188,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1004,
+     "build_s": 0.206,
+     "ok": true,
+     "cube": [
+      0.1875,
+      0.1185,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1005,
+     "build_s": 0.161,
+     "ok": true,
+     "cube": [
+      0.1944,
+      0.1231,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1006,
+     "build_s": 0.159,
+     "ok": true,
+     "cube": [
+      0.1932,
+      0.116,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1007,
+     "build_s": 0.159,
+     "ok": true,
+     "cube": [
+      0.1959,
+      0.1216,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1008,
+     "build_s": 0.159,
+     "ok": true,
+     "cube": [
+      0.1855,
+      0.1241,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1009,
+     "build_s": 0.158,
+     "ok": true,
+     "cube": [
+      0.1951,
+      0.1177,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1010,
+     "build_s": 0.159,
+     "ok": true,
+     "cube": [
+      0.1959,
+      0.1219,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1011,
+     "build_s": 0.162,
+     "ok": true,
+     "cube": [
+      0.194,
+      0.1166,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1012,
+     "build_s": 0.159,
+     "ok": true,
+     "cube": [
+      0.2003,
+      0.1199,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1013,
+     "build_s": 0.16,
+     "ok": true,
+     "cube": [
+      0.185,
+      0.1257,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1014,
+     "build_s": 0.158,
+     "ok": true,
+     "cube": [
+      0.1935,
+      0.1187,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1015,
+     "build_s": 0.162,
+     "ok": true,
+     "cube": [
+      0.1945,
+      0.1171,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1016,
+     "build_s": 0.198,
+     "ok": true,
+     "cube": [
+      0.196,
+      0.1157,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1017,
+     "build_s": 0.166,
+     "ok": true,
+     "cube": [
+      0.1965,
+      0.1235,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1018,
+     "build_s": 0.158,
+     "ok": true,
+     "cube": [
+      0.1952,
+      0.1171,
+      0.0185
+     ]
+    },
+    {
+     "seed": 1019,
+     "build_s": 0.161,
+     "ok": true,
+     "cube": [
+      0.1948,
+      0.1249,
+      0.0185
+     ]
+    }
+   ],
+   "passed": 20,
+   "n": 20,
+   "ci": [
+    0.839,
+    1.0
+   ],
+   "ms_per_step": 2.71,
+   "grip": {
+    "held": true,
+    "max_shove_n": 17.68
+   },
+   "cell_seconds": 16.9
+  },
+  {
+   "backend": "pybullet",
+   "robot": "go2",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.729,
+   "max_push_bw": 1.25,
+   "cell_seconds": 2.1
+  },
+  {
+   "backend": "pybullet",
+   "robot": "go1",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.704,
+   "max_push_bw": 1.09,
+   "cell_seconds": 2.2
+  },
+  {
+   "backend": "pybullet",
+   "robot": "a1",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.692,
+   "max_push_bw": 1.19,
+   "cell_seconds": 1.8
+  },
+  {
+   "backend": "pybullet",
+   "robot": "spot",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.687,
+   "max_push_bw": 1.03,
+   "cell_seconds": 2.2
+  },
+  {
+   "backend": "pybullet",
+   "robot": "anymal_c",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 0.7,
+   "max_push_bw": 1.62,
+   "cell_seconds": 1.4
+  },
+  {
+   "backend": "pybullet",
+   "robot": "g1",
+   "kind": "legged",
+   "stands": true,
+   "ms_per_step": 2.661,
+   "max_push_bw": 0.69,
+   "cell_seconds": 6.0
   }
  ],
  "env_extra": {
@@ -14579,7 +14554,7 @@
    "os": "Linux 6.17.13-2-pve",
    "mujoco": "3.14.0",
    "robowright": "0.1.0.dev0",
-   "date": "2026-10-03",
+   "date": "2026-10-04",
    "pybullet": "installed"
   },
   "drake": {
@@ -14613,19 +14588,6 @@
   }
  },
  "agreement": {
-  "so101/pybullet": 5.5,
-  "panda/pybullet": 7.1,
-  "ur5e/pybullet": 4.6,
-  "ur10e/pybullet": 6.3,
-  "gen3/pybullet": 8.2,
-  "iiwa14/pybullet": 12.2,
-  "xarm7/pybullet": 2.1,
-  "vx300s/pybullet": 3.3,
-  "wx250s/pybullet": 16.6,
-  "piper/pybullet": 9.9,
-  "yam/pybullet": 23.1,
-  "arx_l5/pybullet": 188.3,
-  "sawyer/pybullet": 5.8,
   "so101/drake": 6.9,
   "panda/drake": 17.7,
   "ur5e/drake": 0.2,
@@ -14664,6 +14626,19 @@
   "piper/isaac": 4.7,
   "yam/isaac": 3.4,
   "arx_l5/isaac": 1.8,
-  "sawyer/isaac": 0.5
+  "sawyer/isaac": 0.5,
+  "so101/pybullet": 6.6,
+  "panda/pybullet": 6.9,
+  "ur5e/pybullet": 6.3,
+  "ur10e/pybullet": 6.5,
+  "gen3/pybullet": 9.9,
+  "iiwa14/pybullet": 11.7,
+  "xarm7/pybullet": 2.3,
+  "vx300s/pybullet": 3.4,
+  "wx250s/pybullet": 0.6,
+  "piper/pybullet": 4.8,
+  "yam/pybullet": 1.1,
+  "arx_l5/pybullet": 1.7,
+  "sawyer/pybullet": 6.2
  }
 }

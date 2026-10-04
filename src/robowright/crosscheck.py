@@ -89,7 +89,18 @@ def crosscheck(trace: str | Path | Trace, backend: str) -> CrossCheck:
         for i, n in enumerate(names)
         if n in captured.get("objects", {}) and not tr.scene().object(n).static
     }
-    return CrossCheck(tr.meta["backend"], backend, tr.meta["status"], error is None, error, offsets)
+    return CrossCheck(tr.meta["backend"], backend, _replayed_status(tr), error is None, error, offsets)
+
+
+def _replayed_status(tr: Trace) -> str:
+    """How the calls that are replayed went on the source engine.
+
+    The replay stops at, and makes, the first call that failed. That call can have failed even in a
+    run whose status is "passed": a test that expected the failure and caught it. Judged by the
+    run's status, such a call passing on the other engine read as agreement.
+    """
+    failed = any(e.get("status") == "failed" and e.get("type") != "violation" for e in tr.events)
+    return "failed" if failed else tr.meta["status"]
 
 
 def _no_trace(settings):

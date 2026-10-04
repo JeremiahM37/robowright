@@ -9,19 +9,14 @@ Each reason is what the trace showed.
 
 import pytest
 
-WEAK_GRIP = (
-    "MuJoCo Menagerie's model of this gripper squeezes {force}; MuJoCo's soft elliptic friction "
-    "still holds a 30 g cube, PyBullet's contact model lets it slip"
-)
-# The PiPER is no longer here: robowright drives it with its datasheet's 40 N (RobotModel.grip_force).
+# PyBullet once dropped cubes from every light gripper here (PiPER, ARX L5, YAM, WidowX), recorded
+# as its contact model letting a weak grip slip. None of it was the contact model: the PiPER is now
+# driven at its datasheet's 40 N; the rest were robowright driving PyBullet's arm in a staircase (a
+# velocity spike each control step) and coupling sliding fingers by a second motor that let the
+# pair drift sideways. Both are fixed in the PyBullet backend.
 _SLIDE = {"arx_l5": "0.9 N", "yam": "1.9 N", "wx250s": "2.2 N"}
 
 KNOWN: dict[tuple[str, str, str], str] = {}
-for robot, force in _SLIDE.items():
-    for test in ("test_policy_with_randomized_cube", "test_policy_with_sensor_noise_and_latency"):
-        KNOWN[(test, "pybullet", robot)] = WEAK_GRIP.format(force=force)
-for test in ("test_pick_and_place", "test_places_a_second_object_beside_the_first"):
-    KNOWN[(test, "pybullet", "arx_l5")] = WEAK_GRIP.format(force=_SLIDE["arx_l5"])
 KNOWN[("test_places_a_second_object_beside_the_first", "genesis", "piper")] = (
     "Genesis couples the PiPER's second finger through a soft mimic constraint: closing at the datasheet's 40 N "
     "it lags and shoves the second cube 2.3 cm aside, so pick raises GraspError (stiffening the constraint makes "

@@ -29,6 +29,7 @@ from .mujoco_backend import bin_walls
 POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error corrected per step
 GRAVITY = 9.81
 ARMATURE_FLOOR = 2e-3  # kg m^2, see __init__
+GEAR_FORCE = 1000.0  # N or N m: a finger linkage's gear constraint is effectively rigid
 
 
 @register("pybullet")
@@ -80,22 +81,41 @@ class PybulletBackend(Backend):
         # Servo model: arm joints from the MuJoCo actuators; every finger joint follows its calibration.
         self._arm = [joints[urdf._safe(n)] for n in rm.arm_joints]
         self._links_j = []
+        self._geared = []
         if self.has_gripper:
             g = meta["gripper"]
             driven = g["driven"]
             linkage = [n for n in g["joints"] if n not in driven]
             self._fingers = [joints[urdf._safe(n)] for n in driven]
             self._finger_q = np.array([g["joints"][n] for n in driven])  # (k, 2): closed, open
-            self._finger_force = np.array([g["effort"][n] for n in driven])
             # The model's closing pace, as the motors' velocity limit (0: none recorded).
             self._finger_speed = [float(g.get("speed", {}).get(n, 0.0)) for n in driven]
-            # Linkage joints follow the first driven joint's measured travel, as MuJoCo's
-            # equality constraints make them; commanding them separately tilts blocked pads.
+            # A sliding finger is tied to the driven one by a gear constraint, as MuJoCo's joint
+            # equality (and Genesis's and Isaac Sim's mimic joints) ties it. It used to be a second
+            # motor told to follow: with both fingers at their force limit nothing held the pair
+            # centred, and a sideways load slid fingers and cube along the jaw together until a
+            # finger hit its stop (the YAM's policy runs, 0/20). Revolute linkages (Robotiq, xArm)
+            # keep following by motor: geared, the Robotiq 2F-85's six-joint linkage jammed open.
             self._ref = self._fingers[0]
-            self._ref_q = g["joints"][driven[0]]
-            self._links_j = [joints[urdf._safe(n)] for n in linkage]
-            self._links_q = np.array([g["joints"][n] for n in linkage]).reshape(-1, 2)
-            self._links_force = [g["effort"][n] for n in linkage]
+            self._ref_q = rc, ro = g["joints"][driven[0]]
+            slide = lambda n: meta["joints"][n]["type"] == "slide"  # noqa: E731
+            geared = [n for n in linkage if slide(n) and slide(driven[0])]
+            follow = [n for n in linkage if n not in geared]
+            self._links_j = [joints[urdf._safe(n)] for n in follow]
+            self._links_q = np.array([g["joints"][n] for n in follow]).reshape(-1, 2)
+            self._links_force = [g["effort"][n] for n in follow]
+            # A passive linkage is moved by the drivers: they need both fingers' force.
+            effort = g.get("coupled_effort", g["effort"]) if geared and not follow else g["effort"]
+            self._finger_force = np.array([effort.get(n, g["effort"][n]) for n in driven])
+            self._geared = [(joints[urdf._safe(n)], *g["joints"][n]) for n in geared]
+            for j, lc, lo in self._geared:
+                k = (lo - lc) / (ro - rc)
+                p.setJointMotorControl2(self.robot, j, p.VELOCITY_CONTROL, force=0, physicsClientId=c)
+                gear = p.createConstraint(
+                    self.robot, self._ref, self.robot, j, p.JOINT_GEAR, [1, 0, 0], [0, 0, 0], [0, 0, 0], physicsClientId=c
+                )
+                # Bullet holds ratio * q_ref + q = target.
+                p.changeConstraint(gear, gearRatio=-k, relativePositionTarget=lc - k * rc, maxForce=GEAR_FORCE, physicsClientId=c)
             self._main = joints[urdf._safe(g["main"])]
             self._main_q = g["joints"][g["main"]]
         self._arm_force = np.array([meta["joints"][n]["effort"] for n in rm.arm_joints])
@@ -143,6 +163,7 @@ class PybulletBackend(Backend):
         lip, lio = p.getDynamicsInfo(self.robot, -1, physicsClientId=c)[3:5]
         self._com_in_base = (lip, lio)  # PyBullet reports a floating base at its centre of mass
         self._ctrl = np.zeros(len(self.joint_names))
+        self._arm_from = None  # where the arm's target ramps from during this control step
         self._bodies: dict[str, int] = {}
         for o in spec.objects:
             self._bodies[o.name] = self._make_object(o)
@@ -214,26 +235,10 @@ class PybulletBackend(Backend):
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
         if not self.has_gripper:
             self._ctrl = arm
-            p.setJointMotorControlArray(
-                self.robot,
-                self._arm,
-                p.POSITION_CONTROL,
-                targetPositions=list(arm),
-                forces=list(self._arm_force),
-                positionGains=list(self._gain),
-                physicsClientId=self.cid,
-            )
+            self._command_arm()
             return
         self._ctrl = np.append(arm, np.clip(target[self.n_arm], 0, 1))
-        p.setJointMotorControlArray(
-            self.robot,
-            self._arm,
-            p.POSITION_CONTROL,
-            targetPositions=list(self._ctrl[: self.n_arm]),
-            forces=list(self._arm_force),
-            positionGains=list(self._gain),
-            physicsClientId=self.cid,
-        )
+        self._command_arm()
         for j, q, f, v in zip(self._fingers, self._finger_targets(self._ctrl[-1]), self._finger_force, self._finger_speed):
             kw = {"maxVelocity": v} if v > 0 else {}
             p.setJointMotorControl2(
@@ -247,6 +252,40 @@ class PybulletBackend(Backend):
                 **kw,
             )
 
+    def _command_arm(self) -> None:
+        if self._arm_from is None:  # placed, not moved: nothing to ramp from
+            self._arm_from = self._ctrl[: self.n_arm].copy()
+        self._ramp(1.0)
+
+    def _ramp(self, frac: float) -> None:
+        """Command the arm a ``frac`` of the way along this control step's move.
+
+        A PyBullet position motor closes a fixed fraction of its error every substep, so a target
+        that jumps once per control step moved the arm in a staircase: a velocity spike several
+        times the commanded speed (27 m/s^2 against MuJoCo's 5 on the same policy), then a coast.
+        A held object has to follow each spike by friction alone, and the light grippers could
+        not: the ARX L5 lost its cube on every lift (0/20), though it held still and at slow speed.
+        Ramping the target across the substeps, with the ramp's velocity as feed-forward, moves the
+        arm at the commanded speed, as a servo's interpolator does. (Modelling MuJoCo's kp/kv servo
+        per joint instead, without the coupling between joints, overshot on the light SO-101 and
+        knocked cubes aside as it came down: 8/12 policy runs, against 12/12 with the ramp.)
+        """
+        a, b = self._arm_from, self._ctrl[: self.n_arm]
+        self._sq, self._sv = a + frac * (b - a), (b - a) / self.control_dt
+        self._drive_arm()
+
+    def _drive_arm(self) -> None:
+        p.setJointMotorControlArray(
+            self.robot,
+            self._arm,
+            p.POSITION_CONTROL,
+            targetPositions=list(self._sq),
+            targetVelocities=list(self._sv),
+            forces=list(self._arm_force),
+            positionGains=list(self._gain),
+            physicsClientId=self.cid,
+        )
+
     def ctrl(self):
         return self._ctrl.copy()
 
@@ -256,6 +295,7 @@ class PybulletBackend(Backend):
 
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
+        self._arm_from = None  # placed, not moved: no ramp
         for j, v in zip(self._arm, q[: self.n_arm]):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
         if not self.has_gripper:
@@ -264,7 +304,7 @@ class PybulletBackend(Backend):
         for j, v in zip(self._fingers, self._finger_targets(q[-1])):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
         s = float(np.clip(q[-1], 0, 1))
-        for j, (c, o) in zip(self._links_j, self._links_q):
+        for j, (c, o) in [*zip(self._links_j, self._links_q), *((j, (c, o)) for j, c, o in self._geared)]:
             p.resetJointState(self.robot, j, float(c + s * (o - c)), 0.0, physicsClientId=self.cid)
         self.set_ctrl(q)
         self._follow()
@@ -310,7 +350,8 @@ class PybulletBackend(Backend):
     # time
     def step(self):
         c = self.cid
-        for _ in range(self._substeps):
+        for k in range(self._substeps):
+            self._ramp((k + 1) / self._substeps)
             self._follow()
             # Gravity compensation: hold each robot link up at its centre of mass.
             for j, weight in self._weights:
@@ -326,6 +367,7 @@ class PybulletBackend(Backend):
                 p.applyExternalForce(body, -1, f.tolist(), pos, p.WORLD_FRAME, physicsClientId=self.cid)
             p.stepSimulation(physicsClientId=self.cid)
         self._pending = {}
+        self._arm_from = self._ctrl[: self.n_arm].copy()  # the ramp has arrived
         self._t += self._substeps * self.spec.dt
 
     @property

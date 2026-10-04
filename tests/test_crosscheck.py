@@ -24,17 +24,16 @@ def test_an_outcome_both_engines_share(tmp_path):
 
 
 def test_an_outcome_that_depends_on_the_engine(tmp_path):
-    """A policy run on the WidowX: its 2.2 N grip holds the cube in MuJoCo; PyBullet's contacts let it slip."""
+    """A shove on the WidowX's 2.2 N grip: MuJoCo lets the cube go, PyBullet's stiffer contacts keep it."""
     pytest.importorskip("pybullet")
-    from robowright import condition
-    from robowright.policies import ScriptedPickPlace
-
     s = rw.Settings(trace="on", trace_dir=str(tmp_path))
-    with rw.launch(robot="wx250s", seed=0, name="wx", settings=s) as w:
+    with rw.launch(robot="wx250s", name="wx", settings=s) as w:
         w.robot.reset_to()
-        w.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
-        done = condition(w.scene["cube"], "to_be_inside", w.scene["bin"])
-        assert w.robot.run_policy(ScriptedPickPlace(), until=done, hold=1.0, timeout=15, privileged=True).success
+        w.robot.pick(w.scene["cube"])
+        w.faults.push("cube", force=(0.0, 1.5, 0.0), duration=0.1)
+        w.wait(0.5)
+        with pytest.raises(rw.ExpectationError):
+            expect(w.robot.gripper).to_be_holding(w.scene["cube"])
     r = crosscheck(w.trace_path, "pybullet")
-    assert not r.passed and not r.agrees
+    assert r.passed and not r.agrees, r.summary()
     assert "VERDICTS DIFFER" in r.summary()

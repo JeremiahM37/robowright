@@ -325,10 +325,13 @@ A run that passes on one engine may only pass because of that engine's contact m
 `crosscheck` makes a trace's calls again on another engine, from the same scene and seed,
 and compares the verdict and where each object ended up:
 
+Here a WidowX holds a cube, a 1.5 N shove hits it, and the test expects it still held. Its
+2.2 N grip lets go in MuJoCo; PyBullet's stiffer contacts keep it:
+
 ```console
-$ robowright crosscheck widowx_policy.zip --backend pybullet
-pybullet: fails (AssertionError: <Rollout success=False steps=750 sim=15.00s>); on mujoco it passed
-  cube ends 171.1 mm from where it did on mujoco
+$ robowright crosscheck widowx_shove.zip --backend pybullet
+pybullet: passes; on mujoco it failed
+  cube ends 111.0 mm from where it did on mujoco
 VERDICTS DIFFER: the outcome depends on the engine
 ```
 
@@ -382,8 +385,8 @@ the full tables are in [MATRIX.md](MATRIX.md).
 | Trossen ViperX 300 S (ALOHA) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Trossen WidowX 250 S (Bridge) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | AgileX PiPER | 20/20 | 20/20 | 20/20 | 14/20 ⚠️ | 20/20 |
-| I2RT YAM | 20/20 | 15/20 ⚠️ | 20/20 | 20/20 | 20/20 |
-| ARX L5 | 20/20 | 0/20 ❌ | 20/20 | 20/20 | 20/20 |
+| I2RT YAM | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| ARX L5 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Rethink Sawyer + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | *legged: stands, and recovers from a sideways shove of 0.59–1.62× body weight* | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
 
@@ -409,19 +412,37 @@ What running everything on everything turned up:
   because its mimic constraints are soft. Grippers with no published figure
   (Trossen, I2RT, ARX, SO-101) squeeze as modelled: 0.9–2.2 N on the low-cost slide grippers.
   The PiPER went from 0/20 to 20/20 in PyBullet once it pressed at its rated 40 N instead of
-  0.25 N. MuJoCo's, Drake's, Genesis's and PhysX's contacts still hold a 30 g cube at the
-  modelled forces; PyBullet's drop it from the ARX L5 every time and from the YAM a quarter
-  of the time.
+  0.25 N; every engine holds a 30 g cube in the others at their modelled forces.
 - **Contact models disagree by millimetres.** Same robot, same seed, same commands: Isaac
   Sim, Genesis and Drake put the cube within about 1 mm of MuJoCo's final position on about
-  half the arms and within 11 mm on nearly all; PyBullet within 2–23 mm, and 19 cm on the
-  ARX L5, where the cube fell. Where Genesis misses a grasp the median moves to 27–29 mm.
+  half the arms and within 11 mm on nearly all; PyBullet within 0.6–12 mm. Where Genesis
+  misses a grasp the median moves to 27–29 mm.
 - **Engine-specific grasp failures.** Holding the cube in a Robotiq 2F-85 on the iiwa,
   Genesis lets it slide out slowly during transport (15/20); the other engines hold it.
   Genesis also couples the PiPER's second finger through a soft mimic constraint, which lags
   at the datasheet's 40 N and pushes the cube out of the jaws before they meet (14/20, each
   failure a `GraspError`); stiffening that constraint made Genesis knock the cube away
   outright, so it stays a recorded divergence rather than a per-engine tweak.
+- **"PyBullet's contacts let weak grips slip" was robowright's bug.** The matrix had PyBullet
+  dropping the cube from the ARX L5 every time and from the YAM a quarter of the time, and the
+  divergence registry blamed its contact model. Measured, PyBullet pressed *harder* than MuJoCo
+  (0.88 N per pad against 0.25 N), held the cube perfectly while still, and held it lifting at
+  1 cm/s. Two things in robowright's PyBullet backend were dropping it:
+  - The arm moved in a staircase. A PyBullet position motor closes a fixed fraction of its
+    error per substep, so a new target each control step made the arm leap to several times
+    the commanded speed and coast (27 m/s² peak against MuJoCo's 5, same policy); the light
+    grip lost contact on every leap. Targets are now ramped across the substeps with velocity
+    feed-forward, as a servo's interpolator does.
+  - The second sliding finger was a separate motor told to follow the first. With both at
+    their force limit nothing kept the pair centred, so a sideways load slid fingers and cube
+    along the jaw together until one finger hit its stop. Sliding fingers are now tied by a
+    gear constraint, as MuJoCo's joint equality and Genesis's and Isaac Sim's mimic joints tie
+    them. Revolute linkages keep following by motor: geared, the Robotiq 2F-85's jammed open.
+
+  The ARX L5 went from 0/20 to 20/20 and the YAM from 15/20 to 20/20; PyBullet now agrees with
+  MuJoCo on every arm, and all eight "weak grip" entries left the registry. A model of MuJoCo's
+  kp/kv servo per joint was tried first and dropped: without the coupling between joints it
+  overshot on the light SO-101 and knocked cubes aside (8/12 policy runs; 12/12 with the ramp).
 - **Fixes needed to match MuJoCo:**
   - PyBullet multiplies friction coefficients where MuJoCo takes the larger, and folding
     MuJoCo's armature into PyBullet's link inertia made arms fling held objects.
