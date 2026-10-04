@@ -608,6 +608,47 @@ class DrakeBackend(Backend):
         self.simulator.Initialize()
 
 
+# Collision hulls are simplified to within this distance (m) of the full hull, from inside:
+# far below the millimetre a grasp sinks into a soft object.
+HULL_TOLERANCE = 5e-5
+
+
+def _simplified_hull(v: np.ndarray, tol: float):
+    """Vertices and triangles of a convex hull within ``tol`` of ``v``'s hull (inside it).
+
+    Quickhull with a tolerance: start from extreme points and, each round, add for every
+    face the vertex farthest outside it, until none is more than ``tol`` outside.
+    """
+    from scipy.spatial import ConvexHull
+
+    P = v[ConvexHull(v).vertices]
+    dirs = np.vstack([np.eye(3), -np.eye(3), np.random.default_rng(0).normal(size=(8, 3))])
+    keep = np.zeros(len(P), bool)
+    keep[[int(np.argmax(P @ d)) for d in dirs]] = True
+    while True:
+        h = ConvexHull(P[keep])
+        out = P @ h.equations[:, :3].T + h.equations[:, 3]  # (vertices, faces): distance outside
+        far = out.argmax(axis=0)[out.max(axis=0) > tol]
+        if not len(far):
+            return P[keep], h.simplices
+        keep[far] = True
+
+
+def _write_hull(src: Path, dst: Path, pid: int) -> None:
+    if dst.exists():
+        return
+    v = np.array([[float(x) for x in line.split()[1:4]] for line in src.read_text().splitlines() if line.startswith("v ")])
+    try:
+        v, faces = _simplified_hull(v, HULL_TOLERANCE)
+    except Exception:  # flat or degenerate: Drake hulls the original itself
+        dst.write_bytes(src.read_bytes())
+        return
+    lines = [f"v {a:.9g} {b:.9g} {c:.9g}" for a, b, c in v] + [f"f {a + 1} {b + 1} {c + 1}" for a, b, c in faces]
+    tmp = dst.with_name(f"{dst.name}.{pid}.tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(dst)
+
+
 def _drake_urdf(path: Path) -> Path:
     """The exported URDF, adapted for Drake; built once, next to the export.
 
@@ -615,10 +656,15 @@ def _drake_urdf(path: Path) -> Path:
       convex hull; Drake would otherwise use the hull for point contact but the
       true, concave surface for hydroelastic contact, where a cube can lodge in
       a jaw's hollow and be carried off when the gripper opens.
+    * Collision meshes are given as a simplified hull, within ``HULL_TOLERANCE`` of the
+      full one and inside it. Drake meshes the hull for hydroelastic contact, and
+      a hull wrapped round a finely tessellated curve has thousands of faces: the
+      SO-101's moving jaw had 6852, which made a grip on the cube 759 contact
+      polygons and every Drake step 4-9x the cost of the other arms'.
     * Visual meshes get vertex normals: Drake's VTK renderer refuses OBJ files
       without them, and the export writes only what collision needs.
     """
-    out = path.with_name("robot_drake.urdf")
+    out = path.with_name(f"robot_drake.hull{HULL_TOLERANCE * 1e6:.0f}um.urdf")
     if out.exists():
         return out
     pid = os.getpid()
@@ -648,12 +694,17 @@ def _drake_urdf(path: Path) -> Path:
         tmp = dst.with_name(f"{dst.name}.{pid}.tmp")
         tmp.write_text("\n".join(lines) + "\n")
         tmp.replace(dst)
+    hull_dir = path.parent / f"meshes_hull{HULL_TOLERANCE * 1e6:.0f}um"
+    hull_dir.mkdir(exist_ok=True)
     ET.register_namespace("drake", _DRAKE_NS)
     root = ET.parse(path).getroot()
     for kind in ("collision", "visual"):
         for mesh in root.iter(kind):
             for m in mesh.iter("mesh"):
                 if kind == "collision":
+                    name = Path(m.get("filename")).name
+                    _write_hull(path.parent / "meshes" / name, hull_dir / name, pid)
+                    m.set("filename", f"{hull_dir.name}/{name}")
                     ET.SubElement(m, f"{{{_DRAKE_NS}}}declare_convex")
                 else:
                     m.set("filename", m.get("filename").replace("meshes/", "meshes_vn/", 1))

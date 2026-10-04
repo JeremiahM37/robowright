@@ -31,7 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 pybullet = ["pybullet>=3.2.6"]
 genesis = ["genesis-world>=1.4", "torch>=2.4"]
-drake = ["drake>=1.30; python_version >= '3.12'"]
+drake = ["drake>=1.30; python_version >= '3.12'", "scipy>=1.10"]
 video = ["imageio>=2.31", "imageio-ffmpeg>=0.4"]
 mcp = ["mcp>=1.2"]
 dev = ["pybullet>=3.2.6", "pytest-xdist>=3", "ruff>=0.5", "imageio>=2.31", "imageio-ffmpeg>=0.4", "mcp>=1.2"]

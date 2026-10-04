@@ -88,8 +88,8 @@ class Backend(ABC):
     name: str = "base"
     capabilities: frozenset = frozenset()
     # Whether a closed world's backend may be kept and restored for the next world with the same
-    # scene (see :func:`create`). Needs STATE, and a restore that leaves nothing behind: every
-    # reusing backend is checked bit-for-bit against a fresh build in tests/test_backends.py.
+    # scene (see :func:`create`). Needs a restore that leaves nothing behind: every
+    # reusing backend is checked bit-for-bit against a fresh build in tests/test_reuse.py.
     reusable: bool = False
     # One scene per process (Isaac Sim has one stage): building another closes the kept ones.
     exclusive: bool = False
@@ -185,6 +185,11 @@ class Backend(ABC):
     def close(self) -> None:
         pass
 
+    def _snapshot_built(self) -> None:
+        """Remember the as-built state, for :meth:`_reuse`."""
+        if STATE in self.capabilities:
+            self._built = self.get_state()
+
     def _reuse(self, seed: int) -> None:
         """Put a kept backend back exactly as it was built: gains, pending forces, state."""
         self.seed = seed
@@ -238,10 +243,9 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
         for k in [k for k in _KEPT if k[0] == name]:
             _KEPT.pop(k).close()
     b = cls(spec, seed=seed, **kw)
-    if STATE in cls.capabilities:
-        # Captured on every build, kept or not: on Genesis and Isaac a capture snaps the simulation
-        # onto the captured state, so a kept scene and a new one must both have taken it.
-        b._built = b.get_state()
+    # Captured on every build, kept or not: on Genesis and Isaac a capture snaps the simulation
+    # onto the captured state, so a kept scene and a new one must both have taken it.
+    b._snapshot_built()
     if key:
         b._key = key
     return b

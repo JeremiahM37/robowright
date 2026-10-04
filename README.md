@@ -540,13 +540,22 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
   | | before | after |
   |---|---:|---:|
   | Genesis (2 workers) | 1114 s | 319 s |
-  | Drake (4 workers) | 344 s | 270 s |
+  | Drake (4 workers) | 344 s | 270 s; 249 s with the hulls below |
   | MuJoCo (4 workers) | 53 s | 53 s |
-  | Isaac Sim (1 process) | 607 s | 596 s |
+  | Isaac Sim | 607 s (1 process) | 596 s; 491 s on 2 workers (25 GB peak) |
 
-  MuJoCo builds too quickly to gain, and Isaac Sim gained only 2%. PyBullet has no
-  state save, so it builds every world, and grouping only unbalances its workers: leave
-  `--dist loadgroup` off for it.
+  MuJoCo builds too quickly to gain, and Isaac Sim gained only 2%. PyBullet builds every
+  world: its in-memory `restoreState` replays the physics bit for bit, but its EGL renderer
+  kept stale link poses (a restored YAM's camera frame differed from a new build's), so it
+  is not reused, and grouping only unbalances its workers: leave `--dist loadgroup` off for
+  it. The reuse test compares a final camera frame as well as every step's positions.
+- **Drake collision hulls:** Drake meshes a collision hull for hydroelastic contact, and a
+  hull wrapped around a finely tessellated curve has thousands of faces. The SO-101's moving
+  jaw had 6,852, so one grip on the cube became 759 contact polygons and the SO-101 cost
+  8.2 ms per control step against 3.2–6.0 ms for the other arms. Drake now gets each hull
+  simplified to within 0.05 mm of the full one (from inside; a grasp sinks about 1 mm into
+  the cube): 3.8 ms per step, with every matrix cell still 20/20 and the cube's landing
+  spot moved by 0.1 mm on the SO-101 and not at all on the other arms.
 - **Parallel runs:** 64 randomised tests take 13.1 s on one worker and 4.7 s on four pytest-xdist workers (2.8x).
 - **Invariants:** two `expect(...).always` invariants add 14 µs to each 33 µs control step; an IK solve costs 0.35 ms.
 - **Fault curves:** the reference policy still passes 20/20 with 0.06 rad of encoder noise, 13/20 at 0.09 rad and 0/20 at 0.12 rad; with the shoulder servo's gain cut to 2% it passes 13/20, at 0.5% 3/20. Those are the curves `@pytest.mark.trials` exists to guard.

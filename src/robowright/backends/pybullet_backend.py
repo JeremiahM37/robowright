@@ -35,6 +35,9 @@ GEAR_FORCE = 1000.0  # N or N m: a finger linkage's gear constraint is effective
 @register("pybullet")
 class PybulletBackend(Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, DETERMINISTIC, FORCES})
+    # Not reusable: after p.restoreState the physics replays bit for bit, but the EGL renderer
+    # keeps stale link poses (a restored YAM's camera image differs from a new build's), and
+    # suites that rendered from restored worlds lost xdist workers.
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)

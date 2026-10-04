@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import robowright as rw
+from robowright.backends.base import RENDER
 
 
 def _pick_and_place(w):
@@ -19,16 +20,22 @@ def _pick_and_place(w):
 
 
 def _record(w, run):
+    """Joint and object positions at every step, then the pixels of a final camera frame."""
     qs = []
     w._step_hooks.append(
         lambda world: qs.append(np.concatenate([world.backend.qpos(), *(world.backend.object_pose(n)[0] for n in world.object_names)]))
     )
     run(w)
+    b = w.backend
+    frame = b.render(b.spec.cameras[0].name, 96, 72).ravel() if RENDER in b.capabilities and b.spec.cameras else []
     w.close()
-    return np.array(qs)
+    return np.concatenate([np.ravel(qs), np.asarray(frame, float)])
 
 
-BACKENDS = ["mujoco", *(b for b, mod in (("drake", "pydrake"), ("genesis", "genesis"), ("isaac", "isaacsim")) if find_spec(mod))]
+BACKENDS = [
+    "mujoco",
+    *(b for b, mod in (("pybullet", "pybullet"), ("drake", "pydrake"), ("genesis", "genesis"), ("isaac", "isaacsim")) if find_spec(mod)),
+]
 
 
 def _shove(w):
@@ -40,7 +47,7 @@ _RUNS = {"so101": _pick_and_place, "go2": _shove}
 
 
 @pytest.mark.parametrize("robot", ["so101", "go2"])
-@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("backend", [b for b in BACKENDS if b != "pybullet"])  # PyBullet builds every world
 def test_a_reused_scene_runs_bit_for_bit_like_a_fresh_one(monkeypatch, backend, robot):
     from robowright.backends import base
 

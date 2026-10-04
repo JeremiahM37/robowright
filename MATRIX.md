@@ -34,19 +34,19 @@ Grip: the largest sideways shove (0.1 s, at the cube's centre) a held 30 g cube 
 
 | robot | mujoco grip (N) | pybullet grip (N) | drake grip (N) | genesis grip (N) | isaac grip (N) | mujoco ms/step | pybullet ms/step | drake ms/step | genesis ms/step | isaac ms/step |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| SO-101 | >20 | >20 | >20 | >20 | 27.84 | 1.26 | 1.62 | 8.18 | 1.83 | 1.98 |
-| Franka Emika Panda | >20 | >20 | >20 | >20 | >20 | 0.48 | 1.67 | 5.78 | 2.35 | 3.94 |
-| Universal Robots UR5e + Robotiq 2F-85 | >20 | 16.79 | >20 | 27.84 | >20 | 0.39 | 1.98 | 3.99 | 2.01 | 3.93 |
-| Universal Robots UR10e + Robotiq 2F-85 | >20 | 17.68 | >20 | >20 | >20 | 0.46 | 2.00 | 4.48 | 2.14 | 4.49 |
-| Kinova Gen3 + Robotiq 2F-85 | >20 | 20.33 | >20 | 20.77 | >20 | 0.53 | 2.10 | 4.30 | 2.14 | 4.68 |
-| KUKA LBR iiwa 14 + Robotiq 2F-85 | >20 | 20.77 | >20 | >20 | >20 | 0.52 | 2.06 | 4.47 | 2.22 | 4.66 |
-| UFACTORY xArm 7 | >20 | 18.56 | >20 | >20 | >20 | 0.36 | 1.80 | 3.43 | 1.92 | 3.68 |
-| Trossen ViperX 300 S (ALOHA) | 3.54 | 15.03 | 3.98 | 1.77 | 3.54 | 1.08 | 3.48 | 4.96 | 2.35 | 4.00 |
-| Trossen WidowX 250 S (Bridge) | 2.21 | 5.3 | 1.77 | 1.33 | 2.21 | 0.72 | 1.47 | 3.99 | 2.30 | 3.78 |
-| AgileX PiPER | >20 | >20 | >20 | 15.91 | >20 | 0.55 | 1.70 | 3.82 | 1.97 | 3.51 |
-| I2RT YAM | 0.88 | 4.42 | 1.33 | 0.88 | 1.77 | 2.15 | 4.18 | 5.99 | 3.66 | 5.21 |
-| ARX L5 | 0.44 | 1.77 | 0.88 | 0.0 | 0.44 | 1.06 | 2.37 | 3.25 | 2.54 | 3.71 |
-| Rethink Sawyer + Robotiq 2F-85 | >20 | 17.68 | >20 | >20 | >20 | 0.66 | 2.41 | 5.20 | 2.47 | 4.68 |
+| SO-101 | >20 | >20 | >20 | >20 | 27.84 | 1.26 | 1.62 | 3.79 | 1.83 | 1.98 |
+| Franka Emika Panda | >20 | >20 | >20 | >20 | >20 | 0.48 | 1.67 | 5.75 | 2.35 | 3.94 |
+| Universal Robots UR5e + Robotiq 2F-85 | >20 | 16.79 | >20 | 27.84 | >20 | 0.39 | 1.98 | 4.07 | 2.01 | 3.93 |
+| Universal Robots UR10e + Robotiq 2F-85 | >20 | 17.68 | >20 | >20 | >20 | 0.46 | 2.00 | 4.57 | 2.14 | 4.49 |
+| Kinova Gen3 + Robotiq 2F-85 | >20 | 20.33 | >20 | 20.77 | >20 | 0.53 | 2.10 | 4.39 | 2.14 | 4.68 |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | >20 | 20.77 | >20 | >20 | >20 | 0.52 | 2.06 | 4.57 | 2.22 | 4.66 |
+| UFACTORY xArm 7 | >20 | 18.56 | >20 | >20 | >20 | 0.36 | 1.80 | 3.37 | 1.92 | 3.68 |
+| Trossen ViperX 300 S (ALOHA) | 3.54 | 15.03 | 3.98 | 1.77 | 3.54 | 1.08 | 3.48 | 4.97 | 2.35 | 4.00 |
+| Trossen WidowX 250 S (Bridge) | 2.21 | 5.3 | 1.77 | 1.33 | 2.21 | 0.72 | 1.47 | 3.24 | 2.30 | 3.78 |
+| AgileX PiPER | >20 | >20 | >20 | 15.91 | >20 | 0.55 | 1.70 | 3.81 | 1.97 | 3.51 |
+| I2RT YAM | 0.88 | 4.42 | 1.33 | 0.88 | 1.77 | 2.15 | 4.18 | 5.98 | 3.66 | 5.21 |
+| ARX L5 | 0.44 | 1.77 | 0.88 | 0.0 | 0.44 | 1.06 | 2.37 | 3.20 | 2.54 | 3.71 |
+| Rethink Sawyer + Robotiq 2F-85 | >20 | 17.68 | >20 | >20 | >20 | 0.66 | 2.41 | 5.29 | 2.47 | 4.68 |
 
 ## Engines disagree about where the cube lands
 
@@ -54,7 +54,7 @@ Median distance between the cube's final position in each engine and in MuJoCo, 
 
 | robot | pybullet | drake | genesis | isaac |
 |---|---:|---:|---:|---:|
-| SO-101 | 4.3 mm | 6.6 mm | 1.4 mm | 2.9 mm |
+| SO-101 | 4.3 mm | 6.5 mm | 1.4 mm | 2.9 mm |
 | Franka Emika Panda | 5.4 mm | 19.3 mm | 0.3 mm | 0.3 mm |
 | Universal Robots UR5e + Robotiq 2F-85 | 7.0 mm | 0.4 mm | 0.4 mm | 0.2 mm |
 | Universal Robots UR10e + Robotiq 2F-85 | 6.8 mm | 0.3 mm | 0.1 mm | 0.3 mm |
@@ -74,9 +74,9 @@ Joint servos only, no balance controller. Push: the largest sideways shove (0.1 
 
 | robot | mujoco | pybullet | drake | genesis | isaac |
 |---|---:|---:|---:|---:|---:|
-| Unitree Go2 | ✅ 1.16× weight, 0.11 ms/step | ✅ 1.25× weight, 0.66 ms/step | ✅ 1.12× weight, 1.32 ms/step | ✅ 1.19× weight, 1.29 ms/step | ✅ 1.19× weight, 1.39 ms/step |
-| Unitree Go1 | ✅ 0.97× weight, 0.12 ms/step | ✅ 1.09× weight, 0.65 ms/step | ✅ 0.91× weight, 1.16 ms/step | ✅ 0.94× weight, 1.32 ms/step | ✅ 1.0× weight, 1.15 ms/step |
-| Unitree A1 | ✅ 1.06× weight, 0.12 ms/step | ✅ 1.19× weight, 0.64 ms/step | ✅ 1.03× weight, 1.16 ms/step | ✅ 1.06× weight, 1.31 ms/step | ✅ 1.12× weight, 1.27 ms/step |
-| Boston Dynamics Spot | ✅ 0.91× weight, 0.10 ms/step | ✅ 1.03× weight, 0.64 ms/step | ✅ 0.91× weight, 1.14 ms/step | ✅ 0.94× weight, 1.28 ms/step | ✅ 0.94× weight, 1.09 ms/step |
-| ANYbotics ANYmal C | ✅ 1.28× weight, 0.15 ms/step | ✅ 1.62× weight, 0.65 ms/step | ✅ 1.22× weight, 1.71 ms/step | ✅ 1.25× weight, 1.35 ms/step | ✅ 1.31× weight, 1.22 ms/step |
-| Unitree G1 | ✅ 0.59× weight, 0.25 ms/step | ✅ 0.69× weight, 2.63 ms/step | ✅ 0.59× weight, 2.40 ms/step | ✅ 0.59× weight, 1.66 ms/step | ✅ 0.62× weight, 1.85 ms/step |
+| Unitree Go2 | ✅ 1.16× weight, 0.11 ms/step | ✅ 1.25× weight, 0.66 ms/step | ✅ 1.12× weight, 1.30 ms/step | ✅ 1.19× weight, 1.29 ms/step | ✅ 1.19× weight, 1.39 ms/step |
+| Unitree Go1 | ✅ 0.97× weight, 0.12 ms/step | ✅ 1.09× weight, 0.65 ms/step | ✅ 0.91× weight, 1.15 ms/step | ✅ 0.94× weight, 1.32 ms/step | ✅ 1.0× weight, 1.15 ms/step |
+| Unitree A1 | ✅ 1.06× weight, 0.12 ms/step | ✅ 1.19× weight, 0.64 ms/step | ✅ 1.03× weight, 1.13 ms/step | ✅ 1.06× weight, 1.31 ms/step | ✅ 1.12× weight, 1.27 ms/step |
+| Boston Dynamics Spot | ✅ 0.91× weight, 0.10 ms/step | ✅ 1.03× weight, 0.64 ms/step | ✅ 0.91× weight, 1.12 ms/step | ✅ 0.94× weight, 1.28 ms/step | ✅ 0.94× weight, 1.09 ms/step |
+| ANYbotics ANYmal C | ✅ 1.28× weight, 0.15 ms/step | ✅ 1.62× weight, 0.65 ms/step | ✅ 1.22× weight, 1.69 ms/step | ✅ 1.25× weight, 1.35 ms/step | ✅ 1.31× weight, 1.22 ms/step |
+| Unitree G1 | ✅ 0.59× weight, 0.25 ms/step | ✅ 0.69× weight, 2.63 ms/step | ✅ 0.59× weight, 2.29 ms/step | ✅ 0.59× weight, 1.66 ms/step | ✅ 0.62× weight, 1.85 ms/step |
