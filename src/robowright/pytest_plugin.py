@@ -53,6 +53,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "backends(*names): only run on these backends")
     config.addinivalue_line("markers", "robots(*names): only run on these robots")
     config.addinivalue_line("markers", "trials(n, min_success=1.0, lower_bound=False): run across n seeds and judge the success rate")
+    config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
 
@@ -82,6 +83,29 @@ def pytest_generate_tests(metafunc):
             names = [n for n in names if n in m.args] or list(m.args[:1])
         if len(names) > 1 or m:
             metafunc.parametrize("rw_robot", names, ids=names, scope="function")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Run each module's tests robot by robot, and group them for ``-n N --dist loadgroup``.
+
+    A closed world's scene is kept and restored for the next world that needs it (see
+    ``backends.create``), which runs bit-for-bit like a new build, so the order cannot change a
+    result. Ordered and grouped, the tests that share a scene run one after another in one
+    process and reuse it, instead of every robot's scene being built for every test.
+    """
+    module = {}
+
+    def key(item):
+        p = getattr(item, "callspec", None)
+        params = p.params if p is not None else {}
+        return (module.setdefault(item.path, len(module)), params.get("rw_backend", ""), params.get("rw_robot", ""))
+
+    items[:] = sorted(items, key=key)
+    for item in items:
+        p = getattr(item, "callspec", None)
+        if p is not None and "rw_backend" in p.params:
+            robot = p.params.get("rw_robot", "")
+            item.add_marker(pytest.mark.xdist_group(f"{p.params['rw_backend']}-{robot}-{item.path.stem}"))
 
 
 @pytest.fixture

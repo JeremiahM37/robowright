@@ -408,15 +408,15 @@ What running everything on everything turned up:
   limit is the datasheet's. Closing the model on a block converts that jaw force into an
   actuator force, whatever the transmission. Every engine then presses within 15% of the
   datasheet (`test_grip_force_matches_the_datasheet`), except on the xArm's six-joint linkage:
-  PyBullet presses 13.7 N, because it has no closed kinematic chains. (Genesis presses 25.6 N
-  there, just inside the 15%, because its mimic constraints are soft.) Grippers with no published figure
+  PyBullet presses 13.7 N, because it has no closed kinematic chains. Grippers with no published figure
   (Trossen, I2RT, ARX, SO-101) squeeze as modelled: 0.9–2.2 N on the low-cost slide grippers.
   The PiPER went from 0/20 to 20/20 in PyBullet once it pressed at its rated 40 N instead of
   0.25 N; every engine holds a 30 g cube in the others at their modelled forces.
-- **Contact models disagree by millimetres.** Same robot, same seed, same commands: Isaac
-  Sim, Genesis and Drake put the cube within about 1 mm of MuJoCo's final position on about
-  half the arms and within 11 mm on nearly all (Genesis 15 mm on the PiPER); PyBullet within
-  0.6–12 mm.
+- **Contact models disagree by millimetres.** Same robot, same seed, same commands: Genesis,
+  Isaac Sim and Drake put the cube within 1 mm of MuJoCo's final position on about half the
+  arms. Genesis stays within 7 mm on every arm; Isaac Sim within 8 mm on all but the PiPER
+  (12 mm); Drake within 9 mm on all but the PiPER (13 mm) and the Panda (19 mm); PyBullet
+  within 0.6–14 mm.
 - **Every arm passes on every engine: 65 of 65 cells at 20/20.** The last failures were
   robowright's, not the engines'; see the next two findings.
 - **Genesis's last two failures were the same staircase.** The iiwa's Robotiq 2F-85 let the
@@ -428,8 +428,11 @@ What running everything on everything turned up:
   made it worse (0/9 seeds), and MuJoCo's second finger lags just as much, so the lag was
   never the cause. Ramping the arm's and gripper's targets across the substeps fixed both:
   20/20 each, at a median 11% more time per step (5–25%; nothing extra while holding still).
-  Their two registry entries left, and so did Genesis's xArm grip entry, whose 25.4 N became
-  25.6 N: just inside the 15%, a margin, not a fix.
+  Their two registry entries left. Genesis's xArm grip, at 25.6 N just inside the 15%, was a
+  third robowright bug: a driver servo without gains of its own was given a gain that reached
+  its force cap a quarter of the travel off target, and the cube stopped the jaws 22% off, so
+  it pushed 1.41 of its 1.57 N·m. Datasheet grippers now saturate within 5% of the travel:
+  28.8 N, against MuJoCo's 28.5 N.
 - **"PyBullet's contacts let weak grips slip" was robowright's bug.** The matrix had PyBullet
   dropping the cube from the ARX L5 every time and from the YAM a quarter of the time, and the
   divergence registry blamed its contact model. Measured, PyBullet pressed *harder* than MuJoCo
@@ -450,6 +453,32 @@ What running everything on everything turned up:
   MuJoCo on every arm, and all eight "weak grip" entries left the registry. A model of MuJoCo's
   kp/kv servo per joint was tried first and dropped: without the coupling between joints it
   overshot on the light SO-101 and knocked cubes aside (8/12 policy runs; 12/12 with the ramp).
+- **Every engine is now handed the same commands.** The staircase above is now smoothed in
+  one place (`TargetRamp`) for all five engines: each control step's change of servo targets
+  is spread across its physics substeps, as a servo's interpolator does, so MuJoCo, Drake and
+  Isaac Sim, whose softer servos had been smoothing the steps themselves, see the same
+  ramped targets as PyBullet and Genesis. It changes nothing while the robot holds still and
+  costs nothing then. PyBullet's finger motors keep stepped targets, since they already close
+  at a capped pace. The one test it moved was MuJoCo's ViperX under a shove: its modelled grip
+  chatters between 0 and 1.9 N on the cube, and whether a 1.5 N shove knocks the cube out
+  depends on where in that chatter it lands (it lets go anywhere from 1.25 to 1.55 N). It now
+  lands on the losing side, as it already did on Drake, and it is in the registry with that
+  measurement.
+- **Runs are deterministic down to the last bit, wherever they run.** Three things could
+  change a run's last digits without changing its inputs, and none can now:
+  - Sensor noise, camera dropout and `jitter()` drew from one shared random stream, so a
+    regression test generated from a trace (which places the jittered object rather than
+    jittering it again) read different encoder noise from the original. Each source now has
+    its own seeded stream.
+  - On Genesis and Isaac Sim, capturing the state also snaps the simulation onto it (that is
+    what makes restores exact), and the state was captured only when tracing. One capture
+    more moved Isaac Sim's Go2 by 1.8e-6 within a shove. The state is now captured at the
+    same moments in every run, traced or not.
+  - A target ramp that ends at `start + (end - start)` misses `end` in the last bit; it now
+    lands on it.
+
+  `tests/test_reuse.py` checks that traced and untraced runs, and reused and new scenes
+  (below), match bit for bit on every engine with state save/restore.
 - **Fixes needed to match MuJoCo:**
   - PyBullet multiplies friction coefficients where MuJoCo takes the larger, and folding
     MuJoCo's armature into PyBullet's link inertia made arms fling held objects.
@@ -498,6 +527,26 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 | replays of faulted runs that were bit-identical | 20/20 | 20/20 | 20/20 | 20/20 |
 | randomised pick-and-place passing (same 50 seeds) | 50/50 | 50/50 | 50/50 | 50/50 |
 
+- **Scene reuse:** building a scene costs more than a short test runs (MuJoCo 0.05–0.14 s
+  against 0.05 s for a pick; Drake 0.3–0.4 s against 0.5 s), and restoring a saved state
+  takes 0.1 ms. So a closed world's scene is kept (two per process) and restored for the
+  next world that needs it, checked bit-for-bit against a new build; `ROBOWRIGHT_REUSE=0`
+  turns it off. The pytest plugin orders each module's tests by engine and robot so that
+  neighbours share a scene, and marks them for `--dist loadgroup`. Full suite, every arm and
+  legged robot (Isaac Sim on a Ryzen 7 9800X3D, the rest on the Ryzen AI Max+ 395; the
+  "after" runs include the 12 new reuse and tracing tests; Isaac Sim's "before" already kept
+  scenes, but in the old test order nearly every world needed a different one):
+
+  | | before | after |
+  |---|---:|---:|
+  | Genesis (2 workers) | 1114 s | 319 s |
+  | Drake (4 workers) | 344 s | 270 s |
+  | MuJoCo (4 workers) | 53 s | 53 s |
+  | Isaac Sim (1 process) | 607 s | 596 s |
+
+  MuJoCo builds too quickly to gain, and Isaac Sim gained only 2%. PyBullet has no
+  state save, so it builds every world, and grouping only unbalances its workers: leave
+  `--dist loadgroup` off for it.
 - **Parallel runs:** 64 randomised tests take 13.1 s on one worker and 4.7 s on four pytest-xdist workers (2.8x).
 - **Invariants:** two `expect(...).always` invariants add 14 µs to each 33 µs control step; an IK solve costs 0.35 ms.
 - **Fault curves:** the reference policy still passes 20/20 with 0.06 rad of encoder noise, 13/20 at 0.09 rad and 0/20 at 0.12 rad; with the shoulder servo's gain cut to 2% it passes 13/20, at 0.5% 3/20. Those are the curves `@pytest.mark.trials` exists to guard.

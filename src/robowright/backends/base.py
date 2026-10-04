@@ -7,7 +7,10 @@ the same thing in every backend.
 
 from __future__ import annotations
 
+import atexit
+import os
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -31,6 +34,46 @@ class Contact:
     force: float  # normal force magnitude, N
 
 
+class TargetRamp:
+    """Spreads each control step's change of servo targets across that step's physics substeps.
+
+    Targets arrive once per control step. Handed to a servo as a step, they move a stiff one in
+    a staircase: a velocity spike at every control step, then a coast. That shook light grips
+    loose on PyBullet (ARX L5 0/20) and Genesis (PiPER 14/20, iiwa 15/20), while MuJoCo's and
+    Drake's softer servos smoothed it. Every backend now ramps, as a real servo's interpolator
+    does, so every engine is handed the same commands: substep ``k`` of ``n`` gets the targets
+    ``(k + 1) / n`` of the way from the last step's to the new ones.
+    """
+
+    def __init__(self):
+        self.start: np.ndarray | None = None
+        self.end: np.ndarray | None = None
+
+    def set(self, target) -> None:
+        self.end = np.array(target, float)
+        if self.start is None:  # placed, restored or just built: nothing to ramp from
+            self.start = self.end.copy()
+
+    def reset(self) -> None:
+        """Forget where the targets were: the robot was placed, not moved, so the next ones apply at once."""
+        self.start = None
+
+    @property
+    def moving(self) -> bool:
+        return self.start is not None and not np.array_equal(self.start, self.end)
+
+    def at(self, frac: float) -> np.ndarray:
+        if frac >= 1.0:  # exactly the targets, not start + (end - start): a trace records them
+            return self.end.copy()
+        return self.start + frac * (self.end - self.start)
+
+    def velocity(self, dt: float) -> np.ndarray:
+        return (self.end - self.start) / dt
+
+    def arrive(self) -> None:
+        self.start = self.end.copy()
+
+
 class Backend(ABC):
     """Physics for one scene.
 
@@ -44,6 +87,12 @@ class Backend(ABC):
 
     name: str = "base"
     capabilities: frozenset = frozenset()
+    # Whether a closed world's backend may be kept and restored for the next world with the same
+    # scene (see :func:`create`). Needs STATE, and a restore that leaves nothing behind: every
+    # reusing backend is checked bit-for-bit against a fresh build in tests/test_backends.py.
+    reusable: bool = False
+    # One scene per process (Isaac Sim has one stage): building another closes the kept ones.
+    exclusive: bool = False
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         self.spec = spec
@@ -136,6 +185,15 @@ class Backend(ABC):
     def close(self) -> None:
         pass
 
+    def _reuse(self, seed: int) -> None:
+        """Put a kept backend back exactly as it was built: gains, pending forces, state."""
+        self.seed = seed
+        for j in self.robot_model.arm_joints:
+            self.set_gain_scale(j, 1.0)  # gains are model data, not state, on some engines
+        if hasattr(self, "_pending"):
+            self._pending = {}
+        self.set_state(self._built)
+
 
 _REGISTRY: dict[str, type[Backend]] = {}
 
@@ -150,6 +208,12 @@ def register(name: str):
 
 
 def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
+    """A backend for ``spec``: a kept one restored to as-built if there is one, else a new build.
+
+    Building is most of what a short test costs (MuJoCo: 0.05-0.14 s against 0.05 s for a pick;
+    Drake: 0.3-0.4 s against 0.5 s), and restoring a state takes a tenth of a millisecond.
+    ``ROBOWRIGHT_REUSE=0`` builds every world afresh.
+    """
     if name not in _REGISTRY:
         # Import lazily so an optional backend's dependency is only needed when used.
         import importlib
@@ -160,7 +224,56 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     if name not in _REGISTRY:
         known = sorted(set(_MODULES) | set(_REGISTRY))
         raise ValueError(f"unknown backend {name!r}; known backends: {', '.join(known)} (installed: {', '.join(available()) or 'none'})")
-    return _REGISTRY[name](spec, seed=seed, **kw)
+    cls = _REGISTRY[name]
+    key = (name, repr(spec), repr(sorted(kw.items()))) if cls.reusable and _keep() else None
+    b = _KEPT.pop(key, None) if key else None
+    if b is not None:
+        try:
+            b._reuse(seed)
+            b._key = key
+            return b
+        except Exception:
+            b.close()
+    if cls.exclusive:
+        for k in [k for k in _KEPT if k[0] == name]:
+            _KEPT.pop(k).close()
+    b = cls(spec, seed=seed, **kw)
+    if STATE in cls.capabilities:
+        # Captured on every build, kept or not: on Genesis and Isaac a capture snaps the simulation
+        # onto the captured state, so a kept scene and a new one must both have taken it.
+        b._built = b.get_state()
+    if key:
+        b._key = key
+    return b
+
+
+def release(b: Backend) -> None:
+    """Done with ``b``: keep it for the next world with the same scene, or close it."""
+    key, n = getattr(b, "_key", None), _keep()
+    if not key or not n:
+        b.close()
+        return
+    b._key = None  # a backend released twice is kept once
+    old = _KEPT.pop(key, None)
+    if old is not None:
+        old.close()
+    _KEPT[key] = b
+    while len(_KEPT) > n:
+        _KEPT.popitem(last=False)[1].close()
+
+
+def close_kept() -> None:
+    while _KEPT:
+        _KEPT.popitem()[1].close()
+
+
+def _keep() -> int:
+    """How many built scenes a process keeps (``ROBOWRIGHT_REUSE``, default 2; 0 turns reuse off)."""
+    return int(os.environ.get("ROBOWRIGHT_REUSE", "2"))
+
+
+_KEPT: OrderedDict[tuple, Backend] = OrderedDict()
+atexit.register(close_kept)
 
 
 _MODULES = {

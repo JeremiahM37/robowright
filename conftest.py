@@ -23,6 +23,12 @@ for robot, force in _SLIDE.items():
     KNOWN[("test_cube_survives_a_shove_when_held", "mujoco", robot)] = (
         f"MuJoCo Menagerie's model of this gripper squeezes {force}; a 1.5 N shove knocks the cube out"
     )
+# The ViperX's modelled grip chatters on the cube (0 to 1.9 N, step to step), so whether a 1.5 N
+# shove knocks it out depends on the chatter's phase when it lands: it lets go from 1.25-1.55 N.
+KNOWN[("test_cube_survives_a_shove_when_held", "mujoco", "vx300s")] = (
+    "MuJoCo Menagerie's ViperX grip chatters between 0 and 1.9 N on the cube; a 1.5 N shove knocks it out "
+    "(it lets go from 1.25-1.55 N, depending on the chatter's phase)"
+)
 # Drake holds the 1.9 N YAM grip through the shove; the rest go, as in MuJoCo.
 for robot, force in {**{r: _SLIDE[r] for r in ("arx_l5", "wx250s")}, "vx300s": "5.4 N"}.items():
     KNOWN[("test_cube_survives_a_shove_when_held", "drake", robot)] = (

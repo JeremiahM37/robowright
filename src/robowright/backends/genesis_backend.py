@@ -35,11 +35,15 @@ import mujoco
 
 from ..robots import urdf
 from ..scene import SceneSpec
-from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, register
+from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
 
 # Driven finger joints without an actuator gain of their own saturate this far off target.
 _DRIVE_SAT = 0.25
+# A datasheet grip force is the squeeze on any object, so those drivers saturate before the
+# jaws meet even a thin one. At 0.25 the xArm's stopped on the test cube 22% off target and
+# pressed 1.41 of its 1.57 N m: 25.6 N per jaw against the datasheet's 30.
+_DRIVE_SAT_SPEC = 0.05
 
 
 _DEVICE = "cpu"
@@ -153,6 +157,7 @@ def _rotate(quat, v) -> np.ndarray:
 @register("genesis")
 class GenesisBackend(Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, STATE, DETERMINISTIC, FORCES})
+    reusable = True
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
@@ -258,7 +263,7 @@ class GenesisBackend(Backend):
             return np.array(kp), np.array(kv), np.array(cap)
 
         if driven:
-            kp, kv, cap = finger_gains(driven, self._driven, _DRIVE_SAT)
+            kp, kv, cap = finger_gains(driven, self._driven, _DRIVE_SAT if rm.grip_force is None else _DRIVE_SAT_SPEC)
             robot.set_dofs_kp(kp, self._driven)
             robot.set_dofs_kv(kv, self._driven)
             robot.set_dofs_force_range(-cap, cap, self._driven)
@@ -293,7 +298,7 @@ class GenesisBackend(Backend):
         self._pending: dict[str, np.ndarray] = {}
         self._ctrl = np.zeros(len(self.joint_names))
         self._servoed = np.concatenate([self._arm, self._driven]) if self.has_gripper else self._arm
-        self._from = None  # where this control step's targets ramp from (see step)
+        self._ramp = TargetRamp()
         if rm.floating:
             yaw = rm.base_yaw
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
@@ -354,23 +359,10 @@ class GenesisBackend(Backend):
         target = np.asarray(target, float)
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
         self._ctrl = np.append(arm, float(np.clip(target[self.n_arm], 0.0, 1.0))) if self.has_gripper else arm
-        if self._from is None:  # nothing to ramp from: placed, restored, or just built
-            self._from = self._ctrl.copy()
-        self._command(1.0)
+        self._ramp.set(self._ctrl)
+        self._command(self._ctrl)  # ramped from the last step's in step()
 
-    def _command(self, frac: float) -> None:
-        """Command the servos ``frac`` of the way from the last control step's targets to these.
-
-        Targets arrive once per control step. Handed to the servos as a step, they made the
-        gripper's stiff servo (the PiPER's closes at its datasheet's 40 N) jerk each finger once
-        per step, and the finger tied to it by Genesis's mimic constraint rang at about 50 Hz,
-        +-4 mm: on its inward swings it struck the cube and knocked it out of the jaws (PiPER
-        14/20). The arm's steps did the same to a cube held in the iiwa's Robotiq 2F-85 (15/20).
-        Ramped across the substeps, as a servo's interpolator does, both are 20/20.
-        """
-        if frac < 1.0 and np.array_equal(self._from, self._ctrl):
-            return  # holding still: the servos already have these targets
-        x = self._from + frac * (self._ctrl - self._from)
+    def _command(self, x: np.ndarray) -> None:
         if self.has_gripper:
             s = x[self.n_arm]
             x = np.concatenate([x[: self.n_arm], self._driven_c + s * (self._driven_o - self._driven_c)])
@@ -393,7 +385,7 @@ class GenesisBackend(Backend):
         for d, c, o in self._fingers.values():
             pos[d] = c + s * (o - c)
         self.robot.set_dofs_position(pos, zero_velocity=True)
-        self._from = None  # placed, not moved: no ramp
+        self._ramp.reset()  # placed, not moved: no ramp
         self.set_ctrl(q)
 
     def base_pose(self):
@@ -413,15 +405,17 @@ class GenesisBackend(Backend):
 
     # time
     def step(self):
-        solver = self.scene.sim.rigid_solver
-        for k in range(self._substeps):
-            self._command((k + 1) / self._substeps)
+        solver, ramp, n = self.scene.sim.rigid_solver, self._ramp, self._substeps
+        moving = ramp.moving
+        for k in range(n):
+            if moving:
+                self._command(ramp.at((k + 1) / n))
             for name, f in self._pending.items():
                 link = (self.robot if name == "robot" else self._objects[name]).links[0]
                 solver.apply_links_external_wrench(force=np.asarray(f)[None], links_idx=[link.idx], ref=gs.link_ref_frame.link_COM)
             self.scene.step()
         self._pending = {}
-        self._from = self._ctrl.copy()  # the ramp has arrived
+        ramp.arrive()
         self._t += self._substeps * self._dt
 
     @property
@@ -518,7 +512,7 @@ class GenesisBackend(Backend):
         s.set_dofs_velocity(state[1 + nq : 1 + nq + nv])
         i = 1 + nq + nv
         # States are taken between control steps, when the ramp has arrived: none is pending.
-        self._from = None
+        self._ramp.reset()
         self.set_ctrl(state[i : i + nc])
         i += nc
         if i == len(state):

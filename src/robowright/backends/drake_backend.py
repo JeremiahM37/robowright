@@ -55,7 +55,7 @@ from pydrake.systems.sensors import CameraInfo
 
 from ..robots import urdf
 from ..scene import SceneSpec
-from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, register
+from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
 
 _DRAKE_NS = "http://drake.mit.edu"
@@ -129,6 +129,7 @@ _RENDER_OK: bool | None = None
 @register("drake")
 class DrakeBackend(Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, STATE, DETERMINISTIC, FORCES})
+    reusable = True
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
@@ -170,6 +171,7 @@ class DrakeBackend(Backend):
         plant.get_applied_spatial_force_input_port().FixValue(self.pc, [])
         self._tau = plant.get_applied_generalized_force_input_port().FixValue(self.pc, np.zeros(plant.num_velocities()))
         self._xd = plant.get_desired_state_input_port(self.robot).FixValue(self.pc, np.zeros(2 * self._nact))
+        self._ramp = TargetRamp()  # desired positions; desired velocities stay 0, as in MuJoCo's servos
         self._gscale = np.ones(self.n_arm)
         # MuJoCo's reset: every joint at zero, moved inside its limits.
         q = plant.GetPositions(self.pc, self.robot)
@@ -436,7 +438,8 @@ class DrakeBackend(Backend):
         for n in self._driven:
             c, o = self.meta["gripper"]["joints"][n]
             xd[self._act_index[urdf._safe(n)]] = c + g * (o - c)
-        self._xd.GetMutableData().set_value(xd)
+        self._ramp.set(xd[: self._nact])
+        self._xd.GetMutableData().set_value(xd)  # ramped from the last step's in step()
 
     def ctrl(self):
         return self._ctrl.copy()
@@ -450,6 +453,7 @@ class DrakeBackend(Backend):
 
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
+        self._ramp.reset()  # placed, not moved: no ramp
         plant = self.plant
         qq = plant.GetPositions(self.pc)
         vv = plant.GetVelocities(self.pc)
@@ -496,7 +500,12 @@ class DrakeBackend(Backend):
         plant.get_applied_spatial_force_input_port().FixValue(pc, forces)
         tau, sim, dt = self._tau, self.simulator, self.spec.dt
         gravcomp = self.robot_model.family == "arm"  # legged robots stand on their own weight
-        for _ in range(self._substeps):
+        ramp, n, xd = self._ramp, self._substeps, np.zeros(2 * self._nact)
+        moving = ramp.moving
+        for k in range(n):
+            if moving:
+                xd[: self._nact] = ramp.at((k + 1) / n)
+                self._xd.GetMutableData().set_value(xd)
             if gravcomp:
                 # Gravity compensation on the robot, like a real arm controller (and MuJoCo's gravcomp).
                 g = plant.CalcGravityGeneralizedForces(pc)
@@ -504,6 +513,7 @@ class DrakeBackend(Backend):
             # Count steps rather than add up times, so every period has exactly the same substeps.
             self._k += 1
             sim.AdvanceTo(self._k * dt)
+        ramp.arrive()
         if self._pending:
             self._pending = {}
             plant.get_applied_spatial_force_input_port().FixValue(pc, [])
@@ -591,6 +601,8 @@ class DrakeBackend(Backend):
             if s != self._gscale[self.joint_names.index(j)]:
                 self.set_gain_scale(j, float(s))
         self.context.SetDiscreteState(state[k + self.n_arm :])
+        # States are taken between control steps, when the ramp has arrived: none is pending.
+        self._ramp.reset()
         self.set_ctrl(ctrl)
         # The simulator refuses to advance from a time it did not reach itself.
         self.simulator.Initialize()

@@ -3,13 +3,15 @@
 ```bash
 uv venv --python 3.12 .venv && uv pip install -e ".[dev,drake]"
 pytest tests examples -n 4 --rw-backend mujoco,pybullet            # the core, on the SO-101
-pytest tests/test_conformance.py tests/test_legged.py --rw-robot all,legged --rw-backend drake
+pytest tests/test_conformance.py tests/test_legged.py --rw-robot all,legged --rw-backend drake -n 4 --dist loadgroup
 ruff check . && ruff format --check .
 python bench/run.py --quick      # framework benchmarks; regenerates BENCHMARKS.md
 python bench/matrix.py --jobs 4  # robot x engine matrix; regenerates MATRIX.md
 ```
 
-Engines are heavy: a Genesis worker takes ~4.5 GB, so keep `-n` small for it.
+Engines are heavy: a Genesis worker takes ~4.5 GB, so keep `-n` small for it. On Drake and
+Genesis add `--dist loadgroup`: each robot's tests then run in one worker, which reuses the
+scene instead of building it per test (Genesis's full suite: 1114 s to 319 s).
 
 **Adding a robot:** register a `RobotModel` in `src/robowright/robots/__init__.py`
 (MJCF path, arm joints, hand, finger bodies, gripper actuator, base position), then run

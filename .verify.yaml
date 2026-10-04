@@ -21,7 +21,7 @@ steps:
 
   - name: every robot on Drake and Genesis (conformance + legged)
     actions:
-      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n 4 -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n 2 -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n 4 --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n 2 --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
 
   - name: cli reports working offscreen rendering
     actions:

@@ -63,6 +63,11 @@ class Faults:
         self.world = world
         self.active: list[Fault] = []
         self._delay: deque | None = None
+        # One seeded stream per source of randomness. Drawn from one shared stream, a jitter's
+        # draws shifted every later sensor-noise sample, and a test regenerated from a trace
+        # (which places the jittered object rather than re-jittering it) read different noise.
+        seed = world.seed
+        self._rng = {k: np.random.default_rng([seed, i]) for i, k in enumerate(("jitter", "joint_noise", "camera_dropout"), 1)}
 
     def _add(self, f: Fault) -> Fault:
         self.active.append(f)
@@ -96,7 +101,7 @@ class Faults:
 
     def jitter(self, object: str, xy_std: float = 0.01, yaw_std: float = 0.0):
         """Randomise an object's starting pose (domain randomisation), seeded."""
-        rng = self.world.rng
+        rng = self._rng["jitter"]
         pos, quat = self.world.backend.object_pose(object)
         pos = pos + np.array([*rng.normal(0, xy_std, 2), 0.0])
         if yaw_std:
@@ -116,12 +121,12 @@ class Faults:
     def filter_qpos(self, q: np.ndarray) -> np.ndarray:
         for f in self.active:
             if isinstance(f, JointNoise):
-                q = q + self.world.rng.normal(0, f.std, q.shape)
+                q = q + self._rng["joint_noise"].normal(0, f.std, q.shape)
         return q
 
     def filter_image(self, img: np.ndarray) -> np.ndarray:
         for f in self.active:
-            if isinstance(f, CameraDropout) and self.world.rng.random() < f.p:
+            if isinstance(f, CameraDropout) and self._rng["camera_dropout"].random() < f.p:
                 return np.zeros_like(img)
         return img
 

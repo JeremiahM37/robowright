@@ -94,8 +94,12 @@ class World:
     def _begin(self):
         if not self._began:
             self._began = True
+            # Taken whether or not anything records it: on Genesis and Isaac a capture also snaps the
+            # simulation onto the captured state (see their get_state), so capturing only when tracing
+            # made a traced run differ from an untraced one in the last digits.
+            state0 = self.backend.get_state() if backends.STATE in self.backend.capabilities else None
             if self.trace:
-                self.trace.begin()
+                self.trace.begin(state0)
 
     def step(self, n: int = 1):
         """Advance ``n`` control periods with the robot's current targets."""
@@ -190,7 +194,7 @@ class World:
         if self.trace and (self.settings.trace == "on" or (self.settings.trace == "retain-on-failure" and failed)):
             path = trace_path or Path(self.settings.trace_dir) / f"{_safe(self.name)}.zip"
             saved = self.trace_path = self.trace.save(path)
-        self.backend.close()
+        backends.release(self.backend)
         if self._soft_failures:
             failures, self._soft_failures = self._soft_failures, []
             raise ExpectationError(f"{len(failures)} soft expectation(s) failed:\n\n" + "\n\n".join(failures))

@@ -13,7 +13,7 @@ import numpy as np
 from ..robots import PREFIX, body_labels
 from ..robots.model import reset_data
 from ..scene import SceneSpec
-from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, register
+from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 
 
 def _lookat_xyaxes(pos, lookat):
@@ -117,6 +117,7 @@ def bin_walls(size, t: float = 0.003):
 @register("mujoco")
 class MujocoBackend(Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, STATE, DETERMINISTIC, FORCES})
+    reusable = True
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
@@ -152,6 +153,8 @@ class MujocoBackend(Backend):
             self._label.setdefault(b, m.body(b).name)
         self._hand = m.body(PREFIX + rm.hand).id if rm.hand else None
         self._renderers: dict = {}
+        self._acts = np.append(self._act, self._gact) if self.has_gripper else self._act
+        self._ramp = TargetRamp()
         reset_data(m, self.data)
         if rm.floating:
             yaw = rm.base_yaw
@@ -177,10 +180,12 @@ class MujocoBackend(Backend):
         arm = target[: self.n_arm]
         lim = m.actuator_ctrllimited[self._act].astype(bool)
         lo, hi = m.actuator_ctrlrange[self._act].T
-        self.data.ctrl[self._act] = np.where(lim, np.clip(arm, lo, hi), arm)
+        u = np.where(lim, np.clip(arm, lo, hi), arm)
         if self.has_gripper:
             g = float(np.clip(target[self.n_arm], 0.0, 1.0))
-            self.data.ctrl[self._gact] = rm.gripper_closed + g * (rm.gripper_open - rm.gripper_closed)
+            u = np.append(u, rm.gripper_closed + g * (rm.gripper_open - rm.gripper_closed))
+        self._ramp.set(u)
+        self.data.ctrl[self._acts] = u  # ramped from the last step's in step()
 
     def ctrl(self):
         rm = self.robot_model
@@ -197,6 +202,7 @@ class MujocoBackend(Backend):
 
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
+        self._ramp.reset()  # placed, not moved: no ramp
         self.data.qpos[self._qadr] = q[: self.n_arm]
         self.data.qvel[self._dadr] = 0
         if self.has_gripper:
@@ -229,9 +235,16 @@ class MujocoBackend(Backend):
 
     # time
     def step(self):
-        for _ in range(self._substeps):
-            mujoco.mj_step(self.model, self.data)
-        self.data.xfrc_applied[:] = 0
+        m, d, ramp, n = self.model, self.data, self._ramp, self._substeps
+        if ramp.moving:
+            for k in range(n):
+                d.ctrl[self._acts] = ramp.at((k + 1) / n)
+                mujoco.mj_step(m, d)
+            ramp.arrive()
+        else:
+            for _ in range(n):
+                mujoco.mj_step(m, d)
+        d.xfrc_applied[:] = 0
 
     @property
     def control_dt(self):
@@ -294,6 +307,9 @@ class MujocoBackend(Backend):
     def set_state(self, state):
         mujoco.mj_setState(self.model, self.data, np.asarray(state, float), mujoco.mjtState.mjSTATE_INTEGRATION)
         mujoco.mj_forward(self.model, self.data)
+        # States are taken between control steps, when the ramp has arrived: none is pending.
+        self._ramp.reset()
+        self._ramp.set(self.data.ctrl[self._acts])
 
     def close(self):
         for r in self._renderers.values():

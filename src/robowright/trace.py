@@ -73,13 +73,9 @@ class Recorder:
 
         return RENDER in self.world.backend.capabilities and bool(self.cameras)
 
-    def begin(self):
-        from .backends.base import STATE
-
-        b = self.world.backend
+    def begin(self, state0=None):
         self.begin_index = len(self.events)
-        if STATE in b.capabilities:
-            self.state0 = b.get_state()
+        self.state0 = state0
         self._snapshot(0)
 
     def _snapshot(self, step: int):

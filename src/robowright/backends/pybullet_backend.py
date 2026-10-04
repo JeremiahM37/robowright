@@ -23,7 +23,7 @@ import pybullet as p
 
 from ..robots import urdf
 from ..scene import SceneSpec
-from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, Backend, Contact, register
+from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
 
 POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error corrected per step
@@ -163,7 +163,7 @@ class PybulletBackend(Backend):
         lip, lio = p.getDynamicsInfo(self.robot, -1, physicsClientId=c)[3:5]
         self._com_in_base = (lip, lio)  # PyBullet reports a floating base at its centre of mass
         self._ctrl = np.zeros(len(self.joint_names))
-        self._arm_from = None  # where the arm's target ramps from during this control step
+        self._ramp = TargetRamp()
         self._bodies: dict[str, int] = {}
         for o in spec.objects:
             self._bodies[o.name] = self._make_object(o)
@@ -233,13 +233,32 @@ class PybulletBackend(Backend):
     def set_ctrl(self, target):
         target = np.asarray(target, float)
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
-        if not self.has_gripper:
-            self._ctrl = arm
-            self._command_arm()
-            return
-        self._ctrl = np.append(arm, np.clip(target[self.n_arm], 0, 1))
-        self._command_arm()
-        for j, q, f, v in zip(self._fingers, self._finger_targets(self._ctrl[-1]), self._finger_force, self._finger_speed):
+        self._ctrl = np.append(arm, np.clip(target[self.n_arm], 0, 1)) if self.has_gripper else arm
+        self._ramp.set(self._ctrl)
+        self._command(1.0)  # ramped from the last step's in step()
+
+    def _command(self, frac: float) -> None:
+        """Command the servos ``frac`` of the way along this control step's move (see :class:`TargetRamp`).
+
+        A PyBullet position motor closes a fixed fraction of its error every substep, so stepped
+        targets moved the arm in a staircase: a velocity spike several times the commanded speed
+        (27 m/s^2 against MuJoCo's 5 on the same policy), then a coast, and the ARX L5's light grip
+        lost its cube on every lift (0/20). The arm's motors also get the ramp's velocity as
+        feed-forward, so they move at the commanded speed. (Modelling MuJoCo's kp/kv servo per
+        joint instead, without the coupling between joints, overshot on the light SO-101 and
+        knocked cubes aside as it came down: 8/12 policy runs, against 12/12 with the ramp.)
+        The fingers keep stepped targets: their motors already close at a capped pace, and ramped
+        they changed nothing but the ARX L5's second placement (33 mm off, against 31 allowed).
+        """
+        ramp = self._ramp
+        x = ramp.at(frac)
+        self._sq, self._sv = x[: self.n_arm], ramp.velocity(self.control_dt)[: self.n_arm]
+        self._drive_arm()
+        if self.has_gripper and frac == 1.0:
+            self._drive_fingers(ramp.end[-1])
+
+    def _drive_fingers(self, s: float) -> None:
+        for j, q, f, v in zip(self._fingers, self._finger_targets(s), self._finger_force, self._finger_speed):
             kw = {"maxVelocity": v} if v > 0 else {}
             p.setJointMotorControl2(
                 self.robot,
@@ -251,28 +270,6 @@ class PybulletBackend(Backend):
                 physicsClientId=self.cid,
                 **kw,
             )
-
-    def _command_arm(self) -> None:
-        if self._arm_from is None:  # placed, not moved: nothing to ramp from
-            self._arm_from = self._ctrl[: self.n_arm].copy()
-        self._ramp(1.0)
-
-    def _ramp(self, frac: float) -> None:
-        """Command the arm a ``frac`` of the way along this control step's move.
-
-        A PyBullet position motor closes a fixed fraction of its error every substep, so a target
-        that jumps once per control step moved the arm in a staircase: a velocity spike several
-        times the commanded speed (27 m/s^2 against MuJoCo's 5 on the same policy), then a coast.
-        A held object has to follow each spike by friction alone, and the light grippers could
-        not: the ARX L5 lost its cube on every lift (0/20), though it held still and at slow speed.
-        Ramping the target across the substeps, with the ramp's velocity as feed-forward, moves the
-        arm at the commanded speed, as a servo's interpolator does. (Modelling MuJoCo's kp/kv servo
-        per joint instead, without the coupling between joints, overshot on the light SO-101 and
-        knocked cubes aside as it came down: 8/12 policy runs, against 12/12 with the ramp.)
-        """
-        a, b = self._arm_from, self._ctrl[: self.n_arm]
-        self._sq, self._sv = a + frac * (b - a), (b - a) / self.control_dt
-        self._drive_arm()
 
     def _drive_arm(self) -> None:
         p.setJointMotorControlArray(
@@ -295,7 +292,7 @@ class PybulletBackend(Backend):
 
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
-        self._arm_from = None  # placed, not moved: no ramp
+        self._ramp.reset()  # placed, not moved: no ramp
         for j, v in zip(self._arm, q[: self.n_arm]):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
         if not self.has_gripper:
@@ -349,9 +346,11 @@ class PybulletBackend(Backend):
 
     # time
     def step(self):
-        c = self.cid
-        for k in range(self._substeps):
-            self._ramp((k + 1) / self._substeps)
+        c, n = self.cid, self._substeps
+        moving = self._ramp.moving
+        for k in range(n):
+            if moving:
+                self._command((k + 1) / n)
             self._follow()
             # Gravity compensation: hold each robot link up at its centre of mass.
             for j, weight in self._weights:
@@ -367,7 +366,9 @@ class PybulletBackend(Backend):
                 p.applyExternalForce(body, -1, f.tolist(), pos, p.WORLD_FRAME, physicsClientId=self.cid)
             p.stepSimulation(physicsClientId=self.cid)
         self._pending = {}
-        self._arm_from = self._ctrl[: self.n_arm].copy()  # the ramp has arrived
+        if moving:
+            self._ramp.arrive()
+            self._command(1.0)  # holding: no feed-forward velocity
         self._t += self._substeps * self.spec.dt
 
     @property

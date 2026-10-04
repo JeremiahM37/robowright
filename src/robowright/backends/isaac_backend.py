@@ -45,7 +45,7 @@ import numpy as np
 
 from ..robots import urdf
 from ..scene import SceneSpec
-from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, STATE, Backend, Contact, register
+from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, STATE, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
 
 # Driven finger joints without an actuator gain of their own saturate this far off target (as in Genesis).
@@ -217,6 +217,8 @@ def _wxyz(t) -> np.ndarray:
 @register("isaac")
 class IsaacBackend(Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, STATE, DETERMINISTIC, FORCES})
+    reusable = True
+    exclusive = True  # one stage per process
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
@@ -273,6 +275,7 @@ class IsaacBackend(Backend):
         self._write_dofs(q, np.zeros(self._ndof))
         self._ctrl = np.zeros(len(self.joint_names))
         self._targets = q.copy()
+        self._ramp = TargetRamp()
         if rm.floating:
             yaw = rm.base_yaw
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
@@ -717,7 +720,8 @@ class IsaacBackend(Backend):
             self._ctrl = np.append(arm, s)
         else:
             self._ctrl = arm
-        self._art.set_dof_position_targets(self._t32(t[None]), self._idx)
+        self._ramp.set(t)
+        self._art.set_dof_position_targets(self._t32(t[None]), self._idx)  # ramped from the last step's in step()
 
     def ctrl(self):
         return self._ctrl.copy()
@@ -744,6 +748,7 @@ class IsaacBackend(Backend):
             for d, c, o in self._fingers.values():
                 pos[d] = c + s * (o - c)
         self._write_dofs(pos, np.zeros(self._ndof))
+        self._ramp.reset()  # placed, not moved: no ramp
         self.set_ctrl(q)
 
     def hand_pose(self):
@@ -753,9 +758,12 @@ class IsaacBackend(Backend):
 
     # --- time --------------------------------------------------------------------
     def step(self):
-        sim, dt = self._sim, self._dt
+        sim, dt, ramp, n = self._sim, self._dt, self._ramp, self._substeps
         q0 = self._row(self._art.get_dof_positions())
-        for _ in range(self._substeps):
+        moving = ramp.moving
+        for k in range(n):
+            if moving:
+                self._art.set_dof_position_targets(self._t32(ramp.at((k + 1) / n)[None]), self._idx)
             for name, f in self._pending.items():
                 if name == "robot":
                     self._push_base(f)
@@ -765,6 +773,7 @@ class IsaacBackend(Backend):
             sim.simulate(dt, self._k * dt)
             sim.fetch_results()
             self._k += 1
+        ramp.arrive()
         self._vel = (self._row(self._art.get_dof_positions()) - q0) / (self._substeps * dt)
         self._pending = {}
 
@@ -899,6 +908,8 @@ class IsaacBackend(Backend):
             b.set_velocities(self._t32(s[i + 7 : i + 13][None]), self._obj_idx)
             i += 13
         self._apply_gains()
+        # States are taken between control steps, when the ramp has arrived: none is pending.
+        self._ramp.reset()
         self.set_ctrl(ctrl)
 
     def close(self):
