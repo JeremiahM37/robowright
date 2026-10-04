@@ -114,9 +114,10 @@ class LeggedRobot(Robot):
         b.set_joint_positions(q)
         self._target = q.copy()
         if self.world.trace:
-            self.world.trace.event(
-                "edit", "reset_to", {"q": [float(v) for v in q], "base_pos": [float(x), float(y), float(z)], "yaw": float(yaw)}
-            )
+            args = {"q": [float(v) for v in q], "base_pos": [float(x), float(y), float(z)], "yaw": float(yaw)}
+            if q is self.home_q and base_pos is None and yaw == m.base_yaw:
+                args["default"] = True  # codegen writes robot.reset_to(): same pose, readable
+            self.world.trace.event("edit", "reset_to", args)
 
     @action
     def move_joints(self, q, speed: float | None = None, timeout: float | None = None):
@@ -172,3 +173,9 @@ class LeggedRobot(Robot):
                 "robot.stand(), robot.crouch(), robot.move_joints() and robot.run_policy()"
             )
         return object.__getattribute__(self, name)
+
+    def __getattr__(self, name):
+        # Only reached for names the robot lacks: point pose queries (and matchers) at the base.
+        if name in ("up_axis", "position", "quaternion", "pose", "height", "yaw", "velocity", "top", "bounds"):
+            raise AttributeError(f"the robot has no {name!r}: its pose is the base's - use robot.base (e.g. expect(robot.base))")
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")

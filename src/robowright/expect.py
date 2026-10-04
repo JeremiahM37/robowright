@@ -63,6 +63,8 @@ class Expectation:
         }
         if timeout is not None:
             rec["kwargs"]["timeout"] = timeout
+        elif self.timeout is not None:  # given to expect(): the matcher takes it too, and codegen keeps it
+            rec["kwargs"]["timeout"] = self.timeout
         if hold:
             rec["kwargs"]["hold"] = hold
         if self.mode == "always":

@@ -40,7 +40,7 @@ def test_trace_contents(tmp_path):
     assert {"edit", "fault", "action", "expect"} <= kinds
     assert tr.arrays["qpos"].shape == (len(tr), 6)
     assert tr.arrays["obj_pos"].shape == (len(tr), 2, 3)
-    assert any(n.startswith("frames/front/") for n in tr.frame_names)
+    assert tr.frame_names == []  # no rendering while the test runs: the viewer draws frames from the state
     assert tr.state0 is not None
     assert tr.meta["status"] == "passed"
 
@@ -135,7 +135,7 @@ def test_cli_round_trip(tmp_path):
 
 
 def test_tracing_survives_missing_gl(tmp_path, monkeypatch):
-    w = rw.launch(name="nogl", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    w = rw.launch(name="nogl", settings=rw.Settings(trace="on", trace_dir=str(tmp_path), trace_cameras=["front"]))
 
     def broken(*a, **k):
         raise RuntimeError("no EGL")
@@ -179,3 +179,79 @@ def test_replay_and_codegen_beyond_the_so101(tmp_path, robot):
         rw.launch = original_launch
     a, b = Trace(path).arrays, Trace(tmp_path / "regen" / "test_regen.zip").arrays
     assert np.array_equal(a["qpos"], b["qpos"])
+
+
+def test_codegen_keeps_settings_and_expect_timeouts(tmp_path):
+    """A regenerated test moves at the original speeds and waits as long in each check."""
+    from robowright.errors import ExpectationError
+
+    s = rw.Settings(trace="on", trace_dir=str(tmp_path), max_joint_speed=1.0)
+    with rw.launch(robot="so101", name="slow", settings=s) as w:
+        w.robot.reset_to()
+        w.robot.arm.move_to((0.22, 0.0, 0.08))
+        with pytest.raises(ExpectationError):
+            expect(w.scene["cube"], timeout=0.3).to_be_inside(w.scene["bin"])
+    code = generate(w.trace_path)
+    assert "settings=rw.Settings(max_joint_speed=1.0)" in code
+    assert "timeout=0.3" in code
+    assert "robot.reset_to()" in code
+
+
+def test_frames_captured_during_the_run_on_request(tmp_path):
+    w = rw.launch(name="live", settings=rw.Settings(trace="on", trace_dir=str(tmp_path), trace_cameras=["front"]))
+    w.robot.reset_to()
+    w.robot.arm.home()
+    tr = Trace(w.close())
+    assert any(n.startswith("frames/front/") for n in tr.frame_names)
+
+
+def test_viewer_draws_frames_from_the_recorded_state(tmp_path):
+    from robowright.viewer import build_html
+
+    path, _ = _run(tmp_path)
+    try:
+        html = build_html(path)
+    except Exception as e:  # pragma: no cover - no GL on this machine
+        pytest.skip(f"rendering unavailable: {e}")
+    assert html.count("data:image/jpeg;base64,") > 10
+
+
+def test_viewer_without_gl_keeps_the_telemetry(tmp_path, monkeypatch):
+    from robowright import render
+    from robowright.viewer import build_html
+
+    path, _ = _run(tmp_path, faults=False)
+
+    def broken(*a, **k):
+        raise RuntimeError("no EGL")
+
+    monkeypatch.setattr(render, "jpeg_frames", broken)
+    with pytest.warns(UserWarning, match="without camera frames"):
+        html = build_html(path)
+    assert "data:image/jpeg" not in html and '"qpos"' in html
+
+
+@pytest.mark.parametrize("robot", ["so101", "go2"])
+def test_render_a_trace_to_video(tmp_path, robot):
+    """Any trace redraws from its state alone: arms from joints and object poses, legged robots also from the base pose."""
+    from robowright.render import Renderer, render_video
+
+    w = rw.launch(robot=robot, name=robot, settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    w.robot.reset_to()
+    if robot == "go2":
+        w.faults.push("robot", force=(0, 40.0, 0), duration=0.1)
+        w.wait(0.4)
+    else:
+        w.robot.arm.move_to((0.22, 0.05, 0.08))
+    tr = Trace(w.close())
+    if robot == "go2":
+        assert tr.arrays["base"].shape == (len(tr), 7)
+    try:
+        r = Renderer(tr)
+        first, last = r.frame(0, "front", (160, 120)), r.frame(len(tr) - 1, "front", (160, 120))
+        r.close()
+    except Exception as e:  # pragma: no cover - no GL on this machine
+        pytest.skip(f"rendering unavailable: {e}")
+    assert first.shape == (120, 160, 3) and np.abs(first.astype(int) - last).mean() > 0.1  # it moved
+    gif = render_video(tr, tmp_path / "run.gif", size=(160, 120), fps=10)
+    assert gif.read_bytes()[:6] == b"GIF89a"

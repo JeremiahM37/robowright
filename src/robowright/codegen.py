@@ -59,6 +59,15 @@ def _policy_lines(args: dict, imports: set) -> list[str]:
     return [f"policy = ...  # TODO: recreate {path or 'the policy'}"]
 
 
+def _settings(meta: dict) -> str:
+    """``settings=...`` for the motion and timing settings the run changed from the defaults."""
+    from .world import Settings
+
+    default = Settings()
+    changed = {k: v for k, v in meta.get("settings", {}).items() if getattr(default, k) != v}
+    return f", settings=rw.Settings({_kwargs(changed)})" if changed else ""
+
+
 def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_failure: bool = True) -> str:
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     m = tr.meta
@@ -70,7 +79,9 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
         t, a = e["type"], e.get("args", {})
         if t == "edit" and e["name"] == "reset_to":
             q = a["q"]
-            if "base_pos" in a:  # legged: joints, then where the base stands
+            if a.get("default"):
+                body.append("robot.reset_to()")
+            elif "base_pos" in a:  # legged: joints, then where the base stands
                 body.append(f"robot.reset_to({_value(q)}, base_pos={_value(a['base_pos'])}, yaw={_value(a.get('yaw', 0.0))})")
             else:
                 body.append(f"robot.reset_to({_value(q[:-1])}, gripper={_value(q[-1])})")
@@ -110,6 +121,14 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
             neg = ".not_" if a.get("negate") else ""
             mode = ".always" if t == "invariant" else ""
             body.append(f"expect({_subject(a['subject'])}){mode}{neg}.{a['matcher']}({_kwargs(a['kwargs'])})")
+        if e.get("status") == "raised" and body:
+            # A call that failed but was carried on from (an agent's attempt that moved the world):
+            # the test makes it too, for the same time to pass, and expects it to fail again.
+            err = "ExpectationError" if t in ("expect", "invariant") else e.get("detail", "").split(":", 1)[0] or "RobowrightError"
+            imports.add("import pytest")
+            imports.add(f"from robowright.errors import {err}")
+            body[-1:] = [f"with pytest.raises({err}):", "    " + body[-1]]
+            continue
         if e.get("status") == "failed" and t != "violation":
             failed_at = failed_at or e
             if stop_at_failure:
@@ -132,7 +151,7 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
             "",
             "",
             f"def {name}():",
-            f"    with rw.launch(SCENE, backend={m['backend']!r}, seed={m['seed']}, name={name!r}) as world:",
+            f"    with rw.launch(SCENE, backend={m['backend']!r}, seed={m['seed']}, name={name!r}{_settings(m)}) as world:",
             # Bind only what the body uses, so the generated file passes a linter as is.
             "        robot, scene = world.robot, world.scene" if any("scene[" in ln for ln in body) else "        robot = world.robot",
         ]

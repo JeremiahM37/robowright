@@ -20,3 +20,7 @@ class CapabilityError(RobowrightError):
 
 class UnreachableError(RobowrightError):
     """Inverse kinematics found no joint configuration for a target."""
+
+
+class GraspError(RobowrightError):
+    """``pick`` lifted without the object in both jaws."""

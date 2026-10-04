@@ -51,7 +51,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | auto-waiting actions | `robot.arm.move_to(...)` returns only once the arm has settled; `gripper.close()` returns once the jaws have stalled |
 | web-first assertions | `expect(cube).to_be_inside(bin)` re-checks every control step until it holds or times out, in *simulated* time |
 | locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots |
-| trace viewer | every failure leaves a `.zip` trace with camera frames, joints, contacts and the action timeline, viewable as HTML |
+| trace viewer | every failure leaves a `.zip` trace with joints, object poses, contacts and the action timeline, viewable as HTML with camera views drawn from it |
 | codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test |
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 
@@ -133,6 +133,7 @@ git clone https://github.com/JeremiahM37/robowright && cd robowright
 pip install -e ".[dev]"          # MuJoCo is required; PyBullet, xdist and ruff come with [dev]
 pip install -e ".[drake]"        # optional: Drake (Python 3.12+)
 pip install -e ".[genesis]"      # optional: Genesis (install a CPU or CUDA torch first)
+pip install -e ".[mcp]"          # optional: the MCP server for AI agents
 robowright info                  # versions, backends, and whether offscreen rendering works
 robowright robots                # the robots you can test on
 pytest examples
@@ -143,7 +144,7 @@ test uses them, into `~/.cache/robowright`. It's a sparse checkout of just the r
 run: 30–40 MB each, mostly meshes.
 
 On a headless Linux machine robowright renders through EGL. Without a working GL, tests
-still run and traces are still recorded, just without camera frames.
+still run and traces are still recorded; the viewer just has no camera view.
 
 **Isaac Sim** (NVIDIA GPU machines only) isn't a pip extra: install Isaac Sim 5.x
 (`pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com`
@@ -159,8 +160,8 @@ into the same environment and use `--rw-backend isaac`. Its URDF importer needs
 robot.arm.move_to((0.22, 0.05, 0.04))  # IK, joint-space trajectory, then wait until settled
 robot.arm.move_to(cube, linear=True, speed=0.05)  # straight-line Cartesian approach
 robot.gripper.close()  # returns when the jaws stop: on an object, or shut
-robot.pick(cube)
-robot.place(on=bin)  # skills built from the above
+robot.pick(cube)  # returns once the cube is held in both jaws after the lift
+robot.place(on=bin)  # into the bin's centre, or the free spot farthest from what is already there
 ```
 
 When an action can't finish, it says why:
@@ -168,6 +169,7 @@ When an action can't finish, it says why:
 ```
 ActionTimeoutError: arm did not settle within 1.0s; worst joint shoulder_lift is 0.408 rad off target
 UnreachableError: no joint configuration reaches [0.5, 0.0, 0.3] (closest 264.6 mm)
+GraspError: pick('cube2') lifted without it: cube2 is at [0.151, -0.086, 0.012], the tool at [0.161, -0.1, 0.066], the jaws at opening 0.11, touching nothing / nothing
 ```
 
 ### Assertions wait, then explain
@@ -250,6 +252,20 @@ The viewer is one self-contained HTML file, so you can attach it to a CI run or 
 It has an action list, a scrubbable camera view, a timeline, joint plots (measured against
 commanded), and per-step joints, objects and contacts.
 
+Tests don't render anything while they run. A trace records each step's joints, object
+poses and (for legged robots) base pose. When a trace is opened, the scene is rebuilt in
+MuJoCo and drawn from that recorded state, with no physics. So only the runs someone
+looks at pay for pictures. Rendering frames during a run used to roughly double a test's
+time (+80% to +119% on a pick-and-place); recording state alone costs 2–13%. Traces from
+engines that can't render, such as Isaac Sim here, are drawn the same way.
+
+```console
+$ robowright render trace.zip -o run.mp4 --size 1280x720    # every step, at the run's own pace
+```
+
+To keep what the cameras saw during the run instead, for example the images a policy was
+given, pass `Settings(trace_cameras=["front"])`.
+
 ```console
 $ robowright replay trace.zip
 replayed 223 steps: bit-identical
@@ -263,6 +279,46 @@ the first step where it does. `codegen` writes the run back out as plain robowri
 That includes the exact randomised start poses and injected faults, so a one-in-fifty
 failure becomes a test you can run every time.
 
+### AI agents drive robots over MCP
+
+Playwright MCP lets an agent use a browser. `robowright mcp` lets one use a simulated
+robot the same way, then saves what it did as a test.
+
+```console
+$ claude mcp add robowright -- robowright mcp
+```
+
+The agent launches a world (any robot, any installed engine, its own objects) and reads it
+as text:
+
+```
+world: Franka Emika Panda (panda) on mujoco, t=6.540s, seed=0, status=running
+robot (arm):
+  tcp: [0.300, 0.400, 0.166]
+  gripper: opening 1.00 (open), holding nothing
+  joints: joint1=0.503, joint2=0.711, joint3=0.109, joint4=-1.452, joint5=-0.086, joint6=2.159, joint7=-0.152, gripper=1.000
+objects (refs for other calls):
+  - cube: red box 40x40x40 mm, at [0.300, 0.401, 0.066], yaw 0 deg, at rest, inside bin, touching bin
+  - cylinder: green cylinder 30x30x40 mm, at [0.450, 0.150, 0.020], yaw 0 deg, at rest, touching floor
+  - bin: blue bin 200x200x80 mm, at [0.300, 0.400, 0.040], yaw 0 deg, touching cube
+cameras: front, top, side
+```
+
+It acts on objects by name (`robot_pick`, `robot_place`, `robot_move_to`, `robot_push`,
+`robot_fault`, ...), checks outcomes with any matcher (`robot_expect`), and looks through
+the cameras (`robot_screenshot`). Each action returns the new snapshot. A failed action
+explains itself and the session carries on. `robot_generate_test` writes the session out
+as a pytest test that reproduces it bit for bit:
+
+- Attempts that failed during planning, before anything moved, are left out.
+- Failed attempts that let simulated time pass are kept inside `pytest.raises`, so the
+  rest of the test happens at the same simulated times.
+
+Given only these tools and the task "put a cube and a cylinder in the bin with a Panda,
+verify it, save a test", a headless Claude agent built the scene, did it on the first
+try, checked a screenshot and saved a test that passes. A session costs what MuJoCo
+costs: about 1 second of wall time for a launch, pick, place, check and screenshot.
+
 ### Several physics engines
 
 ```console
@@ -275,7 +331,7 @@ $ pytest --rw-backend mujoco,pybullet,drake,genesis,isaac
 | PyBullet | `pip install robowright[pybullet]` | Bullet, the long-standing open-source baseline |
 | Drake | `pip install robowright[drake]` (Python 3.12+) | Toyota Research Institute's simulator; SAP contact solver, soft-surface contact |
 | Genesis | `pip install robowright[genesis]` | CPU by default (faster than CUDA for one scene, and deterministic); `ROBOWRIGHT_GENESIS_DEVICE=gpu` |
-| Isaac Sim | install Isaac Sim 5.x into the environment | NVIDIA PhysX 5; needs an NVIDIA GPU machine. CPU PhysX pipeline by default (deterministic, ~17× faster than the GPU pipeline for one scene); physics only, no camera frames yet |
+| Isaac Sim | install Isaac Sim 5.x into the environment | NVIDIA PhysX 5; needs an NVIDIA GPU machine. CPU PhysX pipeline by default (deterministic, ~17× faster than the GPU pipeline for one scene); physics only; its traces are drawn by MuJoCo from the recorded state |
 
 The robot, kinematics, actions and assertions are shared; only physics differs. Every
 engine loads the same description of each robot: a URDF and OBJ meshes exported from its
@@ -424,7 +480,6 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
    tested without a simulator.
 3. Locomotion policies as first-class fixtures (walk a Go2 or G1 one metre, assert it
    stays upright).
-4. An agent-facing MCP server: "pick up the red cube" becomes a recorded, assertable run.
 
 ## License
 

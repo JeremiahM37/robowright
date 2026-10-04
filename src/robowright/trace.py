@@ -7,7 +7,9 @@ regenerate a run:
 - ``steps.npz``    per-control-step arrays: time, qpos, ctrl, object poses, forces
 - ``state0.npy``   full simulator state before the first step (when supported)
 - ``contacts.json`` contact pairs per step
-- ``frames/<camera>/<step>.jpg`` camera frames at ``frame_every`` steps
+- ``frames/<camera>/<step>.jpg`` camera frames at ``frame_every`` steps, only if
+  ``Settings.trace_cameras`` asked for frames captured during the run; otherwise the
+  viewer draws them from the recorded state (robowright.render)
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ from pathlib import Path
 import numpy as np
 
 FORMAT_VERSION = 1
+
+
+BEHAVIOUR_SETTINGS = ("expect_timeout", "action_timeout", "max_joint_speed", "max_tcp_speed")
 
 
 @dataclass
@@ -57,6 +62,7 @@ class Recorder:
         self.force_names = list(world.object_names) + (["robot"] if world.backend.robot_model.floating else [])
         self.contacts: list[list] = []
         self.frames: dict[str, dict[int, bytes]] = {}
+        self.base: list[np.ndarray] = []
         self.state0 = None
         self.begin_index = 0
         self.started = time.time()
@@ -65,7 +71,7 @@ class Recorder:
     def can_render(self):
         from .backends.base import RENDER
 
-        return RENDER in self.world.backend.capabilities and self.cameras != []
+        return RENDER in self.world.backend.capabilities and bool(self.cameras)
 
     def begin(self):
         from .backends.base import STATE
@@ -89,6 +95,9 @@ class Recorder:
             self.obj_quat.append(np.zeros((len(names), 4)))
         self.t.append(b.time)
         self.qpos.append(b.qpos())
+        if b.robot_model.floating:  # with the joints, enough to redraw the robot (robowright.render)
+            pos, quat = b.base_pose()
+            self.base.append(np.concatenate([pos, quat]))
         self.ctrl.append(b.ctrl())
         self.forces.append(np.zeros((len(self.force_names), 3)))
         if w.has_contacts:
@@ -102,7 +111,7 @@ class Recorder:
         from PIL import Image
 
         w, h = self.image_size
-        for cam in self.cameras or [c.name for c in self.world.spec.cameras]:
+        for cam in self.cameras:
             try:
                 img = self.world.backend.render(cam, w, h)
             except Exception as e:  # no GL available: keep tracing, just without frames
@@ -156,6 +165,8 @@ class Recorder:
             "begin_event_index": self.begin_index,
             "status": w.status,
             "faults": [f.describe() for f in w.faults.active],
+            # The settings that shape motion and timing, so codegen can rebuild the same run.
+            "settings": {k: getattr(w.settings, k) for k in BEHAVIOUR_SETTINGS},
             "events": [e.to_dict() for e in self.events],
         }
 
@@ -173,6 +184,7 @@ class Recorder:
                 obj_pos=np.array(self.obj_pos),
                 obj_quat=np.array(self.obj_quat),
                 forces=np.array(self.forces),
+                **({"base": np.array(self.base)} if self.base else {}),
             )
             z.writestr("steps.npz", buf.getvalue())
             if self.state0 is not None:

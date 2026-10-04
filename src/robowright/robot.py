@@ -13,7 +13,7 @@ import time as _time
 
 import numpy as np
 
-from .errors import ActionTimeoutError, UnreachableError
+from .errors import ActionTimeoutError, GraspError, UnreachableError
 from .locators import ObjectHandle, Subject, as_subject
 from .robots import Kinematics
 
@@ -224,6 +224,13 @@ class Gripper(Subject):
             raise ActionTimeoutError(f"gripper did not reach opening {opening:.2f} within {timeout}s (at {r.true_qpos()[-1]:.2f})")
 
 
+def _footprint(spec) -> float:
+    """Radius of the circle an object covers on the floor."""
+    if spec.kind in ("box", "bin"):
+        return float(np.hypot(spec.size[0], spec.size[1]))
+    return float(spec.size[0])
+
+
 class Robot:
     _label = "robot"
     name = "robot"
@@ -289,7 +296,10 @@ class Robot:
         self.world.backend.set_joint_positions(q)
         self._target = q.copy()
         if self.world.trace:
-            self.world.trace.event("edit", "reset_to", {"q": [float(x) for x in q]})
+            args = {"q": [float(x) for x in q]}
+            if q_arm is None and gripper == GRIPPER_OPEN:
+                args["default"] = True  # codegen writes robot.reset_to(): same pose, readable
+            self.world.trace.event("edit", "reset_to", args)
 
     # internals --------------------------------------------------------------
     def _set_arm(self, q):
@@ -343,6 +353,18 @@ class Robot:
         self.arm.move_to.__wrapped__(self.arm, grasp, yaw=yaw, linear=True, timeout=timeout)
         self.gripper.close.__wrapped__(self.gripper)
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, lift], yaw=yaw, linear=True, timeout=timeout)
+        w = self.world
+        if isinstance(o, ObjectHandle) and w.has_contacts:
+            # A pick that lifted nothing must say so here, not leave a later check to puzzle over
+            # an empty gripper. Already holding costs no time; a jaw chattering on the object
+            # gets a moment to settle.
+            if not w.run_until(lambda: self.gripper.holding() == o.name, 0.2):
+                fixed, moving = self.gripper.touching()
+                raise GraspError(
+                    f"pick({o.name!r}) lifted without it: {o.name} is at {np.round(o.position, 3).tolist()}, "
+                    f"the tool at {np.round(self.tcp.position, 3).tolist()}, the jaws at opening {self.gripper.opening:.2f}, "
+                    f"touching {sorted(fixed) or 'nothing'} / {sorted(moving) or 'nothing'}"
+                )
 
     @action
     def place(self, on, height: float | None = None, yaw: float | None = None, timeout: float | None = None):
@@ -360,6 +382,8 @@ class Robot:
             yaw = self.grip_yaw
         if height is None:
             height = max(0.015, self.model.derived.finger_reach + 0.006)
+        if isinstance(t, ObjectHandle) and t.spec.kind == "bin":
+            p[:2] = self._free_spot(t, top + height + 0.03, yaw)
         above = np.array([p[0], p[1], top + height + 0.03])
         # Rise straight up to the transit height first: a joint-space move from a low
         # lift dips on its way across and drags the held object through the target's rim.
@@ -376,6 +400,45 @@ class Robot:
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper)
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
+
+    def _free_spot(self, bin, z: float, yaw: float) -> np.ndarray:
+        """Where in ``bin`` to drop the held object: its centre while empty, else the reachable
+        spot inside it farthest from what is already there, so objects are not stacked."""
+        w = self.world
+        centre = bin.position[:2].copy()
+        if not w.has_ground_truth:
+            return centre
+        lo, hi = bin.bounds()
+        held = self.gripper.holding() if w.has_contacts else None
+        inside = []
+        for name in w.object_names:
+            o = w.scene[name]
+            if name in (bin.name, held) or o.spec.static:
+                continue
+            q = o.position
+            if np.all(q[:2] > lo[:2]) and np.all(q[:2] < hi[:2]) and q[2] < hi[2] + 0.05:
+                inside.append((q[:2], _footprint(o.spec)))
+        if not inside:
+            return centre
+        r = _footprint(w.spec.object(held)) if held else 0.02
+        xs = np.linspace(lo[0] + r + 0.004, hi[0] - r - 0.004, 9)
+        ys = np.linspace(lo[1] + r + 0.004, hi[1] - r - 0.004, 9)
+        if xs[0] > xs[-1] or ys[0] > ys[-1]:  # the bin is barely wider than the object
+            return centre
+        best, best_score = centre, -np.inf
+        for x in xs:
+            for y in ys:
+                c = np.array([x, y])
+                clear = min(float(np.linalg.norm(c - q)) - rq for q, rq in inside) - r
+                score = clear - 1e-3 * float(np.linalg.norm(c - centre))  # ties: nearer the centre
+                if score <= best_score:
+                    continue
+                try:
+                    self._ik([x, y, z], self._target[: self.n_arm], DOWN, yaw)
+                except UnreachableError:
+                    continue
+                best, best_score = c, score
+        return best
 
     def observe(self, cameras=(), privileged: bool = False, task: str | None = None) -> dict:
         """What a policy sees: joint readings, optional camera images, optional ground truth."""

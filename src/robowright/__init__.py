@@ -51,6 +51,7 @@ __all__ = [
     "CameraSpec",
     "CapabilityError",
     "ExpectationError",
+    "GraspError",
     "InvariantViolation",
     "ObjectHandle",
     "ObjectSpec",

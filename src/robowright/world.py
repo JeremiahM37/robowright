@@ -35,6 +35,8 @@ class Settings:
     trace: str = "on"  # on | off | retain-on-failure
     trace_dir: str = "robowright-traces"
     frame_every: int = 5  # control steps between trace frames
+    # Cameras to capture *during* the run. By default none: the viewer draws frames from the
+    # recorded state when a trace is opened (robowright.render), so tests spend nothing on it.
     trace_cameras: list | None = None
     image_size: tuple = (320, 240)
     realtime: bool = False  # pace stepping to wall clock (hardware-style)

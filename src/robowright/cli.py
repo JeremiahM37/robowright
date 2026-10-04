@@ -96,6 +96,32 @@ def _robots(args, rest):
     return 0
 
 
+def _render(args, rest) -> int:
+    from .render import render_video
+
+    w, h = (int(x) for x in args.size.lower().split("x"))
+    out = args.output or str(Path(args.trace).with_suffix(".mp4"))
+    try:
+        path = render_video(args.trace, out, camera=args.camera, size=(w, h), fps=args.fps)
+    except ImportError:
+        print("mp4 output needs imageio: pip install 'robowright[video]' (or write a .gif)", file=sys.stderr)
+        return 1
+    print(path)
+    return 0
+
+
+def _mcp(args, rest) -> int:
+    from .mcp_server import main as serve
+
+    try:
+        import mcp  # noqa: F401
+    except ImportError:
+        print("robowright mcp needs the MCP SDK: pip install 'robowright[mcp]'", file=sys.stderr)
+        return 1
+    serve()
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="robowright", description="Playwright-style testing for robots.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -117,11 +143,27 @@ def main(argv=None) -> int:
     rb = sub.add_parser("robots", help="list the robots tests can run on")
     rb.add_argument("--family", choices=["arm", "legged"])
     rb.add_argument("--markdown", action="store_true")
+    rd = sub.add_parser("render", help="render a trace to video (mp4, or gif) from its recorded state")
+    rd.add_argument("trace")
+    rd.add_argument("-o", "--output", help="output file (.mp4 or .gif); default: next to the trace")
+    rd.add_argument("--camera", default="front")
+    rd.add_argument("--size", default="1280x720", help="WIDTHxHEIGHT")
+    rd.add_argument("--fps", type=float, help="default: the run's own pace (50 fps)")
+    sub.add_parser("mcp", help="run the MCP server (stdio) that lets an AI agent drive a simulated robot")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
         return _test(None, argv[1:])
     args = p.parse_args(argv)
-    return {"show-trace": _show, "replay": _replay, "codegen": _codegen, "info": _info, "robots": _robots}[args.cmd](args, [])
+    commands = {
+        "show-trace": _show,
+        "replay": _replay,
+        "codegen": _codegen,
+        "render": _render,
+        "info": _info,
+        "robots": _robots,
+        "mcp": _mcp,
+    }
+    return commands[args.cmd](args, [])
 
 
 if __name__ == "__main__":

@@ -30,17 +30,25 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
     s = mujoco.MjSpec()
     s.option.timestep = spec.dt
     spec.robot_model.add_to(s)
+    # One lighting rig for every robot: Menagerie models bring their own lights, which on top of
+    # the scene's saturate the floor and cast a second set of shadows.
+    for light in list(s.lights):
+        s.delete(light)
     if spec.robot_model.family == "arm":
         # Arm controllers on real robots cancel gravity; bare position servos sag
         # under it instead, by more than a grasp can tolerate.
         for b in s.bodies:
             if b.name.startswith(PREFIX):
                 b.gravcomp = 1.0
-    s.visual.headlight.diffuse = [0.6, 0.6, 0.6]
-    s.visual.headlight.ambient = [0.35, 0.35, 0.35]
+    # Headlight, ambient and the sun stay below 1 together, so a floor seen from above does not white out.
+    s.visual.headlight.diffuse = [0.4, 0.4, 0.4]
+    s.visual.headlight.ambient = [0.3, 0.3, 0.3]
     s.visual.global_.offwidth = 1280
     s.visual.global_.offheight = 960
     s.stat.extent = 1.0
+    # The sun's shadow map has to cover the floor in view, or beyond its edge the floor speckles.
+    s.visual.map.shadowclip = 4.0
+    s.visual.quality.shadowsize = 8192
     wb = s.worldbody
     tex = s.add_texture(
         name="grid",
@@ -51,7 +59,7 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
         width=256,
         height=256,
     )
-    mat = s.add_material(name="table", texrepeat=[8, 8], texuniform=True)
+    mat = s.add_material(name="table", texrepeat=[8, 8], texuniform=True, specular=0.05, shininess=0.1)
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
     wb.add_light(
         pos=[0.3, -0.3, 1.5], dir=[-0.2, 0.2, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL, castshadow=1, diffuse=[0.5, 0.5, 0.5]

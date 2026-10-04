@@ -35,6 +35,10 @@ steps:
     actions:
       - shell: "cd /tmp/robowright-verify && $OLDPWD/.venv/bin/robowright codegen verify__test_place_in_wrong_spot.zip -o test_regression.py && ! $OLDPWD/.venv/bin/python -m pytest -q -p no:cacheprovider test_regression.py"
 
+  - name: an MCP client drives a robot and the test it saves passes
+    actions:
+      - shell: "capped .venv/bin/python scripts/mcp_smoke.py /tmp/robowright-verify/mcp"
+
   - name: trace viewer DOM (desktop + Pixel 7)
     actions:
       - shell: "${VERIFY_PYTHON:-python3} scripts/check_viewer.py /tmp/robowright-verify/trace.html"

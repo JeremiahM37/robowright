@@ -20,7 +20,12 @@ for robot, force in _SLIDE.items():
     for test in ("test_policy_with_randomized_cube", "test_policy_with_sensor_noise_and_latency"):
         KNOWN[(test, "pybullet", robot)] = WEAK_GRIP.format(force=force)
 for robot in ("piper", "arx_l5"):
-    KNOWN[("test_pick_and_place", "pybullet", robot)] = WEAK_GRIP.format(force=_SLIDE[robot])
+    for test in ("test_pick_and_place", "test_places_a_second_object_beside_the_first"):
+        KNOWN[(test, "pybullet", robot)] = WEAK_GRIP.format(force=_SLIDE[robot])
+KNOWN[("test_places_a_second_object_beside_the_first", "genesis", "xarm7")] = (
+    "Genesis lets the xArm 7's grip slip: the second cube rises 3.2 cm of a 5 cm lift when picked first "
+    "(MuJoCo: 4.5 cm), and after a first place it slides out entirely, so pick raises GraspError"
+)
 # A 1.5 N shove for 0.1 s against grippers modelled at a few newtons. MuJoCo lets the cube go;
 # PyBullet's stiffer contacts hold it, except for the weakest grip.
 for robot, force in {**_SLIDE, "panda": "1.3 N (the real Franka Hand: 70 N)", "vx300s": "5.4 N"}.items():

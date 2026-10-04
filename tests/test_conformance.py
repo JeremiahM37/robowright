@@ -114,6 +114,29 @@ def test_pick_and_place(world):
     expect(cube).to_be_at_rest()
 
 
+def test_places_a_second_object_beside_the_first(rw_backend, rw_robot):
+    """place(on=bin) into an occupied bin finds free floor instead of stacking on what is there."""
+    import robowright as rw
+    from robowright.scene import ObjectSpec, tabletop
+
+    scene = tabletop(
+        ObjectSpec("cube", "box", (0.0125, 0.0125, 0.0125), (0.22, -0.06, None), color="red"),
+        ObjectSpec("cube2", "box", (0.0125, 0.0125, 0.0125), (0.16, -0.10, None), color="green"),
+        ObjectSpec("bin", "bin", (0.05, 0.05, 0.02), (0.2, 0.12, 0.0), color="blue", mass=0.0),
+        robot=rw_robot,
+    )
+    with rw.launch(scene, backend=rw_backend, settings=rw.Settings(trace="off")) as w:
+        w.robot.reset_to()
+        for name in ("cube", "cube2"):
+            w.robot.pick(w.scene[name])
+            w.robot.place(on=w.scene["bin"])
+        for name in ("cube", "cube2"):
+            expect(w.scene[name]).to_be_inside(w.scene["bin"])
+            expect(w.scene[name]).to_be_at_rest()
+            # on the bin's floor, not on the other cube
+            assert w.scene[name].position[2] < w.scene["bin"].bounds()[0][2] + 0.02
+
+
 def test_no_arm_collisions_during_a_pick(world):
     if CONTACTS not in world.backend.capabilities:
         pytest.skip("no contacts")
