@@ -827,21 +827,17 @@ class IsaacBackend(Backend):
 
     # --- state -------------------------------------------------------------------
     def get_state(self):
-        """The full state; for a floating base, also snaps the live simulation onto it.
+        """The full state; also snaps the live simulation onto it.
 
-        PhysX's root pose does not survive a read and write unchanged: writing
-        back the pose just read moves the base by ~1e-8 m (the tensor API
-        converts it to and from the root's centre-of-mass frame in float32),
-        and the walk diverges by microradians within a few steps. Restoring
-        the captured state onto this simulation too makes it the exact state
-        any later ``set_state`` reproduces, so a replay is bit-identical.
-
-        One thing it cannot carry: PhysX keeps each touching pair's contact
-        manifold, friction anchors and warm-start impulses, which the tensor
-        API neither reads nor writes. A state captured before any contact has
-        been stepped (a trace's start) restores exactly; one captured mid-grasp or
-        mid-stance resumes ~3e-5 off after the next step (measured: Panda
-        holding the cube, G1 standing).
+        PhysX's poses do not survive a read and write unchanged: writing back
+        the root or object pose just read moves it by ~1e-8 m (the tensor API
+        converts it to and from the centre-of-mass frame in float32). In a
+        grasp or a stance that is enough to change the contact forces, and the
+        run diverges by ~1e-4 within a step. Restoring the captured state onto
+        this simulation too makes it the exact state any later ``set_state``
+        reproduces, so a restore is bit-identical mid-contact as well
+        (measured on six arms carrying or dropping the cube and legged robots
+        mid-shove, restored straight away or after the simulation moved on).
         """
         parts = [[self._k], self._ctrl, self._gscale]
         parts += [self._row(self._art.get_dof_positions()), self._row(self._art.get_dof_velocities())]
@@ -850,10 +846,9 @@ class IsaacBackend(Backend):
         for b in self._bodies.values():
             parts += [self._row(b.get_transforms()), self._row(b.get_velocities())]
         state = np.concatenate([np.asarray(p, float).ravel() for p in parts])
-        if self.robot_model.floating:
-            vel = self._vel  # keep the measured joint velocities: nothing moved
-            self.set_state(state)
-            self._vel = vel
+        vel = self._vel  # keep the measured joint velocities: nothing moved
+        self.set_state(state)
+        self._vel = vel
         return state
 
     def set_state(self, state):

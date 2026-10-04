@@ -345,6 +345,11 @@ What running everything on everything turned up:
   - Isaac Sim needed PGS instead of PhysX's default TGS solver (TGS let the xArm 7's gripper
     linkage drag its arm joints off target), rigid mimic joints for finger coupling, and
     joint velocities measured from motion, because PhysX reports a clamped jaw as moving.
+  - Restoring a state saved mid-grasp or mid-stumble replays the same future bit for bit
+    on every engine with state save/restore, but only after three fixes:
+    - Genesis's state had to carry its solver's warm start and broadphase order.
+    - Isaac Sim's float32 pose round trip had to be applied to the live run as well.
+    - Drake's simulator had to be re-initialised after a restore.
 - **Legged robots agree closely.** Every engine stands all six robots on joint servos, and
   push recovery agrees to within about 0.1× body weight across engines.
 
@@ -404,10 +409,6 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
   manipulation are not built in.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
-- **Isaac Sim state restore:** restoring a state saved while objects are in contact is
-  close but not exact (about 3e-5), because PhysX keeps contact-cache data its API cannot
-  save. Trace replay is unaffected (its start state is captured before contact) and is
-  bit-identical on Isaac Sim like every other engine.
 - **Gripper models:** Menagerie's grippers squeeze far less than the real ones in several
   cases (Franka Hand: 1.3 N in the model, 70 N real). Tests measure the models, not the
   hardware.

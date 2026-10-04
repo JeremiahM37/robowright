@@ -67,3 +67,27 @@ def test_policy_sees_imu_and_joint_state(world, robot):
     assert rollout.steps == 25
     assert {"qpos", "qvel", "base_quat", "base_lin_vel", "base_ang_vel"} <= set(seen)
     assert np.linalg.norm(seen["base_quat"]) == pytest.approx(1.0)
+
+
+def test_state_restore_mid_stumble_is_exact(world, robot):
+    """A state captured while the robot staggers from a shove replays the same future, even after the run moved on."""
+    from robowright.backends.base import DETERMINISTIC, STATE
+
+    b = world.backend
+    if STATE not in b.capabilities or DETERMINISTIC not in b.capabilities:
+        pytest.skip("no deterministic state save/restore")
+    world.faults.push("robot", force=(0, 0.3 * robot.total_mass * 9.81, 0), duration=0.1)
+    world.wait(0.15)
+
+    def run():
+        out = []
+        for _ in range(30):
+            b.step()
+            out.append(np.concatenate([b.qpos(), *b.base_pose()]))
+        return np.array(out)
+
+    s = b.get_state()
+    first = run()
+    world.wait(0.5)
+    b.set_state(s)
+    assert np.array_equal(run(), first)

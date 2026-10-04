@@ -140,6 +140,31 @@ def test_state_round_trip(world):
     assert np.allclose(b.qpos(), q0, atol=1e-9)
 
 
+def test_state_restore_mid_grasp_is_exact(world):
+    """A state captured with the cube squeezed in the jaws replays the same future, even after the run moved on."""
+    b = world.backend
+    if STATE not in b.capabilities or DETERMINISTIC not in b.capabilities:
+        pytest.skip("no deterministic state save/restore")
+    cube = world.scene["cube"]
+    world.robot.pick(cube)
+    ctrl = b.qpos().copy()
+    ctrl[0] += 0.3  # carry it: the grasp is loaded while the arm swings
+
+    def run():
+        b.set_ctrl(ctrl)
+        out = []
+        for _ in range(30):
+            b.step()
+            out.append(np.concatenate([b.qpos(), *b.object_pose("cube")]))
+        return np.array(out)
+
+    s = b.get_state()
+    first = run()
+    world.wait(0.5)
+    b.set_state(s)
+    assert np.array_equal(run(), first)
+
+
 def test_deterministic(world, rw_backend, rw_robot):
     if DETERMINISTIC not in world.backend.capabilities:
         pytest.skip("not deterministic")

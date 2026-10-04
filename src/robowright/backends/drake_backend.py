@@ -589,6 +589,8 @@ class DrakeBackend(Backend):
                 self.set_gain_scale(j, float(s))
         self.context.SetDiscreteState(state[k + self.n_arm :])
         self.set_ctrl(ctrl)
+        # The simulator refuses to advance from a time it did not reach itself.
+        self.simulator.Initialize()
 
 
 def _drake_urdf(path: Path) -> Path:

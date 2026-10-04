@@ -463,18 +463,50 @@ class GenesisBackend(Backend):
         cam._aspect_ratio = width / height
         r.add_camera(cam)
 
+    def _warmstart(self):
+        """The arrays Genesis carries from one step into the next besides the state proper.
+
+        The constraint solver starts from the last step's accelerations, and the
+        collider from its last broadphase sort and contact normals. Setting the
+        positions clears the first, so without them a state restored mid-contact
+        solves its next step from a different start and drifts (~1e-6).
+        """
+        from genesis.utils.array_class import DataKind
+
+        return [item for item in self.scene.sim.rigid_solver.data if item.kind == DataKind.WARMSTART]
+
     def get_state(self):
+        from genesis.utils.misc import qd_to_numpy
+
         s = self.scene.sim.rigid_solver
-        return np.concatenate([[self._t], _np(s.get_qpos()), _np(s.get_dofs_velocity()), self._ctrl])
+        ws = [qd_to_numpy(item.value, copy=True).astype(float).ravel() for item in self._warmstart()]
+        state = np.concatenate([[self._t], _np(s.get_qpos()), _np(s.get_dofs_velocity()), self._ctrl, *ws])
+        # A restore recomputes the kinematics from qpos, which can differ in the last bit from what the
+        # steps accumulated (~1e-16). Restoring onto this simulation too makes the two runs start alike.
+        self.set_state(state)
+        return state
 
     def set_state(self, state):
+        from genesis.utils.array_class import fill_data
+        from genesis.utils.misc import qd_to_numpy
+
         s = self.scene.sim.rigid_solver
         state = np.asarray(state, float)
-        nq, nv = s.n_qs, s.n_dofs
+        nq, nv, nc = s.n_qs, s.n_dofs, len(self._ctrl)
         self._t = float(state[0])
         s.set_qpos(state[1 : 1 + nq])
         s.set_dofs_velocity(state[1 + nq : 1 + nq + nv])
-        self.set_ctrl(state[1 + nq + nv :])
+        i = 1 + nq + nv
+        self.set_ctrl(state[i : i + nc])
+        i += nc
+        if i == len(state):
+            return  # a state saved before it carried the warm start: restores approximately
+        items, values = self._warmstart(), {}
+        for item in items:
+            like = qd_to_numpy(item.value, copy=False)
+            values[item.name] = state[i : i + like.size].reshape(like.shape).astype(like.dtype)
+            i += like.size
+        fill_data(items, values)
 
     def close(self):
         """Destroy the scene and drop every handle into it.
