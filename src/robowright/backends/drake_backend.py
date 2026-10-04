@@ -240,10 +240,11 @@ class DrakeBackend(Backend):
         for n in rm.arm_joints:
             j = joints[n]
             gains[n] = (j.get("kp", 100.0), j.get("kv", 0.0))
+        coupled = grip.get("coupled_effort", grip["effort"])  # the linkage follows the drivers here
         for n in driven:
             j = joints[n]
             c, o = grip["joints"][n]
-            effort = grip["effort"][n]
+            effort = coupled[n]
             if "kp" in j:
                 kp = j["kp"]
             else:
@@ -251,11 +252,13 @@ class DrakeBackend(Backend):
                 # grip on anything narrower than the open jaws, like MuJoCo's.
                 kp = effort / (0.2 * abs(o - c))
             kv = j.get("kv", 0.0) or 2.0 * np.sqrt(kp * max(j["armature"], 1e-3))
+            if "kp" not in j:  # no faster at full force than the model closes
+                kv = max(kv, effort / max(grip.get("speed", {}).get(n, np.inf), 1e-6))
             gains[n] = (kp, kv)
         self._kp, self._kv = {}, {}
         for n, (kp, kv) in gains.items():
             j = joints[n]
-            effort = grip["effort"][n] if n in grip["joints"] else j["effort"]
+            effort = coupled[n] if n in coupled else grip["effort"][n] if n in grip["joints"] else j["effort"]
             a = plant.AddJointActuator(f"act:{urdf._safe(n)}", js(n), effort)
             a.set_default_rotor_inertia(j["armature"])
             a.set_default_gear_ratio(1.0)

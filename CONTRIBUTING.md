@@ -6,7 +6,7 @@ pytest tests examples -n 4 --rw-backend mujoco,pybullet            # the core, o
 pytest tests/test_conformance.py tests/test_legged.py --rw-robot all,legged --rw-backend drake
 ruff check . && ruff format --check .
 python bench/run.py --quick      # framework benchmarks; regenerates BENCHMARKS.md
-python bench/matrix.py           # robot x engine matrix; regenerates MATRIX.md
+python bench/matrix.py --jobs 4  # robot x engine matrix; regenerates MATRIX.md
 ```
 
 Engines are heavy: a Genesis worker takes ~4.5 GB, so keep `-n` small for it.
@@ -15,7 +15,11 @@ Engines are heavy: a Genesis worker takes ~4.5 GB, so keep `-n` small for it.
 (MJCF path, arm joints, hand, finger bodies, gripper actuator, base position), then run
 the contract on every engine: `pytest tests/test_conformance.py --rw-robot <name>
 --rw-backend mujoco,pybullet,drake,genesis`. Don't tune a backend for one robot; if an
-engine genuinely disagrees, add the case to `conftest.py` with the measured reason.
+engine genuinely disagrees, add the case to `conftest.py` with the measured reason. If the
+gripper's maker publishes a grip force, set `grip_force` (newtons per jaw) and
+`grip_force_source` (the datasheet URL): the gripper is then driven at that force on every
+engine, and `test_grip_force_matches_the_datasheet` checks it. Don't estimate one from a
+servo's torque.
 
 **Adding an engine:** implement `backends/base.py`'s `Backend` (physics only) and make
 `tests/test_conformance.py` and `tests/test_legged.py` pass for every robot.

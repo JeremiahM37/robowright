@@ -91,6 +91,8 @@ register(
         maker="Franka Robotics",
         license="Apache-2.0",
         tags=("research", "7dof"),
+        grip_force=70.0,  # Franka Hand continuous grasping force (140 N peak); the model squeezes 0.6 N
+        grip_force_source="https://download.franka.de/documents/220010_Product%20Manual_Franka%20Hand_1.2_EN.pdf",
     )
 )
 register(
@@ -166,6 +168,8 @@ register(
         maker="UFACTORY",
         license="BSD",
         tags=("cobot", "7dof"),
+        grip_force=30.0,  # xArm Gripper (G1) maximum; the model squeezes ~140 N
+        grip_force_source="https://docs.xarm.ufactory.cc/8.technical_specifications.html",
     )
 )
 register(
@@ -223,6 +227,8 @@ register(
         maker="AgileX Robotics",
         license="MIT",
         tags=("low-cost", "6dof"),
+        grip_force=40.0,  # PiPER gripper rated force (50 N peak); the model squeezes 0.35 N
+        grip_force_source="https://static.generation-robots.com/media/agilex-piper-user-manual.pdf",
     )
 )
 register(

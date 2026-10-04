@@ -32,7 +32,7 @@ robot_stand, robot_crouch, robot_move_joints. Disturb the world with robot_push,
 robot_move_object and robot_fault. Check outcomes with robot_expect. Look with
 robot_screenshot (cameras: front, top, side). A failed action reports why and
 leaves the session running. robot_generate_test turns the session into a pytest
-test that reproduces it exactly. Positions are metres in the world frame, z up."""
+test that reproduces it exactly; robot_crosscheck re-runs it on another engine. Positions are metres in the world frame, z up."""
 
 
 def build_server(session: Session | None = None):
@@ -179,6 +179,13 @@ def build_server(session: Session | None = None):
     async def robot_generate_test(test_name: str = "test_session", path: str | None = None) -> str:
         """The session so far as a pytest test that reproduces it exactly (written to path if given)."""
         return await run(s.generate_test, test_name, path)
+
+    @tool
+    async def robot_crosscheck(backend: str) -> str:
+        """Re-run the session's calls on another physics engine (e.g. drake, genesis, isaac, if installed)
+        from the same scene and seed, and report whether the outcome holds and how far objects end up
+        from where they did here. Use it before trusting a result that may depend on one contact model."""
+        return await run(s.crosscheck, backend)
 
     @tool
     async def robot_save_trace(path: str | None = None) -> str:

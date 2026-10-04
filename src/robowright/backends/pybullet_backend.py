@@ -87,6 +87,8 @@ class PybulletBackend(Backend):
             self._fingers = [joints[urdf._safe(n)] for n in driven]
             self._finger_q = np.array([g["joints"][n] for n in driven])  # (k, 2): closed, open
             self._finger_force = np.array([g["effort"][n] for n in driven])
+            # The model's closing pace, as the motors' velocity limit (0: none recorded).
+            self._finger_speed = [float(g.get("speed", {}).get(n, 0.0)) for n in driven]
             # Linkage joints follow the first driven joint's measured travel, as MuJoCo's
             # equality constraints make them; commanding them separately tilts blocked pads.
             self._ref = self._fingers[0]
@@ -110,10 +112,16 @@ class PybulletBackend(Backend):
             # policy stops it. A small floor does both jobs (measured on the SO-101: 10/10 policy
             # runs with it, 1/10 without, 6/10 with the full value).
             info = p.getDynamicsInfo(self.robot, j, physicsClientId=c)
+            damping = jm["damping"]
+            if self.has_gripper and name.replace("__", "/") in meta["gripper"]["joints"]:
+                # Bullet applies joint damping explicitly; past about m/dt it locks a light finger
+                # solid (the Panda's, damped to close at the model's pace). The finger motors'
+                # velocity limit sets that pace here instead.
+                damping = min(damping, 0.5 * (info[0] + min(jm["armature"], ARMATURE_FLOOR)) / spec.dt)
             p.changeDynamics(
                 self.robot,
                 j,
-                jointDamping=jm["damping"],
+                jointDamping=damping,
                 localInertiaDiagonal=list(np.array(info[2]) + min(jm["armature"], ARMATURE_FLOOR)),
                 physicsClientId=c,
             )
@@ -219,13 +227,25 @@ class PybulletBackend(Backend):
         self._ctrl = np.append(arm, np.clip(target[self.n_arm], 0, 1))
         p.setJointMotorControlArray(
             self.robot,
-            [*self._arm, *self._fingers],
+            self._arm,
             p.POSITION_CONTROL,
-            targetPositions=[*self._ctrl[: self.n_arm], *self._finger_targets(self._ctrl[-1])],
-            forces=[*self._arm_force, *self._finger_force],
-            positionGains=[*self._gain, *[POSITION_GAIN] * len(self._fingers)],
+            targetPositions=list(self._ctrl[: self.n_arm]),
+            forces=list(self._arm_force),
+            positionGains=list(self._gain),
             physicsClientId=self.cid,
         )
+        for j, q, f, v in zip(self._fingers, self._finger_targets(self._ctrl[-1]), self._finger_force, self._finger_speed):
+            kw = {"maxVelocity": v} if v > 0 else {}
+            p.setJointMotorControl2(
+                self.robot,
+                j,
+                p.POSITION_CONTROL,
+                targetPosition=float(q),
+                force=float(f),
+                positionGain=POSITION_GAIN,
+                physicsClientId=self.cid,
+                **kw,
+            )
 
     def ctrl(self):
         return self._ctrl.copy()

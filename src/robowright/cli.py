@@ -110,6 +110,14 @@ def _render(args, rest) -> int:
     return 0
 
 
+def _crosscheck(args, rest) -> int:
+    from .crosscheck import crosscheck
+
+    r = crosscheck(args.trace, args.backend)
+    print(r.summary())
+    return 0 if r.agrees else 1
+
+
 def _mcp(args, rest) -> int:
     from .mcp_server import main as serve
 
@@ -149,6 +157,9 @@ def main(argv=None) -> int:
     rd.add_argument("--camera", default="front")
     rd.add_argument("--size", default="1280x720", help="WIDTHxHEIGHT")
     rd.add_argument("--fps", type=float, help="default: the run's own pace (50 fps)")
+    cc = sub.add_parser("crosscheck", help="make a trace's calls again on another engine and compare the outcome")
+    cc.add_argument("trace")
+    cc.add_argument("--backend", required=True)
     sub.add_parser("mcp", help="run the MCP server (stdio) that lets an AI agent drive a simulated robot")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
@@ -159,6 +170,7 @@ def main(argv=None) -> int:
         "replay": _replay,
         "codegen": _codegen,
         "render": _render,
+        "crosscheck": _crosscheck,
         "info": _info,
         "robots": _robots,
         "mcp": _mcp,

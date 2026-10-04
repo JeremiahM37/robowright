@@ -245,14 +245,15 @@ class GenesisBackend(Backend):
             kp, kv, cap = [], [], []
             for n, d in zip(names, dofs):
                 c, o = grip["joints"][n]
-                e = grip["effort"][n] + friction_load / len(names)
+                e = grip.get("coupled_effort", grip["effort"])[n] + friction_load / len(names)  # drivers move the linkage
                 if "kp" in jm[n]:
                     kp.append(jm[n]["kp"])
                     kv.append(jm[n]["kv"])
                 else:
                     k = e / (sat * max(abs(o - c), 1e-6))
                     kp.append(k)
-                    kv.append(2.0 * np.sqrt(k / max(inv[d], 1e-9)))  # critically damped
+                    # Critically damped, and no faster at full force than the model closes.
+                    kv.append(max(2.0 * np.sqrt(k / max(inv[d], 1e-9)), e / max(grip.get("speed", {}).get(n, np.inf), 1e-6)))
                 cap.append(e)
             return np.array(kp), np.array(kv), np.array(cap)
 

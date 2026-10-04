@@ -71,11 +71,18 @@ class RobotModel:
     tags: tuple = ()
     license: str = "Apache-2.0"
     source: str = "MuJoCo Menagerie"
+    # The force each jaw presses a held object with (N), from the maker's datasheet. When set, the
+    # gripper is force-limited to it, as real grippers are; otherwise it squeezes as modelled.
+    grip_force: float | None = None
+    grip_force_source: str = ""
     extra: dict = field(default_factory=dict)
 
     # -- MJCF composition ------------------------------------------------------
-    def robot_spec(self) -> mujoco.MjSpec:
-        """The robot alone (arm plus attached gripper), names unprefixed, base at the origin."""
+    def robot_spec(self, calibrated: bool = True) -> mujoco.MjSpec:
+        """The robot alone (arm plus attached gripper), names unprefixed, base at the origin.
+
+        ``calibrated=False`` leaves the gripper as the model has it (``grip_force`` unapplied).
+        """
         s = mujoco.MjSpec.from_file(str(self.mjcf()))
         for k in list(s.keys):
             s.delete(k)
@@ -90,6 +97,8 @@ class RobotModel:
         if self.servo is not None:
             _motors_to_servos(s, *self.servo)
         _exclude_resting_contacts(s)
+        if calibrated and self.grip_force is not None and self.has_gripper:
+            _limit_grip(s, self)
         return s
 
     @property
@@ -268,8 +277,175 @@ def _settle(m, d, ctrl_index, value, max_seconds=10.0):
             break
 
 
+_CALIBRATION: dict[str, tuple[float, float]] = {}
+
+
+def _squeeze(model: RobotModel, limit: float | None = None) -> tuple[float, float]:
+    """Close the modelled gripper on a 25 mm block held at its TCP, the actuator capped at
+    ``limit``; returns (mean normal force of the two jaws on the block, actuator force)."""
+    der = model.derived
+    s = model.robot_spec(calibrated=False)
+    _free_gripper(s, model)
+    s.option.gravity = [0, 0, 0]
+    if limit is not None:
+        a = s.actuator(model.gripper_actuator)
+        a.forcerange = [-limit, limit]
+        a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    m = s.compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    hand = m.body(model.hand).id
+    R = d.xmat[hand].reshape(3, 3)
+    q = np.zeros(4)
+    mujoco.mju_mat2Quat(q, d.xmat[hand])
+    s.worldbody.add_geom(
+        name="calibration_block",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=[0.0125, 0.0125, 0.0125],
+        pos=list(d.xpos[hand] + R @ der.tcp_offset),
+        quat=list(q),
+    )
+    m = s.compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    arm = [m.joint(j).id for j in model.arm_joints]
+    for i in range(m.nu):  # hold the arm where it is
+        if m.actuator_trntype[i] == mujoco.mjtTrn.mjTRN_JOINT and m.actuator_trnid[i, 0] in arm:
+            d.ctrl[i] = d.qpos[m.jnt_qposadr[m.actuator_trnid[i, 0]]]
+    act = m.actuator(model.gripper_actuator).id
+    _settle(m, d, act, model.gripper_closed, max_seconds=3.0)
+    block = m.geom("calibration_block").id
+    labels = body_labels(m, model)
+    side = {"left_finger": 0.0, "right_finger": 0.0}
+    f = np.zeros(6)
+    for i in range(d.ncon):
+        c = d.contact[i]
+        if block not in (c.geom1, c.geom2):
+            continue
+        label = labels.get(int(m.geom_bodyid[c.geom2 if c.geom1 == block else c.geom1]))
+        if label in side:
+            mujoco.mj_contactForce(m, d, i, f)
+            side[label] += abs(f[0])
+    clamp = sum(side.values()) / 2 if min(side.values()) > 0 else 0.0
+    return clamp, abs(float(d.actuator_force[act]))
+
+
+def closing_speeds(model: RobotModel) -> dict[str, float]:
+    """Each gripper joint's peak speed as the modelled gripper (before ``grip_force``) closes on
+    nothing. Engines that drive the fingers with their own gains damp them to it, so a gripper
+    stiffened to its datasheet force closes at the model's pace instead of slamming shut."""
+    s = model.robot_spec(calibrated=False)
+    _free_gripper(s, model)
+    s.option.gravity = [0, 0, 0]
+    s.option.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT
+    m = s.compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    act = m.actuator(model.gripper_actuator).id
+    _settle(m, d, act, model.gripper_open, max_seconds=3.0)
+    d.ctrl[act] = model.gripper_closed
+    peak = dict.fromkeys(model.derived.gripper_joints, 0.0)
+    for _ in range(int(1.5 / m.opt.timestep)):
+        mujoco.mj_step(m, d)
+        for n in peak:
+            peak[n] = max(peak[n], abs(float(d.qvel[m.joint(n).dofadr[0]])))
+    return peak
+
+
+def grip_calibration(model: RobotModel) -> tuple[float, float]:
+    """``(offset, gain)``: the actuator force a held object feels nothing of (springs holding
+    the jaws open), and the jaw force each further newton of actuator force adds.
+
+    Measured by closing the jaws on a block with the actuator capped at two forces below
+    its own, so a datasheet's jaw force converts to an actuator force limit whatever the
+    transmission: a slide, a tendon, or a sprung linkage of swinging jaws.
+    """
+    if model.name not in _CALIBRATION:
+        _, natural = _squeeze(model)
+        (c1, f1), (c2, f2) = _squeeze(model, 0.45 * natural), _squeeze(model, 0.9 * natural)
+        if c2 <= c1 or f2 <= f1:
+            raise ValueError(f"{model.name}: the gripper's squeeze does not grow with its force; cannot calibrate")
+        gain = (c2 - c1) / (f2 - f1)
+        _CALIBRATION[model.name] = (f1 - c1 / gain, gain)
+    return _CALIBRATION[model.name]
+
+
+@functools.cache
+def _leverage_by_name(name: str) -> dict:
+    from . import get
+
+    model = get(name)
+    m = model.robot_spec(calibrated=False).compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    act = m.actuator(model.gripper_actuator).id
+    adr = d.moment_rowadr[act]
+    rows = range(adr, adr + d.moment_rownnz[act])
+    return {m.joint(m.dof_jntid[d.moment_colind[i]]).name: abs(float(d.actuator_moment[i])) for i in rows}
+
+
+def _leverage(model: RobotModel) -> dict:
+    """Joint force per newton of gripper actuator force, for each joint it moves directly."""
+    return _leverage_by_name(model.name)
+
+
+def _actuated_joints(model: RobotModel) -> frozenset:
+    """The joints the gripper actuator moves directly (not through equality constraints)."""
+    return frozenset(_leverage(model))
+
+
+def _free_gripper(s: mujoco.MjSpec, model: RobotModel) -> None:
+    """A gripper whose motor's force limit is what limits the squeeze: no dry friction in its
+    joints, and a rigid coupling between its fingers.
+
+    Some models give the finger linkage the arm's joint defaults: the xArm 7's six gripper
+    joints inherit the arm's 1 N m of friction each, more than its 30 N gripper can drive.
+    """
+    arm = set(model.arm_joints)
+    for j in s.joints:
+        if j.name not in arm and j.type in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+            j.frictionloss = 0.0
+    # A finger the actuator moves only through an equality is coupled mechanically, so make
+    # that as stiff as the timestep allows: soft (MuJoCo's default), it lets the driven finger
+    # run ahead under full force while the other lags, and the object is pushed off-centre (the
+    # PiPER's 40 N held only 15 N that way). Fingers the actuator drives itself (the Panda's
+    # tendon) are left alone: a stiff equality on top over-constrains them and they lock.
+    driven = _actuated_joints(model)
+    for e in s.equalities:
+        if e.type == mujoco.mjtEq.mjEQ_JOINT and not {e.name1, e.name2} <= driven:
+            e.solref = [min(e.solref[0], 2.5 * s.option.timestep), 1.0]
+
+
+def _limit_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
+    """Make the gripper a stiff servo limited to the force that presses each jaw with ``grip_force``.
+
+    A real gripper closes until its motor's force limit, so it squeezes alike whatever it
+    holds; a soft position servo squeezes in proportion to how far the object stops it.
+    """
+    _free_gripper(s, model)
+    offset, gain = grip_calibration(model)
+    limit = offset + model.grip_force / gain
+    a = s.actuator(model.gripper_actuator)
+    clamp, _ = _squeeze(model)
+    stiff = max(1.0, 4.0 * model.grip_force / max(clamp, 1e-3))  # reaches the limit on objects well short of closed
+    # Stiffer in position only: MuJoCo's implicit integrator counts the actuator's velocity
+    # gain even while its force is capped, so a scaled-up one brakes motion that the capped
+    # force never drives, and the jaws lock part-way (the Panda's stuck at 0.88 of 0.5).
+    a.gainprm[0] *= stiff
+    a.biasprm[1] *= stiff
+    a.forcerange = [-limit, limit]
+    a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    # It closes no faster than the model did: damping on the driven joints (outside the
+    # actuator's force limit, and exported to every engine) holds a jaw at full force to the
+    # model's own top speed. Stiffened alone, a light jaw slams into the object and knocks it away.
+    speed = closing_speeds(model)
+    for name, k in _leverage(model).items():
+        j = s.joint(name)
+        j.damping[0] = max(float(j.damping[0]), k * limit / max(speed[name], 1e-6))
+
+
 def _derive(model: RobotModel) -> Derived:
-    s = model.robot_spec()
+    s = model.robot_spec(calibrated=False)
     s.option.gravity = [0, 0, 0]
     # Finger travel is a property of the gripper, not of whatever the fingers
     # happen to bump into with the arm in its zero pose.

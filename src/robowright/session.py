@@ -365,6 +365,15 @@ class Session:
             Path(path).write_text(code)
         return code
 
+    def crosscheck(self, backend: str) -> str:
+        """Make the session's calls again on another engine and say whether the outcome holds there."""
+        from .crosscheck import crosscheck
+
+        w = self._w()
+        tmp = self.trace_dir / f"{w.name}_crosscheck.zip"
+        w.trace.save(tmp)
+        return crosscheck(tmp, backend).summary()
+
     def save_trace(self, path: str | None = None) -> str:
         w = self._w()
         p = w.trace.save(path or self.trace_dir / f"{w.name}.zip")

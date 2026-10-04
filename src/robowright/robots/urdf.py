@@ -23,10 +23,10 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .model import RobotModel
+from .model import RobotModel, closing_speeds
 
 BASE = "robowright_base"
-VERSION = 10  # bump when the output format changes, to invalidate caches
+VERSION = 19  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
@@ -230,10 +230,17 @@ def _write(model: RobotModel, out: Path) -> None:
     if model.has_gripper:
         der = model.derived
         effort, driven = _grip_effort(m, model)
+        per_driver = _moving_fingers(m, model) / len(driven)
         meta["gripper"] = {
             "joints": {n: list(v) for n, v in der.gripper_joints.items()},
             "main": der.gripper_joint,
             "effort": effort,
+            # For engines that drive only the driven joints and couple the rest (mimic joints,
+            # constraints): one driver moving both fingers needs both fingers' force.
+            "coupled_effort": {n: effort[n] * per_driver for n in driven},
+            # Datasheet grippers only: the closing pace their stiffened servo keeps (the rest close
+            # as their engines drive them, as validated).
+            "speed": closing_speeds(model) if model.grip_force is not None else {},
             # Joints the gripper actuator pushes directly. The rest are linkage joints that
             # MuJoCo couples with equality constraints: drive them from the measured
             # position of driven[0], or a blocked finger tilts its pad into the object.
@@ -315,13 +322,15 @@ def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
     hand = m.body(model.hand).id
     tcp = d.xpos[hand] + d.xmat[hand].reshape(3, 3) @ der.tcp_offset
 
+    pad = model.grip_force or MAX_PAD_FORCE  # a datasheet's jaw force replaces the blanket cap
+
     def cap(name):
         j = m.joint(name).id
         if m.jnt_type[j] == _SLIDE:
-            return MAX_PAD_FORCE
+            return pad
         r = tcp - d.xanchor[j]
         lever = np.linalg.norm(r - (r @ d.xaxis[j]) * d.xaxis[j])
-        return MAX_PAD_FORCE * max(lever, 0.01)
+        return pad * max(lever, 0.01)
 
     own = {name: float(abs(d.qfrc_actuator[m.joint(name).dofadr[0]])) for name in der.gripper_joints}
     driven = sorted((n for n, f in own.items() if f > 1e-6), key=lambda n: (n != der.gripper_joint, n))
@@ -333,3 +342,22 @@ def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
         peers = [g for n, g in own.items() if m.jnt_type[m.joint(n).id] == kind]
         out[name] = min(f if f > 1e-6 else max(peers), cap(name))
     return out, driven
+
+
+def _moving_fingers(m, model: RobotModel) -> int:
+    """How many fingers the gripper moves (the SO-101 moves one jaw against a fixed one)."""
+    from .model import body_labels
+
+    gripper = {m.joint(n).id for n in model.derived.gripper_joints}
+    labels = body_labels(m, model)
+    hand = m.body(model.hand).id
+    moving = 0
+    for side in ("left_finger", "right_finger"):
+        bodies = [b for b, lab in labels.items() if lab == side]
+        chain = set()
+        for b in bodies:
+            while b not in (hand, 0):
+                chain.add(b)
+                b = m.body_parentid[b]
+        moving += any(m.jnt_bodyid[j] in chain for j in gripper)
+    return max(moving, 1)

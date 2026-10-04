@@ -319,6 +319,25 @@ verify it, save a test", a headless Claude agent built the scene, did it on the 
 try, checked a screenshot and saved a test that passes. A session costs what MuJoCo
 costs: about 1 second of wall time for a launch, pick, place, check and screenshot.
 
+### Cross-check on another engine
+
+A run that passes on one engine may only pass because of that engine's contact model.
+`crosscheck` makes a trace's calls again on another engine, from the same scene and seed,
+and compares the verdict and where each object ended up:
+
+```console
+$ robowright crosscheck widowx_policy.zip --backend pybullet
+pybullet: fails (AssertionError: <Rollout success=False steps=750 sim=15.00s>); on mujoco it passed
+  cube ends 171.1 mm from where it did on mujoco
+VERDICTS DIFFER: the outcome depends on the engine
+```
+
+The intended workflow:
+- Develop and iterate on MuJoCo, where a pick-and-place takes a fraction of a second.
+- Cross-check what matters on a heavier engine, such as Isaac Sim's PhysX on a GPU machine.
+
+Agents can do the same with the `robot_crosscheck` MCP tool.
+
 ### Several physics engines
 
 ```console
@@ -353,20 +372,20 @@ the full tables are in [MATRIX.md](MATRIX.md).
 
 | robot | MuJoCo | PyBullet | Drake | Genesis | Isaac Sim |
 |---|---:|---:|---:|---:|---:|
-| SO-101 | 20/20 | 20/20 | 20/20 | 20/20 | 15/20 ⚠️ |
+| SO-101 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Franka Emika Panda | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Universal Robots UR5e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Universal Robots UR10e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| Kinova Gen3 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 19/20 ⚠️ | 20/20 |
-| KUKA LBR iiwa 14 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 16/20 ⚠️ | 20/20 |
+| Kinova Gen3 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 15/20 ⚠️ | 20/20 |
 | UFACTORY xArm 7 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Trossen ViperX 300 S (ALOHA) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Trossen WidowX 250 S (Bridge) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| AgileX PiPER | 20/20 | 0/20 ❌ | 20/20 | 20/20 | 20/20 |
+| AgileX PiPER | 20/20 | 20/20 | 20/20 | 14/20 ⚠️ | 20/20 |
 | I2RT YAM | 20/20 | 15/20 ⚠️ | 20/20 | 20/20 | 20/20 |
 | ARX L5 | 20/20 | 0/20 ❌ | 20/20 | 20/20 | 20/20 |
 | Rethink Sawyer + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| *legged: stands, survives a shove of ≥ 0.6× body weight* | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+| *legged: stands, and recovers from a sideways shove of 0.59–1.62× body weight* | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
 
 What running everything on everything turned up:
 
@@ -378,18 +397,31 @@ What running everything on everything turned up:
   - `place()` turned the wrist under load;
   - `place()` crossed 8 mm above the bin's rim.
 
-  All four are fixed; every arm is now 20/20 in MuJoCo and Drake.
-- **Weak gripper models.** The low-cost slide-finger grippers are modelled squeezing
-  0.4–2.2 N (PiPER, ARX L5, YAM, WidowX), and the Franka Hand 1.3 N against 70 N on the
-  real one. MuJoCo's, Drake's and Genesis's contact models hold a 30 g cube anyway; PyBullet's
-  drops it from the PiPER and ARX L5 every time and from the YAM a quarter of the time.
-- **Contact models disagree by millimetres.** Same robot, same seed, same commands: Drake
-  and Genesis put the cube within about 1 mm of MuJoCo's final position on most arms,
-  PyBullet within about 6–23 mm, and on the weak grippers up to 19 cm, where the cube fell.
+  All four are fixed; every arm is now 20/20 in MuJoCo, Drake and Isaac Sim.
+- **Gripper models are far from their datasheets.** Menagerie's Franka Hand presses each jaw
+  with 0.6 N against a 70 N spec, its PiPER with 0.25 N against 40 N, and its xArm Gripper with
+  about 140 N against 30 N. Where the maker publishes a figure (Franka, UFACTORY, AgileX),
+  robowright drives the gripper at it, the way real grippers work: a stiff servo whose force
+  limit is the datasheet's. Closing the model on a block converts that jaw force into an
+  actuator force, whatever the transmission. Every engine then presses within 15% of the
+  datasheet (`test_grip_force_matches_the_datasheet`), except on the xArm's six-joint linkage:
+  PyBullet presses 13.7 N, because it has no closed kinematic chains, and Genesis 25.4 N,
+  because its mimic constraints are soft. Grippers with no published figure
+  (Trossen, I2RT, ARX, SO-101) squeeze as modelled: 0.9–2.2 N on the low-cost slide grippers.
+  The PiPER went from 0/20 to 20/20 in PyBullet once it pressed at its rated 40 N instead of
+  0.25 N. MuJoCo's, Drake's, Genesis's and PhysX's contacts still hold a 30 g cube at the
+  modelled forces; PyBullet's drop it from the ARX L5 every time and from the YAM a quarter
+  of the time.
+- **Contact models disagree by millimetres.** Same robot, same seed, same commands: Isaac
+  Sim, Genesis and Drake put the cube within about 1 mm of MuJoCo's final position on about
+  half the arms and within 11 mm on nearly all; PyBullet within 2–23 mm, and 19 cm on the
+  ARX L5, where the cube fell. Where Genesis misses a grasp the median moves to 27–29 mm.
 - **Engine-specific grasp failures.** Holding the cube in a Robotiq 2F-85 on the iiwa,
-  Genesis lets it slide out slowly during transport (16/20); the other engines hold it. In
-  Isaac Sim the SO-101's swinging jaw keeps chattering against the cube, so the gripper
-  never reads as stalled (15/20).
+  Genesis lets it slide out slowly during transport (15/20); the other engines hold it.
+  Genesis also couples the PiPER's second finger through a soft mimic constraint, which lags
+  at the datasheet's 40 N and pushes the cube out of the jaws before they meet (14/20, each
+  failure a `GraspError`); stiffening that constraint made Genesis knock the cube away
+  outright, so it stays a recorded divergence rather than a per-engine tweak.
 - **Fixes needed to match MuJoCo:**
   - PyBullet multiplies friction coefficients where MuJoCo takes the larger, and folding
     MuJoCo's armature into PyBullet's link inertia made arms fling held objects.
@@ -401,6 +433,21 @@ What running everything on everything turned up:
   - Isaac Sim needed PGS instead of PhysX's default TGS solver (TGS let the xArm 7's gripper
     linkage drag its arm joints off target), rigid mimic joints for finger coupling, and
     joint velocities measured from motion, because PhysX reports a clamped jaw as moving.
+    Its gripper drives had to be damped for the whole linkage they move, armature included:
+    damped for the driver alone, the xArm 7's jaw chattered on a held cube and shook it
+    loose whenever a policy lifted quickly (0/20; 20/20 after).
+  - Driving grippers at datasheet force found five more problems:
+    - The xArm 7's six gripper joints inherit the arm's 1 N·m of joint friction from
+      Menagerie's defaults, more than a 30 N gripper can drive.
+    - The PiPER couples its second finger through a soft equality constraint. At full force
+      that finger lagged and pushed the cube off-centre.
+    - In Isaac Sim, every finger joint but the first driver is a mimic joint, and PhysX
+      ignores a mimic joint's own drive. That had halved every two-driver gripper: the
+      Robotiq 2F-85 pressed 21 N against MuJoCo's 45 N.
+    - MuJoCo's implicit integrator counts an actuator's velocity gain even while its force is
+      capped, which locked a stiffened Panda hand part-way open.
+    - Genesis and PhysX report jitter of a few hundredths per second on a jaw that isn't
+      moving, so `gripper.close()` now judges a stall from positions, as an encoder would.
   - Restoring a state saved mid-grasp or mid-stumble replays the same future bit for bit
     on every engine with state save/restore, but only after three fixes:
     - Genesis's state had to carry its solver's warm start and broadphase order.
@@ -465,9 +512,10 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
   manipulation are not built in.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
-- **Gripper models:** Menagerie's grippers squeeze far less than the real ones in several
-  cases (Franka Hand: 1.3 N in the model, 70 N real). Tests measure the models, not the
-  hardware.
+- **Gripper models:** grippers are driven at their datasheet force only where the maker
+  publishes one (Franka Hand, xArm Gripper, PiPER; the Robotiq 2F-85's model already squeezes
+  inside its 20–235 N range). The Trossen, I2RT, ARX and SO-101 grippers squeeze as modelled,
+  which is 0.9–2.2 N on the slide grippers.
 - **Privileged policies:** the bundled `ScriptedPickPlace` reads ground-truth object poses.
   Camera-based learned policies plug into the same `run_policy`, but no LeRobot adapter
   ships yet.

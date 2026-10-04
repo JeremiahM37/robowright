@@ -68,7 +68,8 @@ def _settings(meta: dict) -> str:
     return f", settings=rw.Settings({_kwargs(changed)})" if changed else ""
 
 
-def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_failure: bool = True) -> str:
+def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_failure: bool = True, backend: str | None = None) -> str:
+    """The trace as a pytest test. ``backend`` runs it on another engine than the one recorded."""
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     m = tr.meta
     name = test_name or f"test_{_ident(re.sub(r'^.*::', '', m['name'])).removeprefix('test_')}_regression"
@@ -151,7 +152,7 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
             "",
             "",
             f"def {name}():",
-            f"    with rw.launch(SCENE, backend={m['backend']!r}, seed={m['seed']}, name={name!r}{_settings(m)}) as world:",
+            f"    with rw.launch(SCENE, backend={backend or m['backend']!r}, seed={m['seed']}, name={name!r}{_settings(m)}) as world:",
             # Bind only what the body uses, so the generated file passes a linter as is.
             "        robot, scene = world.robot, world.scene" if any("scene[" in ln for ln in body) else "        robot = world.robot",
         ]

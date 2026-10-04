@@ -133,8 +133,30 @@ def test_places_a_second_object_beside_the_first(rw_backend, rw_robot):
         for name in ("cube", "cube2"):
             expect(w.scene[name]).to_be_inside(w.scene["bin"])
             expect(w.scene[name]).to_be_at_rest()
-            # on the bin's floor, not on the other cube
-            assert w.scene[name].position[2] < w.scene["bin"].bounds()[0][2] + 0.02
+            # not stacked on the other cube (that puts its centre 37.5 mm up; leaning on a wall, ~27 mm)
+            assert w.scene[name].position[2] < w.scene["bin"].bounds()[0][2] + 0.031
+
+
+def test_grip_force_matches_the_datasheet(world, robot):
+    """Where the maker publishes a grip force, a held cube is pressed with it by each jaw (within 15%)."""
+    spec = robot.model.grip_force
+    if spec is None:
+        pytest.skip("no published grip force: the gripper squeezes as modelled")
+    world.require("contacts", "contact forces")
+    robot.pick(world.scene["cube"])
+    world.wait(0.3)
+    jaw = {"left_finger": [], "right_finger": []}
+    for _ in range(10):
+        world.step()
+        force = dict.fromkeys(jaw, 0.0)
+        for c in world.backend.contacts():
+            for me, other in ((c.a, c.b), (c.b, c.a)):
+                if other == "cube" and me.split(":")[-1] in force:
+                    force[me.split(":")[-1]] += c.force
+        for k in jaw:
+            jaw[k].append(force[k])
+    measured = float(np.mean([np.mean(v) for v in jaw.values()]))
+    assert abs(measured - spec) < 0.15 * spec, f"each jaw presses {measured:.1f} N; the datasheet says {spec} N"
 
 
 def test_no_arm_collisions_during_a_pick(world):

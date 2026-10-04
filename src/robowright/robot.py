@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import time as _time
+from collections import deque
 
 import numpy as np
 
@@ -216,11 +217,18 @@ class Gripper(Subject):
         r._stream(lambda s: r._set_gripper(start + (opening - start) * _minjerk(s)), duration)
         timeout = timeout or self.world.settings.action_timeout
 
-        def done():
-            v = abs(self.world.backend.qvel()[-1])
-            return v < 0.04 and (stall_ok or abs(r.true_qpos()[-1] - opening) < 0.05)
+        # Stopped means the opening held within 0.5% of the stroke for 0.1 s: judged from
+        # positions, as an encoder would, because a jaw squeezing hard reads a solver's
+        # jitter of a few hundredths per second (Genesis, PhysX) though it does not move.
+        recent = deque(maxlen=max(2, round(0.1 / self.world.dt) + 1))
 
-        if not self.world.run_until(done, timeout, hold=0.1):
+        def done():
+            now = r.true_qpos()[-1]
+            recent.append(now)
+            still = len(recent) == recent.maxlen and max(recent) - min(recent) < 0.005
+            return still and (stall_ok or abs(now - opening) < 0.05)
+
+        if not self.world.run_until(done, timeout):
             raise ActionTimeoutError(f"gripper did not reach opening {opening:.2f} within {timeout}s (at {r.true_qpos()[-1]:.2f})")
 
 

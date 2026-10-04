@@ -606,17 +606,43 @@ class IsaacBackend(Backend):
                 M = self._row(self._art.get_mass_matrices()).reshape(n, n)  # fixed base: joint space only
             except Exception:
                 M = None
+            coupled = g.get("coupled_effort", g["effort"])  # mimic joints: the drivers move the linkage
+            fallback = [(name, d) for name, d in zip(driven, self._driven) if "kp" not in jm[name]]
             for name, d in zip(driven, self._driven):
                 c, o = g["joints"][name]
-                e = g["effort"][name]
                 j = jm[name]
                 if "kp" in j:
                     kp[d], kv[d] = j["kp"], kv[d] + j["kv"]
                 else:
-                    k = e / (_DRIVE_SAT * max(abs(o - c), 1e-6))
-                    inertia = float(M[d, d]) if M is not None else max(j["armature"], 1e-3)
-                    kp[d], kv[d] = k, kv[d] + 2.0 * np.sqrt(k * max(inertia, 1e-6))  # critically damped
-                cap[d] = e
+                    kp[d] = coupled[name] / (_DRIVE_SAT * max(abs(o - c), 1e-6))
+                cap[d] = coupled[name]
+            if fallback:
+                # Critically damped for everything the drives move: the whole linkage through its
+                # gearing, armature included (PhysX applies armature apart from the mass matrix).
+                # Damped for the driver alone, the xArm 7's jaw (followers with 20x the driver's
+                # armature) chattered 0.23-0.40 on a held cube and shook it loose.
+                ref = fallback[0][0]
+                rc, ro = g["joints"][ref]
+                inertia = 0.0
+                for name, (c, o) in g["joints"].items():
+                    safe = urdf._safe(name)
+                    if safe not in self._dof_names:
+                        continue
+                    i = self._dof_names.index(safe)
+                    gear = (o - c) / (ro - rc)
+                    inertia += gear * gear * ((float(M[i, i]) if M is not None else 0.0) + jm[name]["armature"])
+                stiffness = sum(kp[d] for _, d in fallback)
+                for name, d in fallback:
+                    kv[d] += 2.0 * np.sqrt(stiffness * max(inertia, 1e-6)) / len(fallback)
+                    kv[d] = max(kv[d], cap[d] / max(g.get("speed", {}).get(name, np.inf), 1e-6))  # no faster than the model closes
+            # Every finger joint but the first driver is a mimic joint, and PhysX ignores a mimic
+            # joint's own drive: the first driver moves the whole gripper, so it gets every driver's
+            # gains and force (with two drivers, the Panda held its cube with 35 N of 70).
+            if len(self._driven) > 1:
+                first, rest = self._driven[0], self._driven[1:]
+                for arr in (kp, kv, cap):
+                    arr[first] += arr[rest].sum()
+                    arr[rest] = 0.0
         self._kp, self._kv, self._cap = kp, kv, cap
         self._gscale = np.ones(self.n_arm)
         art = self._art
@@ -660,13 +686,15 @@ class IsaacBackend(Backend):
         return np.append(q[self._arm], self._opening(q[self._main]))
 
     def _dof_vel(self) -> np.ndarray:
-        """Joint velocities as the joints moved over the last physics step.
+        """Joint velocities as the joints moved over the last control period.
 
         PhysX's own joint velocities include the solver's correction velocity:
         a jaw clamped on an object reports a steady few cm/s while it does not
-        move at all, and a gripper never looks stalled. Displacement over the
-        step is what an encoder measures, and equals PhysX's velocity whenever
-        nothing was corrected (positions integrate implicitly).
+        move at all, and a gripper never looks stalled. Displacement is what an
+        encoder measures, sampled once per control period as a controller reads
+        it: over a single physics step it also catches a clamped jaw's jitter
+        from one step to the next (the PiPER's at 3 openings/s), which no
+        controller running at the control rate would see.
         """
         if self._vel is None:
             return self._row(self._art.get_dof_velocities())
@@ -726,19 +754,18 @@ class IsaacBackend(Backend):
     # --- time --------------------------------------------------------------------
     def step(self):
         sim, dt = self._sim, self._dt
-        for i in range(self._substeps):
+        q0 = self._row(self._art.get_dof_positions())
+        for _ in range(self._substeps):
             for name, f in self._pending.items():
                 if name == "robot":
                     self._push_base(f)
                 else:
                     self._bodies[name].apply_forces(self._t32(np.asarray(f)[None]), self._obj_idx, True)
-            if i == self._substeps - 1:
-                q0 = self._row(self._art.get_dof_positions())
             # Count steps rather than add up times, so every period has exactly the same substeps.
             sim.simulate(dt, self._k * dt)
             sim.fetch_results()
             self._k += 1
-        self._vel = (self._row(self._art.get_dof_positions()) - q0) / dt
+        self._vel = (self._row(self._art.get_dof_positions()) - q0) / (self._substeps * dt)
         self._pending = {}
 
     @property
