@@ -17,15 +17,6 @@ import pytest
 _SLIDE = {"arx_l5": "0.9 N", "yam": "1.9 N", "wx250s": "2.2 N"}
 
 KNOWN: dict[tuple[str, str, str], str] = {}
-KNOWN[("test_places_a_second_object_beside_the_first", "genesis", "piper")] = (
-    "Genesis couples the PiPER's second finger through a soft mimic constraint: closing at the datasheet's 40 N "
-    "it lags and shoves the second cube 2.3 cm aside, so pick raises GraspError (stiffening the constraint makes "
-    "Genesis knock even the first cube away)"
-)
-KNOWN[("test_grip_force_matches_the_datasheet", "genesis", "xarm7")] = (
-    "Genesis's soft mimic constraints lose some of the xArm Gripper's linkage force: each jaw presses 25.4 N "
-    "of the datasheet's 30 N (MuJoCo, Drake, Isaac: 28.5-30.7 N)"
-)
 # A 1.5 N shove for 0.1 s against grippers modelled at a few newtons. MuJoCo lets the cube go;
 # PyBullet's stiffer contacts hold it, except for the weakest grip.
 for robot, force in _SLIDE.items():

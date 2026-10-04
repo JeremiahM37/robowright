@@ -292,6 +292,8 @@ class GenesisBackend(Backend):
         self._hand_anchor = _hand_anchor(rm) if rm.hand else None
         self._pending: dict[str, np.ndarray] = {}
         self._ctrl = np.zeros(len(self.joint_names))
+        self._servoed = np.concatenate([self._arm, self._driven]) if self.has_gripper else self._arm
+        self._from = None  # where this control step's targets ramp from (see step)
         if rm.floating:
             yaw = rm.base_yaw
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
@@ -351,14 +353,28 @@ class GenesisBackend(Backend):
     def set_ctrl(self, target):
         target = np.asarray(target, float)
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
-        if not self.has_gripper:
-            self._ctrl = arm
-            self.robot.control_dofs_position(arm, self._arm)
-            return
-        s = float(np.clip(target[self.n_arm], 0.0, 1.0))
-        self._ctrl = np.append(arm, s)
-        self.robot.control_dofs_position(arm, self._arm)
-        self.robot.control_dofs_position(self._driven_c + s * (self._driven_o - self._driven_c), self._driven)
+        self._ctrl = np.append(arm, float(np.clip(target[self.n_arm], 0.0, 1.0))) if self.has_gripper else arm
+        if self._from is None:  # nothing to ramp from: placed, restored, or just built
+            self._from = self._ctrl.copy()
+        self._command(1.0)
+
+    def _command(self, frac: float) -> None:
+        """Command the servos ``frac`` of the way from the last control step's targets to these.
+
+        Targets arrive once per control step. Handed to the servos as a step, they made the
+        gripper's stiff servo (the PiPER's closes at its datasheet's 40 N) jerk each finger once
+        per step, and the finger tied to it by Genesis's mimic constraint rang at about 50 Hz,
+        +-4 mm: on its inward swings it struck the cube and knocked it out of the jaws (PiPER
+        14/20). The arm's steps did the same to a cube held in the iiwa's Robotiq 2F-85 (15/20).
+        Ramped across the substeps, as a servo's interpolator does, both are 20/20.
+        """
+        if frac < 1.0 and np.array_equal(self._from, self._ctrl):
+            return  # holding still: the servos already have these targets
+        x = self._from + frac * (self._ctrl - self._from)
+        if self.has_gripper:
+            s = x[self.n_arm]
+            x = np.concatenate([x[: self.n_arm], self._driven_c + s * (self._driven_o - self._driven_c)])
+        self.robot.control_dofs_position(x, self._servoed)
 
     def ctrl(self):
         return self._ctrl.copy()
@@ -377,6 +393,7 @@ class GenesisBackend(Backend):
         for d, c, o in self._fingers.values():
             pos[d] = c + s * (o - c)
         self.robot.set_dofs_position(pos, zero_velocity=True)
+        self._from = None  # placed, not moved: no ramp
         self.set_ctrl(q)
 
     def base_pose(self):
@@ -397,12 +414,14 @@ class GenesisBackend(Backend):
     # time
     def step(self):
         solver = self.scene.sim.rigid_solver
-        for _ in range(self._substeps):
+        for k in range(self._substeps):
+            self._command((k + 1) / self._substeps)
             for name, f in self._pending.items():
                 link = (self.robot if name == "robot" else self._objects[name]).links[0]
                 solver.apply_links_external_wrench(force=np.asarray(f)[None], links_idx=[link.idx], ref=gs.link_ref_frame.link_COM)
             self.scene.step()
         self._pending = {}
+        self._from = self._ctrl.copy()  # the ramp has arrived
         self._t += self._substeps * self._dt
 
     @property
@@ -498,6 +517,8 @@ class GenesisBackend(Backend):
         s.set_qpos(state[1 : 1 + nq])
         s.set_dofs_velocity(state[1 + nq : 1 + nq + nv])
         i = 1 + nq + nv
+        # States are taken between control steps, when the ramp has arrived: none is pending.
+        self._from = None
         self.set_ctrl(state[i : i + nc])
         i += nc
         if i == len(state):

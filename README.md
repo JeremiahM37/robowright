@@ -380,11 +380,11 @@ the full tables are in [MATRIX.md](MATRIX.md).
 | Universal Robots UR5e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Universal Robots UR10e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Kinova Gen3 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| KUKA LBR iiwa 14 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 15/20 ⚠️ | 20/20 |
+| KUKA LBR iiwa 14 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | UFACTORY xArm 7 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Trossen ViperX 300 S (ALOHA) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Trossen WidowX 250 S (Bridge) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| AgileX PiPER | 20/20 | 20/20 | 20/20 | 14/20 ⚠️ | 20/20 |
+| AgileX PiPER | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | I2RT YAM | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | ARX L5 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Rethink Sawyer + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
@@ -408,21 +408,28 @@ What running everything on everything turned up:
   limit is the datasheet's. Closing the model on a block converts that jaw force into an
   actuator force, whatever the transmission. Every engine then presses within 15% of the
   datasheet (`test_grip_force_matches_the_datasheet`), except on the xArm's six-joint linkage:
-  PyBullet presses 13.7 N, because it has no closed kinematic chains, and Genesis 25.4 N,
-  because its mimic constraints are soft. Grippers with no published figure
+  PyBullet presses 13.7 N, because it has no closed kinematic chains. (Genesis presses 25.6 N
+  there, just inside the 15%, because its mimic constraints are soft.) Grippers with no published figure
   (Trossen, I2RT, ARX, SO-101) squeeze as modelled: 0.9–2.2 N on the low-cost slide grippers.
   The PiPER went from 0/20 to 20/20 in PyBullet once it pressed at its rated 40 N instead of
   0.25 N; every engine holds a 30 g cube in the others at their modelled forces.
 - **Contact models disagree by millimetres.** Same robot, same seed, same commands: Isaac
   Sim, Genesis and Drake put the cube within about 1 mm of MuJoCo's final position on about
-  half the arms and within 11 mm on nearly all; PyBullet within 0.6–12 mm. Where Genesis
-  misses a grasp the median moves to 27–29 mm.
-- **Engine-specific grasp failures.** Holding the cube in a Robotiq 2F-85 on the iiwa,
-  Genesis lets it slide out slowly during transport (15/20); the other engines hold it.
-  Genesis also couples the PiPER's second finger through a soft mimic constraint, which lags
-  at the datasheet's 40 N and pushes the cube out of the jaws before they meet (14/20, each
-  failure a `GraspError`); stiffening that constraint made Genesis knock the cube away
-  outright, so it stays a recorded divergence rather than a per-engine tweak.
+  half the arms and within 11 mm on nearly all (Genesis 15 mm on the PiPER); PyBullet within
+  0.6–12 mm.
+- **Every arm passes on every engine: 65 of 65 cells at 20/20.** The last failures were
+  robowright's, not the engines'; see the next two findings.
+- **Genesis's last two failures were the same staircase.** The iiwa's Robotiq 2F-85 let the
+  cube slide out in transport (15/20) and the PiPER's jaws knocked it away as they closed
+  (14/20, each a `GraspError`), recorded as Genesis's soft mimic constraint. Traced per
+  substep: the PiPER's gripper servo, stiff enough to close at the datasheet's 40 N, jerked
+  its driven finger at every control step, and the finger tied to it by the mimic constraint
+  rang at about 50 Hz, ±4 mm, striking the cube on its inward swings. Stiffening the mimic
+  made it worse (0/9 seeds), and MuJoCo's second finger lags just as much, so the lag was
+  never the cause. Ramping the arm's and gripper's targets across the substeps fixed both:
+  20/20 each, at a median 11% more time per step (5–25%; nothing extra while holding still).
+  Their two registry entries left, and so did Genesis's xArm grip entry, whose 25.4 N became
+  25.6 N: just inside the 15%, a margin, not a fix.
 - **"PyBullet's contacts let weak grips slip" was robowright's bug.** The matrix had PyBullet
   dropping the cube from the ARX L5 every time and from the YAM a quarter of the time, and the
   divergence registry blamed its contact model. Measured, PyBullet pressed *harder* than MuJoCo
