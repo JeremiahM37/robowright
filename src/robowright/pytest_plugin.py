@@ -7,6 +7,7 @@ Options::
 
     --rw-backend mujoco,pybullet     run every robot test on each backend
     --rw-robot so101,panda | all | legged   run every robot test on each robot ("all": every arm)
+    --rw-robot path/to/robot.xml             ...or on any robot, from its MJCF model file
     --rw-trace on|off|retain-on-failure
     --rw-trace-dir DIR
     --rw-seed N                      base seed
@@ -45,7 +46,9 @@ _REPORTS = pytest.StashKey[dict]()
 def pytest_addoption(parser):
     g = parser.getgroup("robowright")
     g.addoption("--rw-backend", default="mujoco", help="comma-separated backends to run robot tests on")
-    g.addoption("--rw-robot", default="so101", help="comma-separated robots to run robot tests on, or 'all'")
+    g.addoption(
+        "--rw-robot", default="so101", help="comma-separated robots to run robot tests on: names, 'all', 'legged', or paths of MJCF files"
+    )
     g.addoption("--rw-trace", default="retain-on-failure", choices=["on", "off", "retain-on-failure"])
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
@@ -66,6 +69,8 @@ def pytest_configure(config):
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
     config.pluginmanager.register(_Summary(), "robowright-summary")
+    if any(_robots.is_file(r.strip()) for r in config.getoption("--rw-robot").split(",")):
+        _robot_names(config)  # a robot model file robowright cannot drive is a usage error, said once
     if getattr(config.option, "dist", None) == "loadgroup" and "--loadscope-reorder" not in config.invocation_params.args:
         # xdist hands out the largest groups first, which puts a lone trials test, the longest
         # kind, at the end of the run; robowright's own order (pytest_collection_modifyitems)
@@ -89,6 +94,16 @@ def _robot_names(config) -> list[str]:
     for r in raw:
         if r in ("all", "arms", "legged"):
             out.extend(_robots.names({"all": "arm", "arms": "arm", "legged": "legged"}[r]))
+        elif _robots.is_file(r):  # a model file: tests get its absolute path, so traces replay from anywhere
+            from pathlib import Path
+
+            out.append(str(Path(r).expanduser().resolve()))
+            from .robots.detect import DetectionError
+
+            try:
+                _robots.get(out[-1])
+            except (DetectionError, FileNotFoundError) as e:
+                raise pytest.UsageError(f"--rw-robot {r}: robowright cannot drive this robot: {e}") from None
         else:
             out.append(_robots.get(r).name)
     return list(dict.fromkeys(out))
@@ -107,7 +122,7 @@ def pytest_generate_tests(metafunc):
         if m:
             names = [n for n in names if n in m.args] or list(m.args[:1])
         if len(names) > 1 or m:
-            metafunc.parametrize("rw_robot", names, ids=names, scope="function")
+            metafunc.parametrize("rw_robot", names, ids=[_robots.get(n).name for n in names], scope="function")
 
 
 @pytest.hookimpl(tryfirst=True)  # before xdist reads the groups into node ids
@@ -133,7 +148,8 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         p = getattr(item, "callspec", None)
         if p is not None and "rw_backend" in p.params:
-            group = f"{p.params['rw_backend']}-{p.params.get('rw_robot', '')}-{item.path.stem}"
+            robot = p.params.get("rw_robot", "")
+            group = f"{p.params['rw_backend']}-{_robots.get(robot).name if robot else ''}-{item.path.stem}"
             if item.get_closest_marker("trials"):
                 # A trials test builds a world per trial, so it shares little with its robot's
                 # other tests, and it is the longest: on its own it can start while they run.

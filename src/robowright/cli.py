@@ -78,6 +78,8 @@ def _info(args, rest):
 def _robots(args, rest):
     from . import robots
 
+    if args.inspect:
+        return _inspect(args.inspect)
     rows = []
     for name in robots.names(args.family):
         m = robots.get(name)
@@ -93,6 +95,28 @@ def _robots(args, rest):
     widths = [max(len(x) for x in col) for col in zip(head, *rows)]
     for r in (head, *rows):
         print("  ".join(x.ljust(w) for x, w in zip(r, widths)).rstrip())
+    return 0
+
+
+def _inspect(path) -> int:
+    """What robowright works out about the robot in a model file, and why."""
+    import warnings
+
+    from .robots.detect import DetectionError, build
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # MuJoCo's notes on attaching a gripper are not the user's business
+        try:
+            built = build(path)
+        except (DetectionError, FileNotFoundError) as e:
+            print(f"robowright cannot drive {path}: {e}")
+            return 1
+    m = built.model
+    print(f"{path}: {m.family}, {m.n_arm} joints, named {m.name!r}")
+    for note in built.notes:
+        print(f"  {note}")
+    print(f"\nrun its tests with:  pytest --rw-robot {path}")
+    print("override any of the above with robowright.robots.detect.load(path, <field>=...) in a conftest.py")
     return 0
 
 
@@ -151,6 +175,7 @@ def main(argv=None) -> int:
     rb = sub.add_parser("robots", help="list the robots tests can run on")
     rb.add_argument("--family", choices=["arm", "legged"])
     rb.add_argument("--markdown", action="store_true")
+    rb.add_argument("--inspect", metavar="FILE", help="show what robowright works out about the robot in an MJCF file, and why")
     rd = sub.add_parser("render", help="render a trace to video (mp4, or gif) from its recorded state")
     rd.add_argument("trace")
     rd.add_argument("-o", "--output", help="output file (.mp4 or .gif); default: next to the trace")

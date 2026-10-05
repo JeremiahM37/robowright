@@ -12,7 +12,7 @@ from .. import assets
 from . import menagerie
 from .model import PREFIX, Attachment, Derived, Kinematics, RobotModel, body_labels
 
-__all__ = ["PREFIX", "Attachment", "Derived", "Kinematics", "RobotModel", "body_labels", "get", "names", "register", "REGISTRY"]
+__all__ = ["PREFIX", "Attachment", "Derived", "Kinematics", "RobotModel", "body_labels", "get", "load", "names", "register", "REGISTRY"]
 
 REGISTRY: dict[str, RobotModel] = {}
 
@@ -23,16 +23,36 @@ def register(model: RobotModel) -> RobotModel:
 
 
 def get(name: str | RobotModel) -> RobotModel:
+    """A robot by name, or from a model file (``path/to/robot.xml``), detected on first use."""
     if isinstance(name, RobotModel):
         return name
     try:
         return REGISTRY[name]
     except KeyError:
-        raise ValueError(f"unknown robot {name!r}; available: {', '.join(sorted(REGISTRY))}") from None
+        pass
+    if is_file(name):
+        from .detect import load
+
+        return load(name)
+    raise ValueError(f"unknown robot {name!r}; available: {', '.join(sorted(REGISTRY))}, or the path of a robot's MJCF file")
+
+
+def load(path, name: str | None = None, **overrides) -> RobotModel:
+    """Any robot from its model file (MJCF): what it is worked out from the model itself, and
+    anything given as a keyword (a :class:`RobotModel` field) overrides that. See :mod:`.detect`."""
+    from .detect import load as _load
+
+    return _load(path, name, **overrides)
+
+
+def is_file(name: str) -> bool:
+    """Whether ``name`` names a model file rather than a registered robot."""
+    return name.lower().endswith((".xml", ".mjcf", ".urdf")) or "/" in name or "\\" in name
 
 
 def names(family: str | None = None) -> list[str]:
-    return [n for n, m in REGISTRY.items() if family is None or m.family == family]
+    """The built-in robots (and any registered in code); robots loaded from a file are not listed."""
+    return [n for n, m in REGISTRY.items() if (family is None or m.family == family) and "file" not in m.extra]
 
 
 def _m(rel):

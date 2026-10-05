@@ -93,6 +93,67 @@ $ pytest --rw-robot all                          # every arm
 $ pytest --rw-robot legged                       # every legged robot
 ```
 
+### Any robot, from its model file
+
+The robots above are not special: point `--rw-robot` at any arm's MJCF file and the same tests
+run on it.
+
+```console
+$ robowright robots --inspect path/to/my_arm.xml   # what robowright makes of it, and why
+$ pytest --rw-robot path/to/my_arm.xml             # every robot test, on that robot
+```
+
+A model file describes every robot the same way (bodies, joints, actuators), but not what the
+parts are for. robowright reads that off the model, the way Playwright finds a button by its
+role:
+
+- **The gripper** is the actuator that moves several coupled joints, a slide, or parts named
+  like a gripper, at the end of the chain. Its **hand** is the body its joints hang from, and the
+  **arm** is every actuated joint between the base and the hand.
+- **The fingers** are the two moving parts that reach furthest along the tool axis and close
+  towards each other, or one moving jaw against the hand (SO-100, SO-101, Koch). **Open** is
+  whichever end of the gripper's range leaves them further apart.
+- **Mounting:** the arm is placed (and turned, if its model faces another way) where top-down
+  grasps reach the whole task area.
+- **A bare arm** gets a Robotiq 2F-85 on its flange. A model with no site there gets it at the
+  last link.
+- **Models that need adapting:**
+  - fingers with a motor each are made to follow one;
+  - a force-motor gripper becomes a position servo;
+  - an Euler-integrated model whose servos would oscillate runs `implicitfast`;
+  - a force-limited joint too light to integrate stably gets the motor inertia the model left out.
+
+Each decision is listed by `--inspect`. Any of them can be overridden in a `conftest.py`:
+
+```python
+from robowright import robots
+
+robots.load("my_arm.xml", grip_force=40.0, home=(0.2, 0.0, 0.12))  # then: pytest --rw-robot my_arm
+```
+
+**Measured:** re-detected from their bare model files, all 19 built-in robots come out as their
+hand-written entries say. On robots robowright had never seen (Menagerie robots that aren't
+built in), the arm contract and examples on MuJoCo:
+
+| | Result |
+|---|---|
+| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 tests pass |
+| Unitree Z1 | gripper works; pick fails: its swinging jaw needs the tool 2 cm up for clearance and sweeps a 25 mm cube away |
+| Lite 6, narrow gripper | 16 mm opening; `pick` refuses a 25 mm cube up front |
+| Google Robot | its servos can hold a joint only to 0.03–0.10 rad of a target (joint friction / stiffness); `--inspect` warns |
+| TidyBot | arm on a mobile base modelled as slides; the wrist sags 0.04 rad under load |
+| Trossen AI | every motor capped at ±1 rad in the model; refused: no mounting reaches the task area |
+| TIAGo, Stretch | refused: mobile manipulators aren't driven yet |
+| 13 legged robots (ANYmal B, Barkour, H1, T1, OP3, Apollo, TALOS, N1, Cassie...) | detected as quadrupeds or humanoids |
+
+On the other engines, SO-100, Koch, FR3 and FR3 v2 from their files pass the arm contract on
+PyBullet and Drake. Genesis passes SO-100, FR3 and FR3 v2. The Koch's jaws close through the
+cube there, touching nothing.
+
+URDF files aren't read yet. A URDF has no actuators, and ROS packages resolve its mesh paths,
+so it needs more than a format conversion. For now give the robot's MJCF; MuJoCo Menagerie has
+most robots.
+
 Models come from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie),
 fetched on first use (a sparse checkout of just the robots you run, pinned to one commit),
 except the SO-101, which ships with robowright. They keep their own licences. Robots

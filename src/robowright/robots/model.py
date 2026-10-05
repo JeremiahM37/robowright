@@ -36,8 +36,15 @@ class Attachment:
     """A second MJCF (typically a gripper) attached at a site of the arm."""
 
     mjcf: Callable[[], Path]
-    site: str
+    site: str  # a site of the arm; or, with ``body``, the name given to a new site at that body's origin
     prefix: str = "gripper/"
+    body: str | None = None  # for arms whose model has no site at the flange
+
+    def at(self, s: mujoco.MjSpec):
+        """The site of arm spec ``s`` the attachment goes on (added at ``body`` if given)."""
+        if self.body is not None:
+            return s.body(self.body).add_site(name=self.site)
+        return s.site(self.site)
 
 
 @dataclass(frozen=True)
@@ -66,6 +73,18 @@ class RobotModel:
     stand: tuple | None = None  # legged: standing joint angles; default: the model's keyframe
     crouch: tuple | None = None  # legged: fully crouched joint angles; default: bend the bent joints further
     servo: tuple | None = None  # (kp, kv): turn torque motors into joint PD servos, as robot firmware does
+    # (kp, kv): a gripper modelled as a force motor becomes a position servo over its joint's
+    # travel, limited to the motor's force, so it can be opened part-way like the others.
+    gripper_servo: tuple | None = None
+    # (actuator, joint, leader joint, ratio) for each finger with a motor of its own: the motor is
+    # removed and the joint follows the leader (the finger the gripper actuator drives).
+    gripper_mirrors: tuple = ()
+    # MuJoCo integrator to run the robot with (a mjtIntegrator name, e.g. "implicitfast"); None
+    # keeps the model's own.
+    integrator: str | None = None
+    # (joint, armature): a floor of reflected motor inertia for joints a force-limited servo would
+    # otherwise shake at the step rate (models that leave a geared motor's inertia out).
+    armature: tuple = ()
     maker: str = ""
     dof_note: str = ""
     tags: tuple = ()
@@ -86,6 +105,8 @@ class RobotModel:
         s = mujoco.MjSpec.from_file(str(self.mjcf()))
         for k in list(s.keys):
             s.delete(k)
+        if self.integrator is not None:
+            s.option.integrator = getattr(mujoco.mjtIntegrator, f"mjINT_{self.integrator.upper()}")
         if self.attach is not None:
             g = mujoco.MjSpec.from_file(str(self.attach.mjcf()))
             for k in list(g.keys):
@@ -93,9 +114,13 @@ class RobotModel:
             # The gripper's contact settings matter for grasping; the arm's solver settings win otherwise.
             s.option.impratio, s.option.cone = g.option.impratio, g.option.cone
             _copy_options(s, g)
-            s.attach(g, prefix=self.attach.prefix, site=s.site(self.attach.site))
+            s.attach(g, prefix=self.attach.prefix, site=self.attach.at(s))
         if self.servo is not None:
             _motors_to_servos(s, *self.servo)
+        fix_gripper(s, self.gripper_actuator, self.gripper_servo, self.gripper_mirrors)
+        for name, value in self.armature:
+            j = s.joint(name)
+            j.armature = max(float(j.armature), value)
         _exclude_resting_contacts(s)
         if calibrated and self.grip_force is not None and self.has_gripper:
             _limit_grip(s, self)
@@ -206,6 +231,26 @@ def body_labels(m: mujoco.MjModel, model: RobotModel, prefix: str = "") -> dict[
     return out
 
 
+def fix_gripper(s: mujoco.MjSpec, actuator: str | None, servo: tuple | None, mirrors: tuple) -> None:
+    """Make a gripper one position-controlled actuator, as robowright drives it (see ``RobotModel``)."""
+    if servo is not None and actuator is not None:
+        a = s.actuator(actuator)
+        j = s.joint(a.target)
+        kp, kv = servo
+        a.forcerange = list(a.forcerange) if a.forcelimited == mujoco.mjtLimited.mjLIMITED_TRUE else list(a.ctrlrange)
+        a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+        a.gaintype = mujoco.mjtGain.mjGAIN_FIXED
+        a.gainprm[0] = kp
+        a.biastype = mujoco.mjtBias.mjBIAS_AFFINE
+        a.biasprm[0], a.biasprm[1], a.biasprm[2] = 0.0, -kp, -kv
+        a.ctrlrange = list(j.range)
+        a.ctrllimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    for act, joint, leader, ratio in mirrors:
+        s.delete(s.actuator(act))
+        e = s.add_equality(type=mujoco.mjtEq.mjEQ_JOINT, name1=joint, name2=leader)
+        e.data[:5] = [0.0, ratio, 0.0, 0.0, 0.0]
+
+
 def _motors_to_servos(s: mujoco.MjSpec, kp: float, kv: float) -> None:
     """Replace torque motors with joint PD servos limited to the motors' torque range.
 
@@ -264,6 +309,16 @@ def _corners(m, d, g):
     c, h = m.geom_aabb[g, :3], m.geom_aabb[g, 3:]
     pts = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]) * h + c
     return pts @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g]
+
+
+def _surface(m, d, g):
+    """Points on geom ``g`` in world coordinates: a mesh's vertices (its bounding box overshoots a
+    curved jaw by millimetres), or the corners of a primitive's box."""
+    if m.geom_type[g] == int(mujoco.mjtGeom.mjGEOM_MESH):
+        k = m.geom_dataid[g]
+        v = m.mesh_vert[m.mesh_vertadr[k] : m.mesh_vertadr[k] + m.mesh_vertnum[k]]
+        return v @ d.geom_xmat[g].reshape(3, 3).T + d.geom_xpos[g]
+    return _corners(m, d, g)
 
 
 def _settle(m, d, ctrl_index, value, max_seconds=10.0):
@@ -370,23 +425,20 @@ def grip_calibration(model: RobotModel) -> tuple[float, float]:
     return _CALIBRATION[model.name]
 
 
-@functools.cache
-def _leverage_by_name(name: str) -> dict:
-    from . import get
-
-    model = get(name)
-    m = model.robot_spec(calibrated=False).compile()
-    d = mujoco.MjData(m)
-    reset_data(m, d)
-    act = m.actuator(model.gripper_actuator).id
-    adr = d.moment_rowadr[act]
-    rows = range(adr, adr + d.moment_rownnz[act])
-    return {m.joint(m.dof_jntid[d.moment_colind[i]]).name: abs(float(d.actuator_moment[i])) for i in rows}
+_LEVERAGE: dict[str, dict] = {}
 
 
 def _leverage(model: RobotModel) -> dict:
     """Joint force per newton of gripper actuator force, for each joint it moves directly."""
-    return _leverage_by_name(model.name)
+    if model.name not in _LEVERAGE:
+        m = model.robot_spec(calibrated=False).compile()
+        d = mujoco.MjData(m)
+        reset_data(m, d)
+        act = m.actuator(model.gripper_actuator).id
+        adr = d.moment_rowadr[act]
+        rows = range(adr, adr + d.moment_rownnz[act])
+        _LEVERAGE[model.name] = {m.joint(m.dof_jntid[d.moment_colind[i]]).name: abs(float(d.actuator_moment[i])) for i in rows}
+    return _LEVERAGE[model.name]
 
 
 def _actuated_joints(model: RobotModel) -> frozenset:
@@ -509,6 +561,18 @@ def _derive(model: RobotModel) -> Derived:
     _settle(m, d, act, model.gripper_open)
     inset = model.tcp_inset if model.tcp_inset is not None else 0.012
     mid = (lc + rc) / 2
+    if model.hand in model.left_finger + model.right_finger:
+        # One jaw moves against a jaw fixed to the hand (the SO-101): a held object sits against
+        # the fixed jaw, so its centre is half its width (a 25 mm cube's) out from that jaw's
+        # inner face, not where the jaws meet when shut - plus 5 mm, so the fixed jaw comes down
+        # beside the object even if the arm sags, and the moving jaw pushes it across.
+        toward = -grip if model.hand in model.left_finger else grip
+        bodies = left if model.hand in model.left_finger else right
+        R, p = d.xmat[hand].reshape(3, 3), d.xpos[hand]
+        fixed = np.vstack([(_surface(m, d, g) - p) @ R for g in _collision_geoms(m, bodies)])
+        near = fixed[fixed @ axis > (fixed @ axis).max() - 0.02]
+        face = near[np.argmax(near @ toward)]
+        mid = mid - toward * ((mid - face) @ toward) + toward * min(aperture / 2, 0.0175)
     tcp = mid - axis * (mid @ axis) + axis * (tip - inset) if model.tcp is None else np.asarray(model.tcp, float)
     # Swinging jaws can reach further open than closed; clearance must cover both.
     inset = max(inset, inset + tip_open - tip)
@@ -556,6 +620,13 @@ class Kinematics:
         lim = m.jnt_limited[jid].astype(bool)
         self.lower = np.where(lim, m.jnt_range[jid, 0], -2 * np.pi)
         self.upper = np.where(lim, m.jnt_range[jid, 1], 2 * np.pi)
+        # A position servo cannot be told to go past its control range, even where the joint could.
+        for a in range(m.nu):
+            if m.actuator_trntype[a] == int(mujoco.mjtTrn.mjTRN_JOINT) and m.actuator_trnid[a, 0] in jid and m.actuator_ctrllimited[a]:
+                if m.actuator_biastype[a] == int(mujoco.mjtBias.mjBIAS_AFFINE) and m.actuator_biasprm[a, 1] < 0:
+                    i = jid.index(m.actuator_trnid[a, 0])
+                    lo, hi = m.actuator_ctrlrange[a]
+                    self.lower[i], self.upper[i] = max(self.lower[i], lo), min(self.upper[i], hi)
         self.hand = m.body(PREFIX + model.hand).id
         der = model.derived
         self.tool_axis, self.grip_axis, self.tcp_offset = der.tool_axis, der.grip_axis, der.tcp_offset

@@ -351,6 +351,12 @@ class Robot:
     def pick(self, obj, lift: float = 0.05, timeout: float | None = None):
         """Top-down grasp of ``obj``, then lift. Returns once the grasp is checked."""
         o = as_subject(self.world, obj)
+        if isinstance(o, ObjectHandle) and o.spec.kind != "bin":
+            size = o.spec.size
+            width = 2 * (min(size[0], size[1]) if o.spec.kind == "box" else size[0])
+            opens = self.model.derived.max_aperture
+            if width > opens:
+                raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
         p = o.position
         yaw = getattr(o, "yaw", 0.0)
         self.gripper.open.__wrapped__(self.gripper)
@@ -562,6 +568,15 @@ def home_q(name: str) -> np.ndarray:
     if seed is None:
         seed = np.clip(np.zeros(m.n_arm), kin.lower, kin.upper)
     q, err = kin.ik(m.home, seed, DOWN, yaw=0.0, rest=seed)
+    if err > 1e-3:
+        # IK is local: a model's own pose can sit in a basin that does not reach home. Try from
+        # mid-range and a few fixed random poses (as robots.detect does when it places the arm).
+        rng = np.random.default_rng(0)
+        lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
+        for s in [(lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]:
+            q, err = kin.ik(m.home, s, DOWN, yaw=0.0, rest=seed)
+            if err <= 1e-3:
+                break
     if err > 1e-3:
         raise UnreachableError(f"{name}: home pose {m.home} unreachable (closest {err * 1000:.1f} mm)")
     q.setflags(write=False)

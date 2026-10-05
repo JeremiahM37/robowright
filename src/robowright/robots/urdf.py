@@ -65,7 +65,7 @@ def _cache_key(model: RobotModel) -> str:
             v = f"{src}@{src.stat().st_mtime_ns}"
         elif f.name == "attach" and v is not None:
             src = Path(v.mjcf())
-            v = f"{src}@{src.stat().st_mtime_ns}:{v.site}:{v.prefix}"
+            v = f"{src}@{src.stat().st_mtime_ns}:{v.site}:{v.prefix}:{v.body}"
         parts.append(f"{f.name}={v!r}")
     return "|".join(parts)
 

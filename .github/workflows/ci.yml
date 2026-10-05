@@ -69,3 +69,6 @@ jobs:
         # Tracing off: recording camera frames through software rendering on two cores costs more
         # than the physics; the unit job covers traces.
         run: pytest tests/test_conformance.py tests/test_legged.py -n ${{ contains(fromJSON('["genesis", "drake"]'), matrix.backend) && '0' || 'auto' }} --rw-backend ${{ matrix.backend }} --rw-robot ${{ matrix.robots }} --rw-trace off
+      - name: Detection re-derives every downloaded robot's entry from its model file
+        if: matrix.backend == 'mujoco'
+        run: pytest tests/test_detect.py -n auto
