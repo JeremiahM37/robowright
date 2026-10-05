@@ -105,9 +105,10 @@ class Expectation:
 
         def check():
             d = float(np.linalg.norm(self.subject.position - tgt.position))
+            where = "the target" if isinstance(tgt, Point) else tgt.name  # a point's name is its position
             return (
                 d <= tol,
-                f"{self.subject.name} at {_fmt(self.subject.position)}, {tgt.name} at {_fmt(tgt.position)}, "
+                f"{self.subject.name} at {_fmt(self.subject.position)}, {where} at {_fmt(tgt.position)}, "
                 f"distance {d * 1000:.1f} mm (tol {tol * 1000:.1f} mm)",
             )
 

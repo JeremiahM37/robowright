@@ -272,6 +272,11 @@ def release(b: Backend) -> None:
     _KEPT[key] = b
     while len(_KEPT) > n:
         _KEPT.popitem(last=False)[1].close()
+    # Exit handlers run last-registered first. MuJoCo's EGL module registers one that tears the
+    # display down when it is first imported, often after this module; re-registering here closes
+    # kept scenes (and their GL contexts) before that, instead of after it with a traceback.
+    atexit.unregister(close_kept)
+    atexit.register(close_kept)
 
 
 _last_reclaim = 0.0
@@ -321,7 +326,6 @@ def _keep() -> int:
 
 
 _KEPT: OrderedDict[tuple, Backend] = OrderedDict()
-atexit.register(close_kept)
 
 
 _MODULES = {

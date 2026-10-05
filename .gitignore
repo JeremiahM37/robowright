@@ -10,3 +10,4 @@ bench/results/traces/
 *.html
 !src/robowright/viewer.html
 .verify-artifacts/
+MUJOCO_LOG.TXT

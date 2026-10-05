@@ -85,3 +85,25 @@ def test_tracing_does_not_change_the_run(monkeypatch, tmp_path, backend, robot):
         for t in ("off", "on")
     ]
     assert np.array_equal(*runs)
+
+
+def test_a_kept_scene_closes_cleanly_at_exit():
+    """The kept scene's GL context is freed before MuJoCo's EGL display is torn down at exit.
+
+    Closed after it, as it once was, every process that rendered printed an EGLError traceback
+    as it exited (``robowright info`` among them).
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import robowright as rw\n"
+        "w = rw.launch(settings=rw.Settings(trace='off'))\n"
+        "w.backend.render(w.backend.spec.cameras[0].name, 32, 24)\n"
+        "w.close()\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    if "offscreen" in r.stderr.lower() and r.returncode:
+        pytest.skip("no offscreen GL here")
+    assert r.returncode == 0, r.stderr
+    assert "Traceback" not in r.stderr and "EGLError" not in r.stderr, r.stderr
