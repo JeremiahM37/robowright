@@ -8,7 +8,9 @@ the same thing in every backend.
 from __future__ import annotations
 
 import atexit
+import gc
 import os
+import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -212,13 +214,8 @@ def register(name: str):
     return deco
 
 
-def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
-    """A backend for ``spec``: a kept one restored to as-built if there is one, else a new build.
-
-    Building is most of what a short test costs (MuJoCo: 0.05-0.14 s against 0.05 s for a pick;
-    Drake: 0.3-0.4 s against 0.5 s), and restoring a state takes a tenth of a millisecond.
-    ``ROBOWRIGHT_REUSE=0`` builds every world afresh.
-    """
+def engine(name: str) -> type[Backend]:
+    """The backend class registered as ``name``, importing its module on first use."""
     if name not in _REGISTRY:
         # Import lazily so an optional backend's dependency is only needed when used.
         import importlib
@@ -229,7 +226,17 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     if name not in _REGISTRY:
         known = sorted(set(_MODULES) | set(_REGISTRY))
         raise ValueError(f"unknown backend {name!r}; known backends: {', '.join(known)} (installed: {', '.join(available()) or 'none'})")
-    cls = _REGISTRY[name]
+    return _REGISTRY[name]
+
+
+def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
+    """A backend for ``spec``: a kept one restored to as-built if there is one, else a new build.
+
+    Building is most of what a short test costs (MuJoCo: 0.05-0.14 s against 0.05 s for a pick;
+    Drake: 0.3-0.4 s against 0.5 s), and restoring a state takes a tenth of a millisecond.
+    ``ROBOWRIGHT_REUSE=0`` builds every world afresh.
+    """
+    cls = engine(name)
     key = (name, repr(spec), repr(sorted(kw.items()))) if cls.reusable and _keep() else None
     b = _KEPT.pop(key, None) if key else None
     if b is not None:
@@ -242,6 +249,7 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     if cls.exclusive:
         for k in [k for k in _KEPT if k[0] == name]:
             _KEPT.pop(k).close()
+    _reclaim()
     b = cls(spec, seed=seed, **kw)
     # Captured on every build, kept or not: on Genesis and Isaac a capture snaps the simulation
     # onto the captured state, so a kept scene and a new one must both have taken it.
@@ -264,6 +272,42 @@ def release(b: Backend) -> None:
     _KEPT[key] = b
     while len(_KEPT) > n:
         _KEPT.popitem(last=False)[1].close()
+
+
+_last_reclaim = 0.0
+
+
+def _reclaim() -> None:
+    """Give the memory of closed worlds back before building another.
+
+    A closed world sits in a reference cycle until Python's collector next runs, which native
+    allocations (a MuJoCo model with its meshes) do not prompt, and a build's transient compile
+    fragments the heap. A MuJoCo test worker that ran every robot grew to 4.4 GB; collected and
+    trimmed before each build (and with mesh-free kinematics models) it peaks near 2.7 GB,
+    which leaves room for more workers.
+    At most once a second: a collection takes ~10 ms, and PyBullet builds a scene per world.
+    """
+    global _last_reclaim
+    now = time.monotonic()
+    if now - _last_reclaim < 1.0:
+        return
+    _last_reclaim = now
+    gc.collect()
+    if _LIBC is not None:
+        _LIBC.malloc_trim(0)
+
+
+def _libc():
+    try:
+        import ctypes
+
+        lib = ctypes.CDLL("libc.so.6")
+        return lib if hasattr(lib, "malloc_trim") else None  # glibc only
+    except (OSError, AttributeError):
+        return None
+
+
+_LIBC = _libc()
 
 
 def close_kept() -> None:

@@ -2,16 +2,19 @@
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install -e ".[dev,drake]"
-pytest tests examples -n 4 --rw-backend mujoco,pybullet            # the core, on the SO-101
-pytest tests/test_conformance.py tests/test_legged.py --rw-robot all,legged --rw-backend drake -n 4 --dist loadgroup
+pytest tests examples -n auto --dist loadgroup --rw-backend mujoco,pybullet   # the core, on the SO-101
+pytest tests/test_conformance.py tests/test_legged.py --rw-robot all,legged --rw-backend drake -n auto --dist loadgroup
 ruff check . && ruff format --check .
 python bench/run.py --quick      # framework benchmarks; regenerates BENCHMARKS.md
 python bench/matrix.py --jobs 4  # robot x engine matrix; regenerates MATRIX.md
 ```
 
-Engines are heavy: a Genesis worker takes ~4.5 GB, so keep `-n` small for it. On Drake and
-Genesis add `--dist loadgroup`: each robot's tests then run in one worker, which reuses the
-scene instead of building it per test (Genesis's full suite: 1114 s to 319 s).
+Use `-n auto --dist loadgroup`. `-n auto` starts as many workers as both the cores and the
+memory allow for the engines selected (a Genesis worker peaks near 4.6 GB, a MuJoCo one near
+2.7 GB), inside any cgroup limit such as a container's or a `systemd-run` scope's; see
+`src/robowright/workers.py`, and `PYTEST_XDIST_AUTO_NUM_WORKERS` overrides it. `--dist
+loadgroup` keeps each robot's tests in one worker, which reuses its scene and models instead of
+loading them per test, and starts the longest tests (the trials ones) first.
 
 **Adding a robot:** register a `RobotModel` in `src/robowright/robots/__init__.py`
 (MJCF path, arm joints, hand, finger bodies, gripper actuator, base position), then run

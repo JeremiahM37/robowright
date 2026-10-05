@@ -515,6 +515,27 @@ def _derive(model: RobotModel) -> Derived:
     return Derived(axis, grip, tcp, inset, joints, main, aperture)
 
 
+def _without_meshes(spec: mujoco.MjSpec) -> mujoco.MjModel:
+    """``spec`` compiled without its meshes, each body keeping the inertia they gave it.
+
+    Kinematics needs body frames, not shapes, and the meshes were most of a process's memory:
+    every arm's kinematic model is kept, at up to 72 MB each (PiPER) against 0.06 MB without.
+    Frames, centres of mass and Jacobians come out bit for bit the same.
+    """
+    full = spec.compile()
+    for b in spec.bodies[1:]:
+        i = full.body(b.name)
+        b.explicitinertial = True
+        b.mass, b.ipos, b.iquat, b.inertia = float(i.mass[0]), i.ipos.copy(), i.iquat.copy(), i.inertia.copy()
+        b.fullinertia = [np.nan] * 6
+    for g in list(spec.geoms):
+        if g.type == mujoco.mjtGeom.mjGEOM_MESH or g.meshname:
+            spec.delete(g)
+    for mesh in list(spec.meshes):
+        spec.delete(mesh)
+    return spec.compile()
+
+
 class Kinematics:
     """Forward and inverse kinematics of the arm, computed on the MJCF model.
 
@@ -526,7 +547,7 @@ class Kinematics:
         self.model = model
         world = mujoco.MjSpec()
         model.add_to(world)
-        self.m = world.compile()
+        self.m = _without_meshes(world)
         self.d = mujoco.MjData(self.m)
         m = self.m
         self.qadr = np.array([m.joint(PREFIX + j).qposadr[0] for j in model.arm_joints])

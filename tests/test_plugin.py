@@ -29,12 +29,25 @@ def test_plugin_end_to_end(pytester):
     r.assert_outcomes(passed=3, failed=2, errors=1)  # test_soft passes its call, then errors at teardown
     out = r.stdout.str()
     assert "robowright trials" in out
-    assert "PASS test_robots.py::test_flaky[mujoco]: 3/6 passed" in out
+    # Settled early: seeds 0, 2 and 4 pass, and 3 of 6 meet the 50% bar; seed 2 fails a 100% bar.
+    assert "PASS test_robots.py::test_flaky[mujoco]: 3/5 passed (60%" in out
+    assert "of 6, settled after 5" in out
+    assert "FAIL test_robots.py::test_too_flaky[mujoco]: 2/3 passed" in out
     assert "seed 2: AssertionError" in out
     assert "robowright show-trace robowright-traces/test_robots.py__test_fail[mujoco].zip" in out
     traces = sorted(p.name for p in (pytester.path / "robowright-traces").iterdir())
     assert "test_robots.py__test_fail[mujoco].zip" in traces
     assert not any("test_pass" in t for t in traces)  # retain-on-failure
+
+
+def test_all_trials_runs_every_seed(pytester):
+    pytester.makepyfile(test_robots=TEST)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-all-trials", "-k", "flaky")
+    r.assert_outcomes(passed=1, failed=1)  # the same verdicts as stopping early
+    out = r.stdout.str()
+    assert "PASS test_robots.py::test_flaky[mujoco]: 3/6 passed" in out
+    assert "FAIL test_robots.py::test_too_flaky[mujoco]: 3/4 passed" in out
+    assert "settled" not in out
 
 
 def test_backend_parametrization(pytester):
@@ -71,3 +84,33 @@ def test_ball(world, scene):
     r = pytester.runpytest("--rw-trace", "on")
     r.assert_outcomes(passed=1)
     assert (pytester.path / "robowright-traces" / "test_s.py__test_ball[mujoco].zip").exists()
+
+
+def test_loadgroup_keeps_a_robots_tests_on_one_worker(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(
+        test_g="""
+import os
+from robowright import expect
+
+def _log(robot):
+    with open(f"worker-{robot.model.name}-{os.getpid()}", "w"):
+        pass
+
+def test_a(robot):
+    _log(robot)
+
+def test_b(robot):
+    _log(robot)
+
+def test_c(robot, scene):
+    _log(robot)
+    expect(scene["cube"]).to_be_inside(scene["bin"], timeout=0.1)
+"""
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider", "-n", "3", "--dist", "loadgroup", "--rw-robot", "so101,panda")
+    r.assert_outcomes(passed=4, failed=2)
+    for robot in ("so101", "panda"):
+        assert len(list(pytester.path.glob(f"worker-{robot}-*"))) == 1  # one process ran all three
+    traces = sorted(p.name for p in (pytester.path / "robowright-traces").iterdir())
+    assert traces == ["test_g.py__test_c[mujoco-panda].zip", "test_g.py__test_c[mujoco-so101].zip"]  # no "@group"

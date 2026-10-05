@@ -14,15 +14,15 @@ steps:
   # The robot contract and the examples run for every robot (SO-101 included) in the next step.
   - name: tests on both physics engines (SO-101)
     actions:
-      - shell: { cmd: "capped .venv/bin/python -m pytest tests -q -n 4 -p no:cacheprovider --ignore=tests/test_conformance.py --ignore=tests/test_legged.py --rw-backend mujoco,pybullet", timeout: 900 }
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests -q -n auto --dist loadgroup -p no:cacheprovider --ignore=tests/test_conformance.py --ignore=tests/test_legged.py --rw-backend mujoco,pybullet", timeout: 900 }
 
   - name: every robot on both engines (arm contract, legged contract, examples; known divergences are strict xfails)
     actions:
-      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py examples -q -n 4 -p no:cacheprovider --rw-backend mujoco,pybullet --rw-robot all,legged", timeout: 1800 }
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py examples -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend mujoco,pybullet --rw-robot all,legged", timeout: 1800 }
 
   - name: every robot on Drake and Genesis (conformance + legged)
     actions:
-      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n 4 --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n 2 --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
 
   - name: cli reports working offscreen rendering
     actions:

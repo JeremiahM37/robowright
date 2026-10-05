@@ -219,11 +219,13 @@ def test_policy_with_randomized_cube(world, robot, scene):
 
 ```
 ================================ robowright trials =================================
-PASS examples/test_pick_and_place.py::test_policy_with_randomized_cube[mujoco]: 20/20 passed (100%, 95% CI 84%-100%); required rate >= 90%
+PASS examples/test_pick_and_place.py::test_policy_with_randomized_cube[mujoco]: 18/18 passed (100%, 95% CI 82%-100%); required rate >= 90% of 20, settled after 18
 ```
 
 Each trial gets its own seed. A failing trial keeps its own trace, and its seed is printed,
-so you can rerun exactly that one.
+so you can rerun exactly that one. Trials stop once the rest cannot change the verdict
+(18 passes of 20 already meet 90%; 3 failures already miss it), so the verdict is always the
+one all 20 would give. `--rw-all-trials` runs every one, for a rate measured on all of them.
 
 ### Faults
 
@@ -532,23 +534,38 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
   takes 0.1 ms. So a closed world's scene is kept (two per process) and restored for the
   next world that needs it, checked bit-for-bit against a new build; `ROBOWRIGHT_REUSE=0`
   turns it off. The pytest plugin orders each module's tests by engine and robot so that
-  neighbours share a scene, and marks them for `--dist loadgroup`. Full suite, every arm and
-  legged robot (Isaac Sim on a Ryzen 7 9800X3D, the rest on the Ryzen AI Max+ 395; the
-  "after" runs include the 12 new reuse and tracing tests; Isaac Sim's "before" already kept
-  scenes, but in the old test order nearly every world needed a different one):
+  neighbours share a scene. PyBullet builds every world: its in-memory `restoreState`
+  replays the physics bit for bit, but its EGL renderer kept stale link poses (a restored
+  YAM's camera frame differed from a new build's). The reuse test compares a final camera
+  frame as well as every step's positions.
+- **Test run time:** full suite, every arm and legged robot, tests and examples (Isaac Sim
+  on a Ryzen 7 9800X3D, the rest on the Ryzen AI Max+ 395 inside a 16-core, 40 GB scope):
 
-  | | before | after |
-  |---|---:|---:|
-  | Genesis (2 workers) | 1114 s | 319 s |
-  | Drake (4 workers) | 344 s | 270 s; 249 s with the hulls below |
-  | MuJoCo (4 workers) | 53 s | 53 s |
-  | Isaac Sim | 607 s (1 process) | 596 s; 491 s on 2 workers (25 GB peak) |
+  | | before reuse | scene reuse | now: `-n auto`, settled trials |
+  |---|---:|---:|---:|
+  | Genesis | 1114 s (2 workers) | 319 s (2) | 127 s (7) |
+  | Drake | 344 s (4) | 249 s (4) | 91 s (14) |
+  | MuJoCo | 53 s (4) | 53 s (4) | 38 s (11) |
+  | PyBullet | | | 54 s (14) |
+  | Isaac Sim | 607 s (1) | 491 s (2) | 417 s (2) |
 
-  MuJoCo builds too quickly to gain, and Isaac Sim gained only 2%. PyBullet builds every
-  world: its in-memory `restoreState` replays the physics bit for bit, but its EGL renderer
-  kept stale link poses (a restored YAM's camera frame differed from a new build's), so it
-  is not reused, and grouping only unbalances its workers: leave `--dist loadgroup` off for
-  it. The reuse test compares a final camera frame as well as every step's positions.
+  `verify`, which runs all of this but Isaac Sim, went from 316 s to 146 s. What did it:
+  - Trials stop once their verdict is settled (above): 18 runs of a 20-trial test, 7 of a
+    10-trial one, when they pass.
+  - `-n auto` sizes the workers by measured cost per engine (`src/robowright/workers.py`).
+    Genesis workers now run torch on one thread: its tensors are a few dozen numbers, and
+    with a thread per core each of six workers ran 2.8x slower (bit for bit the same).
+  - `--dist loadgroup` never grouped anything: xdist read the groups before the plugin set
+    them, so each robot's tests were scattered and rebuilt their scene in every worker
+    (Genesis's ARX L5 took 9 s a test). The plugin now marks them first, and starts the
+    trials tests first instead of last, where xdist's ordering had left them as the tail.
+  - A worker that ran every robot grew to 4.4 GB (MuJoCo). The kinematics model of each arm
+    was compiled with its meshes (up to 72 MB, now 0.06 MB, frames bit for bit the same), and
+    closed worlds waited in reference cycles for a collection; one before each build keeps a
+    worker near 2.7 GB, which is what lets more of them run.
+  - PyBullet renders from a second client built at the first picture, so a world that never
+    takes one loads without EGL (UR10e: 0.07 s against 0.17 s), and pictures cannot touch the
+    physics. Frames are pixel-identical to before.
 - **Drake collision hulls:** Drake meshes a collision hull for hydroelastic contact, and a
   hull wrapped around a finely tessellated curve has thousands of faces. The SO-101's moving
   jaw had 6,852, so one grip on the cube became 759 contact polygons and the SO-101 cost

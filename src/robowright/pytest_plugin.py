@@ -10,6 +10,8 @@ Options::
     --rw-trace on|off|retain-on-failure
     --rw-trace-dir DIR
     --rw-seed N                      base seed
+    --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
+    -n auto                          (pytest-xdist) as many workers as the cores and memory allow
 
 Markers::
 
@@ -17,11 +19,13 @@ Markers::
     @pytest.mark.seed(7)
     @pytest.mark.backends("mujoco")              # restrict
     @pytest.mark.robots("panda", "ur5e")         # restrict
-    @pytest.mark.trials(20, min_success=0.9)     # run across 20 seeds, judge the rate
+    @pytest.mark.trials(20, min_success=0.9)     # run across up to 20 seeds, judge the rate
 """
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -45,6 +49,11 @@ def pytest_addoption(parser):
     g.addoption("--rw-trace", default="retain-on-failure", choices=["on", "off", "retain-on-failure"])
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
+    g.addoption(
+        "--rw-all-trials",
+        action="store_true",
+        help="run all n trials of a trials test; by default it stops once the rest cannot change the verdict",
+    )
 
 
 def pytest_configure(config):
@@ -56,6 +65,22 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
+    config.pluginmanager.register(_Summary(), "robowright-summary")
+    if getattr(config.option, "dist", None) == "loadgroup" and "--loadscope-reorder" not in config.invocation_params.args:
+        # xdist hands out the largest groups first, which puts a lone trials test, the longest
+        # kind, at the end of the run; robowright's own order (pytest_collection_modifyitems)
+        # starts those first.
+        config.option.loadscopereorder = False
+
+
+@pytest.hookimpl(optionalhook=True, tryfirst=True)
+def pytest_xdist_auto_num_workers(config):
+    """``-n auto``: workers by the cores and memory the selected engines need (see :mod:`robowright.workers`)."""
+    if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
+        return None  # xdist's own hook reads it
+    from .workers import auto_workers
+
+    return auto_workers([b.strip() for b in config.getoption("--rw-backend").split(",") if b.strip()])
 
 
 def _robot_names(config) -> list[str]:
@@ -85,6 +110,7 @@ def pytest_generate_tests(metafunc):
             metafunc.parametrize("rw_robot", names, ids=names, scope="function")
 
 
+@pytest.hookimpl(tryfirst=True)  # before xdist reads the groups into node ids
 def pytest_collection_modifyitems(config, items):
     """Run each module's tests robot by robot, and group them for ``-n N --dist loadgroup``.
 
@@ -98,14 +124,21 @@ def pytest_collection_modifyitems(config, items):
     def key(item):
         p = getattr(item, "callspec", None)
         params = p.params if p is not None else {}
-        return (module.setdefault(item.path, len(module)), params.get("rw_backend", ""), params.get("rw_robot", ""))
+        # Trials tests first: they are the longest, and handed out last they were the tail of
+        # every parallel run.
+        first = item.get_closest_marker("trials") is None
+        return (first, module.setdefault(item.path, len(module)), params.get("rw_backend", ""), params.get("rw_robot", ""))
 
     items[:] = sorted(items, key=key)
     for item in items:
         p = getattr(item, "callspec", None)
         if p is not None and "rw_backend" in p.params:
-            robot = p.params.get("rw_robot", "")
-            item.add_marker(pytest.mark.xdist_group(f"{p.params['rw_backend']}-{robot}-{item.path.stem}"))
+            group = f"{p.params['rw_backend']}-{p.params.get('rw_robot', '')}-{item.path.stem}"
+            if item.get_closest_marker("trials"):
+                # A trials test builds a world per trial, so it shares little with its robot's
+                # other tests, and it is the longest: on its own it can start while they run.
+                group += f"-{item.originalname}"
+            item.add_marker(pytest.mark.xdist_group(group))
 
 
 @pytest.fixture
@@ -138,12 +171,17 @@ def _settings(config) -> Settings:
     return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"))
 
 
+def _plain(nodeid: str) -> str:
+    """``nodeid`` without the ``@group`` that ``--dist loadgroup`` appends to it."""
+    return re.sub(r"@[\w.-]+$", "", nodeid)
+
+
 def _trace_path(config, nodeid: str) -> Path:
-    return Path(config.getoption("--rw-trace-dir")) / f"{_safe(nodeid.replace('::', '__').replace('/', '_'))}.zip"
+    return Path(config.getoption("--rw-trace-dir")) / f"{_safe(_plain(nodeid).replace('::', '__').replace('/', '_'))}.zip"
 
 
 def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> World:
-    w = World(_scene_for(item, request), backend=backend, seed=seed, name=item.nodeid + suffix, settings=_settings(item.config))
+    w = World(_scene_for(item, request), backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=_settings(item.config))
     rw._current.set(w)
     return w
 
@@ -171,7 +209,7 @@ def world(request, rw_backend, rw_robot):
     failed = rep is None or rep.failed
     path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid))
     if path and failed:
-        item.config.stash[_TRACES].append((item.nodeid, str(path)))
+        item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))
 
 
 @pytest.fixture
@@ -208,11 +246,12 @@ def pytest_pyfunc_call(pyfuncitem):
     if m is None:
         return None
     n = m.args[0] if m.args else m.kwargs.get("n", 10)
-    report = TrialReport(pyfuncitem.nodeid, n, 0, m.kwargs.get("min_success", 1.0), m.kwargs.get("lower_bound", False))
+    report = TrialReport(_plain(pyfuncitem.nodeid), n, 0, m.kwargs.get("min_success", 1.0), m.kwargs.get("lower_bound", False))
     request = pyfuncitem._request
     backend = pyfuncitem.funcargs.get("rw_backend", "mujoco")
     argnames = pyfuncitem._fixtureinfo.argnames
     base = _seed(pyfuncitem)
+    every = pyfuncitem.config.getoption("--rw-all-trials")
     for i in range(n):
         w = _make_world(pyfuncitem, request, backend, base + i, f"[trial {i}]")
         w.robot.reset_to()
@@ -227,15 +266,18 @@ def pytest_pyfunc_call(pyfuncitem):
             failed, msg = True, f"{type(e).__name__}: {e}"
         path = None
         try:
-            path = w.close(failed=failed, trace_path=_trace_path(pyfuncitem.config, f"{pyfuncitem.nodeid}[trial {i}]"))
+            path = w.close(failed=failed, trace_path=_trace_path(pyfuncitem.config, f"{_plain(pyfuncitem.nodeid)}[trial {i}]"))
         except AssertionError as e:  # soft expectations
             failed, msg = True, str(e)
         if failed:
             report.failures.append((base + i, msg.splitlines()[0] if msg else "", str(path) if path else None))
             if path:
-                pyfuncitem.config.stash[_TRACES].append((f"{pyfuncitem.nodeid}[seed {base + i}]", str(path)))
+                pyfuncitem.config.stash[_TRACES].append((f"{_plain(pyfuncitem.nodeid)}[seed {base + i}]", str(path)))
         else:
             report.passed += 1
+        report.ran = i + 1
+        if report.settled and not every:
+            break  # same seeds, same order: the verdict all n trials would give
     pyfuncitem._rw_trials = report
     pyfuncitem.config.stash[_REPORTS][pyfuncitem.nodeid] = report
     if not report.ok:
@@ -247,27 +289,31 @@ def pytest_pyfunc_call(pyfuncitem):
     return True
 
 
-def pytest_runtest_logreport(report):
-    # Runs on the xdist controller too, so traces from workers are listed.
-    for k, v in report.user_properties:
-        if k == "robowright_trace" and report.failed:
-            _collected.setdefault("traces", []).append((report.nodeid, v))
-        if k == "robowright_trials":
-            _collected.setdefault("trials", []).append((report.nodeid, v, report.outcome))
+class _Summary:
+    """The trials and traces of one session, listed at its end.
 
+    One per session, not module state: a session run inside another (pytester, or a test
+    worker running the plugin's own tests) printed the outer run's results and wiped them.
+    """
 
-_collected: dict = {}
+    def __init__(self):
+        self.trials: list = []
+        self.traces: list = []
 
+    def pytest_runtest_logreport(self, report):
+        # Runs on the xdist controller too, so traces from workers are listed.
+        for k, v in report.user_properties:
+            if k == "robowright_trace" and report.failed:
+                self.traces.append((_plain(report.nodeid), v))
+            if k == "robowright_trials":
+                self.trials.append((_plain(report.nodeid), v, report.outcome))
 
-def pytest_terminal_summary(terminalreporter):
-    trials = _collected.get("trials", [])
-    traces = list(dict.fromkeys(_collected.get("traces", [])))
-    if trials:
-        terminalreporter.section("robowright trials")
-        for nodeid, summary, outcome in trials:
-            terminalreporter.line(f"{'PASS' if outcome == 'passed' else 'FAIL'} {nodeid}: {summary}")
-    if traces:
-        terminalreporter.section("robowright traces")
-        for nodeid, path in traces:
-            terminalreporter.line(f"{nodeid}\n    robowright show-trace {path}")
-    _collected.clear()
+    def pytest_terminal_summary(self, terminalreporter):
+        if self.trials:
+            terminalreporter.section("robowright trials")
+            for nodeid, summary, outcome in self.trials:
+                terminalreporter.line(f"{'PASS' if outcome == 'passed' else 'FAIL'} {nodeid}: {summary}")
+        if self.traces:
+            terminalreporter.section("robowright traces")
+            for nodeid, path in dict.fromkeys(self.traces):
+                terminalreporter.line(f"{nodeid}\n    robowright show-trace {path}")

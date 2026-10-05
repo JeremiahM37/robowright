@@ -60,6 +60,14 @@ def _init() -> str:
     device = os.environ.get("ROBOWRIGHT_GENESIS_DEVICE") or "cpu"
     # Double precision: stiff position servos (kp in the thousands) drift in float32.
     gs.init(backend=gs.gpu if device == "gpu" else gs.cpu, precision="64", logging_level="error")
+    if device == "cpu" and "OMP_NUM_THREADS" not in os.environ:
+        # Genesis's kernels already run on one thread; torch's pool, one thread per core, only
+        # spins on its tensors of a few dozen numbers. One process runs as fast without it (0.63 s
+        # per policy run either way, bit for bit the same), and six test workers ran each test 2.8x
+        # slower with it: the Genesis suite took 113 s on six workers, 84 s with one thread each.
+        import torch
+
+        torch.set_num_threads(1)
     _exclude_pairs_hook()
     _DEVICE = device
     return device

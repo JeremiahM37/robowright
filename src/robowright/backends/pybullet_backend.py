@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import dataclasses
 import os
 import sys
 
@@ -44,13 +45,17 @@ class PybulletBackend(Backend):
         rm = self.robot_model
         path, meta = urdf.load(rm)
         self.meta = meta
+        self._path = path
+        # Physics only: camera images come from a second client (see render), so the robot loads
+        # without the renderer uploading its meshes (UR10e: 0.07 s, against 0.17 s with EGL), and
+        # a test that never takes a picture never pays for one.
         self.cid = p.connect(p.DIRECT)
+        self._view = None
         c = self.cid
         p.resetSimulation(physicsClientId=c)
         p.setGravity(0, 0, -GRAVITY, physicsClientId=c)
         p.setTimeStep(spec.dt, physicsClientId=c)
         p.setPhysicsEngineParameter(numSolverIterations=50, deterministicOverlappingPairs=1, physicsClientId=c)
-        self._renderer = _load_egl(c)  # must precede body creation or bodies are invisible to it
         self._substeps = max(1, round((1.0 / spec.control_hz) / spec.dt))
         self._t = 0.0
         plane = p.createCollisionShape(p.GEOM_PLANE, physicsClientId=c)
@@ -180,8 +185,8 @@ class PybulletBackend(Backend):
         else:
             self.set_joint_positions(np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0))
 
-    def _make_object(self, o) -> int:
-        c = self.cid
+    def _make_object(self, o, c: int | None = None, visual_only: bool = False) -> int:
+        c = self.cid if c is None else c
         pos = list(o.initial_pos)
         if o.kind == "bin":
             parts = bin_walls(o.size)
@@ -198,7 +203,7 @@ class PybulletBackend(Backend):
                 rgbaColors=[list(o.rgba)] * 5,
                 physicsClientId=c,
             )
-            return p.createMultiBody(0, col, vis, pos, _xyzw(o.quat), physicsClientId=c)
+            return p.createMultiBody(0, -1 if visual_only else col, vis, pos, _xyzw(o.quat), physicsClientId=c)
         if o.kind == "box":
             col = p.createCollisionShape(p.GEOM_BOX, halfExtents=list(o.size), physicsClientId=c)
             vis = p.createVisualShape(p.GEOM_BOX, halfExtents=list(o.size), rgbaColor=list(o.rgba), physicsClientId=c)
@@ -208,6 +213,8 @@ class PybulletBackend(Backend):
         else:
             col = p.createCollisionShape(p.GEOM_SPHERE, radius=o.size[0], physicsClientId=c)
             vis = p.createVisualShape(p.GEOM_SPHERE, radius=o.size[0], rgbaColor=list(o.rgba), physicsClientId=c)
+        if visual_only:
+            return p.createMultiBody(0, -1, vis, pos, _xyzw(o.quat), physicsClientId=c)
         b = p.createMultiBody(o.mass, col, vis, pos, _xyzw(o.quat), physicsClientId=c)
         p.changeDynamics(b, -1, lateralFriction=o.friction, spinningFriction=0.005, rollingFriction=0.0005, physicsClientId=c)
         return b
@@ -419,19 +426,56 @@ class PybulletBackend(Backend):
         self._pending[name] = self._pending.get(name, np.zeros(3)) + np.asarray(force, float)
 
     def render(self, camera, width, height):
+        v = self._view or self._make_view()
+        self._sync_view(v)
         cs = self._cams[camera]
-        view = p.computeViewMatrix(cs.pos, cs.lookat, [0, 0, 1], physicsClientId=self.cid)
-        proj = p.computeProjectionMatrixFOV(cs.fovy, width / height, 0.01, 5.0, physicsClientId=self.cid)
+        view = p.computeViewMatrix(cs.pos, cs.lookat, [0, 0, 1], physicsClientId=v.cid)
+        proj = p.computeProjectionMatrixFOV(cs.fovy, width / height, 0.01, 5.0, physicsClientId=v.cid)
         with _quiet():
-            img = p.getCameraImage(width, height, view, proj, renderer=self._renderer, physicsClientId=self.cid)
+            img = p.getCameraImage(width, height, view, proj, renderer=v.renderer, physicsClientId=v.cid)
         return np.asarray(img[2], dtype=np.uint8).reshape(height, width, 4)[:, :, :3]
 
+    def _make_view(self) -> _View:
+        """The scene again, in a client that is never stepped, for the camera.
+
+        Poses are copied in before each picture by resetting them, which is also what makes the
+        EGL renderer pick them up (after ``restoreState`` it kept drawing stale ones). Rendering
+        cannot change the physics, and a camera's first picture costs the extra load.
+        """
+        c = p.connect(p.DIRECT)
+        p.resetSimulation(physicsClientId=c)
+        renderer = _load_egl(c)  # the plugin must precede body creation or bodies are invisible to it
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[1, 1, 0.001], rgbaColor=[0.8, 0.8, 0.78, 1], physicsClientId=c)
+        p.createMultiBody(0, -1, vis, physicsClientId=c)
+        with _quiet():
+            robot = p.loadURDF(str(self._path), useFixedBase=True, flags=p.URDF_USE_INERTIA_FROM_FILE, physicsClientId=c)
+        for name, colors in self.meta["colors"].items():
+            j = self._links.get(name, -1)
+            for k, rgba in enumerate(colors):
+                p.changeVisualShape(robot, j, shapeIndex=k, rgbaColor=rgba, physicsClientId=c)
+        bodies = {}
+        for o in self.spec.objects:
+            bodies[self._bodies[o.name]] = self._make_object(o, c, visual_only=True)
+        self._view = _View(c, renderer, robot, bodies, p.getNumJoints(self.robot, physicsClientId=self.cid))
+        return self._view
+
+    def _sync_view(self, v: _View) -> None:
+        c = self.cid
+        p.resetBasePositionAndOrientation(v.robot, *p.getBasePositionAndOrientation(self.robot, physicsClientId=c), physicsClientId=v.cid)
+        for j, st in enumerate(p.getJointStates(self.robot, range(v.n_joints), physicsClientId=c)):
+            p.resetJointState(v.robot, j, st[0], physicsClientId=v.cid)
+        for body, mirror in v.bodies.items():
+            p.resetBasePositionAndOrientation(mirror, *p.getBasePositionAndOrientation(body, physicsClientId=c), physicsClientId=v.cid)
+
     def close(self):
-        try:
-            with _quiet():
-                p.disconnect(physicsClientId=self.cid)
-        except Exception:
-            pass
+        for cid in (self.cid, self._view.cid if self._view else -1):
+            if cid >= 0:
+                try:
+                    with _quiet():
+                        p.disconnect(physicsClientId=cid)
+                except Exception:
+                    pass
+        self.cid, self._view = -1, None
 
 
 _LIBC = ctypes.CDLL(None)
@@ -451,6 +495,15 @@ def _quiet():
         os.dup2(saved, 1)
         os.close(saved)
         os.close(devnull)
+
+
+@dataclasses.dataclass
+class _View:
+    cid: int
+    renderer: int
+    robot: int
+    bodies: dict[int, int]  # physics body -> its copy
+    n_joints: int
 
 
 def _load_egl(cid) -> int:
