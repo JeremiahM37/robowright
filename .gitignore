@@ -11,3 +11,4 @@ bench/results/traces/
 !src/robowright/viewer.html
 .verify-artifacts/
 MUJOCO_LOG.TXT
+demo.mp4

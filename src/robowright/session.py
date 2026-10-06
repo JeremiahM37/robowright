@@ -246,8 +246,8 @@ class Session:
             raise RobowrightError(f"{self.world.backend.robot_model.title} is a legged robot: use stand, crouch or move_joints")
         return r
 
-    def pick(self, object: str) -> str:
-        return self._act(self._arm().pick, self._w().scene[object])
+    def pick(self, object: str, approach: str = "top") -> str:
+        return self._act(self._arm().pick, self._w().scene[object], approach=approach)
 
     def place(self, on, height: float | None = None) -> str:
         return self._act(self._arm().place, self._target(on), height=height)

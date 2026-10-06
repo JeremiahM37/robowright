@@ -125,19 +125,33 @@ class Arm:
 
     @action
     def move_to(
-        self, target, approach=DOWN, yaw: float | None = None, linear: bool = False, speed: float = 0.15, timeout: float | None = None
+        self,
+        target,
+        approach=DOWN,
+        yaw: float | None = None,
+        linear: bool = False,
+        speed: float = 0.15,
+        timeout: float | None = None,
+        level: bool = False,
+        plan: bool = False,
     ):
         """Move the tool centre point to ``target`` (a point, tuple or object handle).
 
         ``approach`` is the direction the fingers point (default straight down).
         ``linear=True`` follows a straight line in Cartesian space at ``speed`` m/s,
-        which is what you want for the last few centimetres of a grasp.
+        which is what you want for the last few centimetres of a grasp. ``level``
+        keeps the fingers closing horizontally (a side grasp). ``plan=True`` finds a
+        path that keeps the arm (and anything held) off the table and the objects.
         """
         r = self.robot
         p = as_subject(self.world, target).position
         q_now = r._target[: r.n_arm].copy()
         if not linear:
-            q, err = r._ik(p, q_now, approach, yaw)
+            if plan:
+                q = r._clear_ik(p, approach, yaw, level)
+                self.follow.__wrapped__(self, r.planner.plan(q_now, q), timeout=timeout)
+                return
+            q, err = r._ik(p, q_now, approach, yaw, level=level)
             self.move_joints.__wrapped__(self, q, timeout=timeout)
             return
         p0 = r.kin.tcp(q_now)
@@ -146,7 +160,7 @@ class Arm:
         for i in range(1, n + 1):
             # Hold the current posture along a straight line: pulling a redundant arm
             # toward home here makes its elbow and wrist drift while the hand moves.
-            q, err = r._ik(p0 + (p - p0) * i / n, q, approach, yaw, rest=q_now)
+            q, err = r._ik(p0 + (p - p0) * i / n, q, approach, yaw, rest=q_now, level=level)
             qs.append(q)
         qs = np.array([q_now, *qs])
         # A short straight line can still need a big wrist turn (to a new grasp yaw);
@@ -161,6 +175,21 @@ class Arm:
 
         r._stream(at, duration)
         r._settle(qs[-1], timeout)
+
+    @action
+    def follow(self, path, timeout: float | None = None):
+        """Move the arm along joint-space waypoints ``path`` (from robot.planner), smoothly."""
+        r = self.robot
+        path = [r._target[: r.n_arm].copy(), *(np.asarray(q, float) for q in path)]
+        seg = np.array([np.max(np.abs(b - a)) for a, b in zip(path, path[1:])])
+        if seg.sum() < 1e-9:
+            return
+        at = np.concatenate([[0.0], np.cumsum(seg)]) / seg.sum()
+        fine = np.array([r.kin.tcp(_along(path, at, s)) for s in np.linspace(0, 1, 8 * len(path) + 1)])
+        tool = float(np.linalg.norm(np.diff(fine, axis=0), axis=1).sum()) / self.world.settings.max_tcp_speed
+        duration = max(float(seg.sum()) / self.world.settings.max_joint_speed, tool, self.world.dt)
+        r._stream(lambda s: r._set_arm(_along(path, at, _minjerk(s))), duration)
+        r._settle(path[-1], timeout)
 
     @action
     def home(self, timeout: float | None = None):
@@ -255,6 +284,8 @@ class Robot:
         self._target = b.qpos().copy()
         self._target[-1] = GRIPPER_OPEN
         self._home_q = None
+        self._planner = None
+        self._held_from = None  # after a side pick: (approach, yaw, TCP height above the object's underside)
 
     @property
     def base(self):
@@ -340,17 +371,72 @@ class Robot:
             what = "arm" if self.model.family == "arm" else "robot"
             raise ActionTimeoutError(f"{what} did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
 
-    def _ik(self, p, seed, approach, yaw, rest=None):
-        q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw, rest)
+    @property
+    def planner(self):
+        """Collision checking and path search for this arm in this scene (see robowright.planning)."""
+        if self._planner is None:
+            from .planning import Planner
+
+            self._planner = Planner(self.world)
+        return self._planner
+
+    def _clear_ik(self, p, approach, yaw, level=False) -> np.ndarray:
+        """Joint angles reaching ``p`` with the arm (and what it holds) clear of the table and
+        the objects, nearest the arm's present ones."""
+        return self._clear_iks(p, approach, yaw, level)[0]
+
+    def _clear_iks(self, p, approach, yaw, level=False, want: int = 3) -> list[np.ndarray]:
+        """Up to ``want`` such joint configurations, nearest first."""
+        held = self.gripper.holding() if self.world.has_contacts and self.model.has_gripper else None
+        self.planner.sync(held)
+        seed = self._target[: self.n_arm].copy()
+        yaws = [None] if yaw is None else [yaw] if level else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
+        found = []
+        for s in [seed, self.home_q, *_far_seeds(self.kin, 16)]:
+            for y in yaws:
+                q, err = self.kin.ik(p, s, approach, y, rest=seed, level=level)
+                if err < 1e-3 and (y is None or _yaw_error(self.kin, q, y) < np.radians(2)) and self.planner.clear(q):
+                    found.append(q)
+            if len(found) >= want:
+                break
+        if not found:
+            raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} clear of the table and objects")
+        return sorted(found, key=lambda q: float(np.abs(q - seed).sum()))
+
+    def _straight(self, q0, p1, approach, yaw, level, allow=()) -> list[np.ndarray] | None:
+        """The joint angles a straight move of the tool from where ``q0`` puts it to ``p1``
+        passes through (as Arm.move_to steps it), or None if they jump (IK turning to another
+        solution at a joint limit) or come near the table or an object (except ``allow``)."""
+        p0 = self.kin.tcp(q0)
+        n = max(2, int(np.ceil(np.linalg.norm(p1 - p0) / 0.004)))
+        qs, q = [], q0
+        allowed = {(g, o) for g in self.planner.hand_geoms for o in allow}
+        for i in range(1, n + 1):
+            nxt, err = solve_ik(self.kin, p0 + (p1 - p0) * i / n, q, self.home_q, approach, yaw, q0, level)
+            if err > 1e-3 or np.max(np.abs(nxt - q)) > 0.15 or self.planner.contacts(nxt) - allowed - self.planner.base_contacts:
+                return None
+            qs.append(q := nxt)
+        return qs
+
+    def _ik(self, p, seed, approach, yaw, rest=None, level=False):
+        q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw, rest, level)
         if err > 5e-3:
             raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} (closest {err * 1000:.1f} mm)")
         return q, err
 
     # skills ------------------------------------------------------------------
     @action
-    def pick(self, obj, lift: float = 0.05, timeout: float | None = None):
-        """Top-down grasp of ``obj``, then lift. Returns once the grasp is checked."""
+    def pick(self, obj, lift: float = 0.05, timeout: float | None = None, approach="top"):
+        """Grasp ``obj``, then lift. Returns once the grasp is checked.
+
+        ``approach`` is ``"top"`` (from above), ``"side"`` (horizontally: for a tall object, or
+        one under something), or the horizontal direction to come in along. A side grasp
+        plans its way to the object (see :attr:`planner`), the hand turned to the side away
+        from the table and the objects.
+        """
         o = as_subject(self.world, obj)
+        if approach not in (None, "top"):
+            return self._pick_from_side(o, approach, lift, timeout)
         if isinstance(o, ObjectHandle) and o.spec.kind != "bin":
             width = grasp_width(o.spec)
             opens = widest_gap(self.model)
@@ -379,6 +465,73 @@ class Robot:
                     f"touching {sorted(fixed) or 'nothing'} / {sorted(moving) or 'nothing'}"
                 )
 
+    def _pick_from_side(self, o, approach, lift, timeout):
+        if isinstance(o, ObjectHandle):
+            width, opens = grasp_width(o.spec), widest_gap(self.model)
+            if width > opens:
+                raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
+        p = o.position
+        grasp = p.copy()
+        # High on the object (2.5 cm under its top): the arm then stays well off the table.
+        top = o.top if isinstance(o, ObjectHandle) else p[2]
+        grasp[2] = max(p[2], top - 0.025, self.model.derived.side_reach + TABLE_CLEARANCE)
+        drop = float(grasp[2] - _bottom(o)) if isinstance(o, ObjectHandle) else 0.0  # the TCP above the underside
+        if isinstance(approach, str):
+            if approach != "side":
+                raise ValueError(f"approach must be 'top', 'side' or a horizontal direction, not {approach!r}")
+            v = p[:2] - np.asarray(self.model.base_pos[:2], float)
+            base = float(np.arctan2(v[1], v[0]))
+            # From the robot's side of the object first; turned 45 then 90 degrees either way if
+            # the arm cannot fold its hand in between itself and the object.
+            angles = [base + t for t in (0.0, np.pi / 4, -np.pi / 4, np.pi / 2, -np.pi / 2)]
+        else:
+            angles = [float(np.arctan2(approach[1], approach[0]))]
+        self.gripper.open.__wrapped__(self.gripper)
+        geoms = {g for g in range(self.planner.m.ngeom) if self.planner.m.geom_bodyid[g] == self.planner.objects.get(o.name, -1)}
+        why = []
+        for angle in angles:
+            a = np.array([np.cos(angle), np.sin(angle), 0.0])
+            yaw = angle + np.pi / 2  # the fingers close across the approach
+            along = f"along {np.round(a[:2], 2).tolist()}"
+            try:
+                backs = self._clear_iks(grasp - a * 0.06, a, yaw, level=True, want=4)
+            except UnreachableError:
+                why.append(f"{along}: no pose holds the hand level there clear of the table and objects")
+                continue
+            # In and up must be straight, smooth moves clear of everything but the object itself.
+            q_back = next(
+                (
+                    q
+                    for q in backs
+                    if (inn := self._straight(q, grasp, a, yaw, True, geoms))
+                    and self._straight(inn[-1], grasp + [0, 0, lift], a, yaw, True, geoms)
+                ),
+                None,
+            )
+            if q_back is None:
+                why.append(f"{along}: no smooth straight way in and up")
+                continue
+            kw = dict(approach=a, yaw=yaw, level=True, timeout=timeout)
+            self.arm.follow.__wrapped__(self.arm, self.planner.plan(self._target[: self.n_arm], q_back), timeout=timeout)
+            self.arm.move_to.__wrapped__(self.arm, grasp, linear=True, **kw)
+            self.gripper.close.__wrapped__(self.gripper)
+            self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, lift], linear=True, **kw)
+            self._held_from = (a, yaw, drop) if isinstance(o, ObjectHandle) else None
+            self._check_held(o)
+            return
+        raise UnreachableError(f"pick({o.name!r}) from the side at {np.round(grasp, 3).tolist()}: " + "; ".join(why))
+
+    def _check_held(self, o):
+        w = self.world
+        if isinstance(o, ObjectHandle) and w.has_contacts:
+            if not w.run_until(lambda: self.gripper.holding() == o.name, 0.2):
+                fixed, moving = self.gripper.touching()
+                raise GraspError(
+                    f"pick({o.name!r}) lifted without it: {o.name} is at {np.round(o.position, 3).tolist()}, "
+                    f"the tool at {np.round(self.tcp.position, 3).tolist()}, the jaws at opening {self.gripper.opening:.2f}, "
+                    f"touching {sorted(fixed) or 'nothing'} / {sorted(moving) or 'nothing'}"
+                )
+
     @action
     def place(self, on, height: float | None = None, yaw: float | None = None, timeout: float | None = None):
         """Carry the held object above ``on`` (object or point), lower it and release.
@@ -391,6 +544,8 @@ class Robot:
         t = as_subject(self.world, on)
         p = t.position.copy()
         top = t.top if isinstance(t, ObjectHandle) else p[2]
+        if self._held_from is not None:
+            return self._place_from_side(t, p, top, height, timeout)
         if yaw is None:
             yaw = self.grip_yaw
         if height is None:
@@ -413,6 +568,53 @@ class Robot:
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper)
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
+
+    def _place_from_side(self, t, p, top, height, timeout):
+        """Set down what a side grasp holds: planned to above the spot, down, let go, back out."""
+        a, yaw, drop = self._held_from
+        lower_in = height is None and isinstance(t, ObjectHandle) and t.spec.kind == "bin"
+        if height is None:
+            height = drop + 0.01  # the object's underside 1 cm above the surface
+        if isinstance(t, ObjectHandle) and t.spec.kind == "bin":
+            p[:2] = self._free_spot(t, top + height + 0.03, yaw)
+        down = np.array([p[0], p[1], top + height])
+        above = down + [0, 0, 0.04]
+        kw = dict(approach=a, yaw=yaw, level=True, timeout=timeout)
+        held = self.gripper.holding() if self.world.has_contacts else None
+        ignore = {g for g in range(self.planner.m.ngeom) if self.planner.m.geom_bodyid[g] == self.planner.objects.get(held, -1)}
+        self.planner.sync(held)
+        q_now = self._target[: self.n_arm].copy()
+        carry = self._straight(q_now, above, a, yaw, True)
+        if lower_in:
+            # Down into the bin as far as the hand and the object stay clear of its walls and
+            # floor, so the object is let go of near the bottom rather than dropped from the rim.
+            floor = t.position[2] + 0.006 + drop + 0.01
+            for z in np.arange(down[2] - 0.01, floor - 1e-9, -0.01):
+                if not self._straight(carry[-1] if carry else q_now, [down[0], down[1], z], a, yaw, True):
+                    break
+                down = np.array([down[0], down[1], z])
+        if carry and self._straight(carry[-1], down, a, yaw, True, ignore):
+            # Carried straight, the hand level all the way: a joint-space path tilts it between
+            # two level poses, and an object held high up swings out of the fingers.
+            self.arm.move_to.__wrapped__(self.arm, above, linear=True, **kw)
+        else:
+            q = next((q for q in self._clear_iks(above, a, yaw, level=True, want=4) if self._straight(q, down, a, yaw, True, ignore)), None)
+            if q is None:
+                raise UnreachableError(f"place: no clear straight way down to {np.round(down, 3).tolist()} holding from the side")
+            self.arm.follow.__wrapped__(self.arm, self.planner.plan(q_now, q), timeout=timeout)
+        self.arm.move_to.__wrapped__(self.arm, down, linear=True, **kw)
+        self.gripper.open.__wrapped__(self.gripper)
+        self._held_from = None
+        self.planner.sync()
+        # Back out the way the fingers came in, if that way is clear; else straight up off the object.
+        q_now = self._target[: self.n_arm].copy()
+        if self._straight(q_now, down - a * 0.06, a, yaw, True, ignore):
+            self.arm.move_to.__wrapped__(self.arm, down - a * 0.06, linear=True, **kw)
+            down = down - a * 0.06
+        for rise in (0.06, 0.04, 0.02):  # up off the object, as far as the arm reaches
+            if self._straight(self._target[: self.n_arm].copy(), down + [0, 0, rise], a, yaw, True, ignore):
+                self.arm.move_to.__wrapped__(self.arm, down + [0, 0, rise], linear=True, **kw)
+                break
 
     def _free_spot(self, bin, z: float, yaw: float) -> np.ndarray:
         """Where in ``bin`` to drop the held object: its centre while empty, else the reachable
@@ -535,7 +737,7 @@ def _kinematics(name: str) -> Kinematics:
     return Kinematics(robots.get(name))
 
 
-def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None):
+def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None, level=False):
     """IK over the grasp yaw's symmetric variants and two seeds.
 
     Among the solutions that reach the target, take the one that moves the
@@ -546,11 +748,12 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None)
     """
     rest = home if rest is None else rest
     seed = np.asarray(seed, float)
-    yaws = [None] if yaw is None else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
+    # Level (a side grasp), the fingers close across the approach: no quarter turns.
+    yaws = [None] if yaw is None else [yaw] if level else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
     cands = []
     for y in yaws:
         for s in (seed, home):
-            q, err = kin.ik(p, s, approach, y, rest=rest)
+            q, err = kin.ik(p, s, approach, y, rest=rest, level=level)
             # A solution reaches the target only if it also turns the grip as asked: IK
             # gives up on orientation before position, so a candidate can arrive with the
             # wrist short of the yaw (and would win here for having moved least).
@@ -561,7 +764,7 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None)
         # short of a target other poses reach. Try from mid-range and a few fixed random poses.
         for s in _far_seeds(kin):
             for y in yaws:
-                q, err = kin.ik(p, s, approach, y, rest=rest)
+                q, err = kin.ik(p, s, approach, y, rest=rest, level=level)
                 if err < 1e-3 and (y is None or _yaw_error(kin, q, y) < np.radians(2)):
                     cands.append((float(np.abs(q - seed).sum()), err, q, True))
             if any(c[1] < 1e-3 for c in cands):
@@ -578,12 +781,13 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None)
     return q, err
 
 
-def _far_seeds(kin: Kinematics) -> list[np.ndarray]:
-    """IK starting poses away from the arm's own: mid-range and four fixed random ones (the
-    same as robots.detect places the arm with, so what placement reached, a move reaches)."""
+def _far_seeds(kin: Kinematics, n: int = 4) -> list[np.ndarray]:
+    """IK starting poses away from the arm's own: mid-range and ``n`` fixed random ones (with
+    the default, the same as robots.detect places the arm with, so what placement reached, a
+    move reaches)."""
     rng = np.random.default_rng(0)
     lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
-    return [(lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]
+    return [(lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(n))]
 
 
 def _yaw_error(kin: Kinematics, q, yaw: float) -> float:
@@ -622,6 +826,11 @@ def home_q(name: str) -> np.ndarray:
     return q
 
 
+def _bottom(o) -> float:
+    """Height of an object's underside."""
+    return float(o.position[2] - o.spec.half_height)
+
+
 def widest_gap(model) -> float:
     """The widest object the gripper opens around: its aperture at its widest, less where its
     fingers meet. (A jaw that swings past upright is widest before fully open.)"""
@@ -632,6 +841,14 @@ def widest_gap(model) -> float:
 def grasp_width(spec) -> float:
     """How wide an object is where a top-down grasp closes on it."""
     return 2 * (min(spec.size[0], spec.size[1]) if spec.kind == "box" else spec.size[0])
+
+
+def _along(path, at, s: float) -> np.ndarray:
+    """The point a fraction ``s`` along piecewise-linear ``path``, its knots at fractions ``at``."""
+    i = min(int(np.searchsorted(at, s, side="right")) - 1, len(path) - 2)
+    i = max(i, 0)
+    f = (s - at[i]) / max(at[i + 1] - at[i], 1e-12)
+    return path[i] + (path[i + 1] - path[i]) * min(max(f, 0.0), 1.0)
 
 
 def _minjerk(s: float) -> float:

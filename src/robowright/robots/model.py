@@ -219,6 +219,7 @@ class Derived:
     gripper_joint: str  # the joint whose travel defines "opening"
     max_aperture: float  # metres between the fingers when open
     apertures: tuple = ()  # metres between the fingers' tips at openings 0, 0.1, ... 1
+    side_reach: float = 0.0  # how far the gripper stands out from the TCP across the grip (down, in a side grasp)
 
 
 _OPTIONS = ("timestep", "iterations", "ls_iterations", "impratio", "integrator", "cone", "noslip_iterations")
@@ -631,12 +632,23 @@ def _derive(model: RobotModel) -> Derived:
     inset = max(inset, inset + tip_open - tip)
     # Across the grip, at each opening: how wide an object the gripper takes is the widest of
     # these less the closed one (a jaw that swings past upright is widest before fully open).
+    # Across the grip (perpendicular to it and to the tool axis): how far the gripper's parts near
+    # the fingertips stand out from the TCP. In a side grasp that direction is vertical.
+    across = np.cross(axis, grip)
+    parts = {hand}
+    for b in range(hand + 1, m.nbody):  # bodies come after their parents
+        if m.body_parentid[b] in parts:
+            parts.add(b)
+    R, p = d.xmat[hand].reshape(3, 3), d.xpos[hand]
+    pts = np.vstack([(_surface(m, d, g) - p) @ R for g in _collision_geoms(m, parts)])
+    pts = pts[pts @ axis > tip - 0.12]
+    side_reach = float(np.abs((pts - tcp) @ across).max()) if len(pts) else 0.0
     apertures = []
     for f in np.linspace(0.0, 1.0, 11):
         _settle(m, d, act, model.gripper_closed + f * (model.gripper_open - model.gripper_closed))
         a, b, _ = tips(*finger_points())
         apertures.append(round(float(abs((a - b) @ grip)), 5))
-    return Derived(axis, grip, tcp, inset, joints, main, aperture, tuple(apertures))
+    return Derived(axis, grip, tcp, inset, joints, main, aperture, tuple(apertures), round(side_reach, 5))
 
 
 def _without_meshes(spec: mujoco.MjSpec) -> mujoco.MjModel:
@@ -737,13 +749,14 @@ class Kinematics:
     def tcp(self, q) -> np.ndarray:
         return self.fk(q)[:3, 3]
 
-    def ik(self, target, q0, approach=None, yaw=None, iters=150, tol=1e-4, damping=1e-4, rest=None):
+    def ik(self, target, q0, approach=None, yaw=None, iters=150, tol=1e-4, damping=1e-4, rest=None, level=False):
         """Damped least-squares IK for the TCP position, tool direction and grip yaw.
 
         ``approach`` is the world direction the fingers should point along
         (``(0, 0, -1)`` for top-down). ``yaw`` sets the world angle of the
-        finger-closing axis about z. Redundant joints are pulled gently toward
-        ``rest`` (default ``q0``). Returns ``(q, position_error)``.
+        finger-closing axis about z; ``level`` keeps that axis horizontal (a side
+        grasp, the fingers closing across it). Redundant joints are pulled gently
+        toward ``rest`` (default ``q0``). Returns ``(q, position_error)``.
         """
         m, d = self.m, self.d
         target = np.asarray(target, float)
@@ -772,6 +785,10 @@ class Kinematics:
                     dg = -_skew(g) @ Jr
                     res.append([0.3 * ang])
                     rows.append(0.3 * ((g[0] * dg[1] - g[1] * dg[0]) / n2)[None, :])
+            if level:
+                g = R @ self.grip_axis
+                res.append([0.3 * g[2]])
+                rows.append(0.3 * (-_skew(g) @ Jr)[2][None, :])
             r, J = np.concatenate(res), np.vstack(rows)
             if np.linalg.norm(r[:3]) < tol and (r.size == 3 or np.linalg.norm(r[3:]) < 10 * tol):
                 break

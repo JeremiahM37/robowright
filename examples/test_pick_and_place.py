@@ -6,8 +6,10 @@ Run with:  pytest examples/            (MuJoCo)
 
 import pytest
 
-from robowright import condition, expect
+from robowright import UnreachableError, condition, expect
 from robowright.policies import ScriptedPickPlace
+from robowright.robot import widest_gap
+from robowright.scene import ObjectSpec, tabletop
 
 
 def test_pick_and_place(robot, scene):
@@ -60,3 +62,24 @@ def test_cube_survives_a_shove_when_held(world, robot, scene):
     world.faults.push("cube", force=(0.0, 1.5, 0.0), duration=0.1)
     world.wait(0.5)
     expect(robot.gripper).to_be_holding(cube)
+
+
+TALL_CAN = tabletop(  # a 10 cm can, and a bin deep enough to hold it (7 cm)
+    ObjectSpec("can", "cylinder", (0.02, 0.05), (0.22, -0.06, None), color="red"),
+    ObjectSpec("bin", "bin", (0.05, 0.05, 0.035), (0.2, 0.12, 0.0), color="blue", mass=0.0),
+)
+
+
+@pytest.mark.scene(TALL_CAN)
+def test_picks_a_tall_can_from_the_side(robot, scene):
+    # A side grasp plans its way round the table and the objects, the hand turned to the side.
+    can, bin = scene["can"], scene["bin"]
+    if robot.model.derived.apertures and widest_gap(robot.model) < 0.04 + 0.01:
+        pytest.skip("this gripper opens less than 1 cm wider than the can: it cannot slide in from the side")
+    try:
+        robot.pick(can, approach="side")
+    except UnreachableError as e:  # decided before the arm moves
+        pytest.skip(f"this arm cannot hold its hand level beside the can from where it is mounted: {e}")
+    expect(robot.gripper).to_be_holding(can)
+    robot.place(on=bin)
+    expect(can).to_be_inside(bin)

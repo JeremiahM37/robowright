@@ -48,6 +48,14 @@ KNOWN[("test_grip_force_matches_the_datasheet", "pybullet", "xarm7")] = (
     "PyBullet has no closed kinematic chains, so the xArm Gripper's six linkage joints are driven by "
     "separate motors and press the cube with 13.7 N of the datasheet's 30 N (MuJoCo, Drake, Isaac: 29-31 N)"
 )
+# A 10 cm can held 2.5 cm under its top from the side: in Genesis it creeps out of the fingers
+# while carried (the gripper closing as it slips, opening 0.35 -> 0.06), even carried level in a
+# straight line at 0.05 m/s; MuJoCo, PyBullet and Drake hold it. Panda and ViperX keep it.
+for robot in ("ur5e", "ur10e", "gen3", "sawyer", "xarm7"):
+    KNOWN[("test_picks_a_tall_can_from_the_side", "genesis", robot)] = (
+        "in Genesis a can held from the side creeps out of the fingers while carried, whatever the speed "
+        "(MuJoCo, PyBullet and Drake hold it)"
+    )
 KNOWN[("test_stands_on_its_own", "genesis", "spot")] = (
     "standing still, Spot creeps backward ~2 cm/s on its sphere feet in Genesis (MuJoCo: settles to 0.2 mm/s)"
 )

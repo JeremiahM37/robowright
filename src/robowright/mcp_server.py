@@ -97,9 +97,10 @@ def build_server(session: Session | None = None):
         return Image(data=await run(s.screenshot, camera, width, height), format="png")
 
     @tool
-    async def robot_pick(object: str) -> str:
-        """Arm: grasp the named object from above and lift it."""
-        return await run(s.pick, object)
+    async def robot_pick(object: str, approach: str = "top") -> str:
+        """Arm: grasp the named object and lift it. approach: "top" (from above) or "side"
+        (horizontally, for a tall object; the arm plans its way round the table and objects)."""
+        return await run(s.pick, object, approach)
 
     @tool
     async def robot_place(on: str | list[float], height: float | None = None) -> str:

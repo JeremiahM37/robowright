@@ -27,9 +27,13 @@ $ pytest --rw-robot all --rw-backend mujoco,pybullet,drake,genesis   # 13 arms x
 
 The test above runs unchanged on a Franka Panda, a UR5e with a Robotiq gripper, a Kinova
 Gen3, a KUKA iiwa, an xArm 7, ALOHA's ViperX, the Bridge WidowX, a PiPER, a YAM, an ARX L5,
-a Sawyer and the LeRobot SO-101. Adding a robot is about ten lines: name its arm joints,
-hand, finger bodies and gripper actuator. robowright works out the tool axis, tool centre
-point, fingertip clearance and gripper calibration from the robot's own model.
+a Sawyer and the LeRobot SO-101, and on any other arm from its model file (MJCF, URDF or
+xacro: `--rw-robot path/to/arm.urdf`), with no code: robowright works out which joints are the
+arm, which parts are the fingers, how the gripper opens and where to mount it, from the model
+itself. See [Any robot, from its model file](#any-robot-from-its-model-file).
+
+`python scripts/demo_video.py` records real runs (every robot, every engine, a side grasp, a
+failure) and cuts them into a one-minute 1080p demo video.
 
 > **Status: pre-alpha.** Simulation only. See [Limitations](#limitations).
 
@@ -279,7 +283,22 @@ robot.arm.move_to(cube, linear=True, speed=0.05)  # straight-line Cartesian appr
 robot.gripper.close()  # returns when the jaws stop: on an object, or shut
 robot.pick(cube)  # returns once the cube is held in both jaws after the lift
 robot.place(on=bin)  # into the bin's centre, or the free spot farthest from what is already there
+robot.pick(can, approach="side")  # a tall object, from the side: a planned path, then straight in
+robot.arm.move_to(point, plan=True)  # round the table and the objects, not through them
 ```
+
+Moves interpolate joints, which is safe while the hand comes from above. A side grasp (or any
+move with `plan=True`) plans instead: collisions are checked on a MuJoCo copy of the scene,
+with the objects where the simulation has them and anything held carried along, whatever
+engine runs it; the search is RRT-Connect in joint space from a seeded generator (the same
+scene plans the same path), then shortcut. Before a side grasp moves at all it checks every
+part of it - the way in, the straight moves in and up, a smooth IK solution with no joint
+flipping at a limit - and tries other directions round the object, or says why none works.
+On the built-in arms, a 10 cm can picked from the side and set in a bin works on 7 of 13
+(Panda, UR5e, UR10e, xArm 7, Gen3, ViperX, Sawyer) on MuJoCo, PyBullet, Drake and Isaac Sim; the iiwa,
+PiPER, SO-101, YAM and ARX cannot hold the hand level beside it from where they are mounted,
+and the WidowX's gripper opens 4 mm wider than the can. On Genesis the can creeps out of the
+fingers mid-carry on 5 of the 7 (a recorded divergence).
 
 When an action can't finish, it says why:
 
@@ -728,11 +747,11 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 - **Simulation only:** no hardware backend yet. The backend interface is written with one
   in mind (capabilities, perception hooks, `Settings(realtime=True)`), but nothing has run
   on a real robot.
-- **Top-down grasps:** `pick`/`place` grasp from above. Side grasps need motion planning
-  that keeps the arm clear of the table and objects on its way, which robowright does not do:
-  moves interpolate joints, which is safe only from above. A mobile base drives only where the
-  arm cannot reach otherwise, as two idealised joints (no wheel slip), tested on MuJoCo; robots whose
-  arm joints move together through a tendon (Stretch) also run on MuJoCo only for now.
+- **Grasps:** from above, or from the side with a planned approach; no other angles yet, and
+  plain moves interpolate joints without checking for collisions (pass `plan=True`). A mobile
+  base drives only where the arm cannot reach otherwise, as two idealised joints (no wheel
+  slip), tested on MuJoCo; robots whose arm joints move together through a tendon (Stretch)
+  also run on MuJoCo only for now.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at their datasheet force only where the maker
