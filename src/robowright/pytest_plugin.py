@@ -7,7 +7,7 @@ Options::
 
     --rw-backend mujoco,pybullet     run every robot test on each backend
     --rw-robot so101,panda | all | legged   run every robot test on each robot ("all": every arm)
-    --rw-robot path/to/robot.xml             ...or on any robot, from its MJCF model file
+    --rw-robot path/to/robot.xml             ...or on any robot, from its model file (MJCF or URDF)
     --rw-trace on|off|retain-on-failure
     --rw-trace-dir DIR
     --rw-seed N                      base seed
@@ -47,7 +47,7 @@ def pytest_addoption(parser):
     g = parser.getgroup("robowright")
     g.addoption("--rw-backend", default="mujoco", help="comma-separated backends to run robot tests on")
     g.addoption(
-        "--rw-robot", default="so101", help="comma-separated robots to run robot tests on: names, 'all', 'legged', or paths of MJCF files"
+        "--rw-robot", default="so101", help="robots to run robot tests on (comma-separated): names, 'all', 'legged', or MJCF/URDF files"
     )
     g.addoption("--rw-trace", default="retain-on-failure", choices=["on", "off", "retain-on-failure"])
     g.addoption("--rw-trace-dir", default="robowright-traces")

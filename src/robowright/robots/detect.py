@@ -1,12 +1,15 @@
 """Any robot from its model file: work out what a person would otherwise write down.
 
-A model file (MJCF) describes every robot the same way - bodies, joints, actuators, limits -
-but not what the parts are *for*: which joints form the arm, which bodies are the fingers,
+A model file (MJCF, or a URDF: see :mod:`.from_urdf`) describes every robot the same way -
+bodies, joints, actuators, limits - but not what the parts are *for*: which joints form the
+arm, which bodies are the fingers,
 which actuator drives the gripper and which end of its range is open. This module reads those
 off the model's structure and motion, the way Playwright finds a button by its role rather
 than by a hand-written selector:
 
-* a model with a free joint is a mobile (legged) robot; its actuated joints are what it moves;
+* a model with a free joint is a mobile robot: legged if chains of actuated joints reach the
+  ground, its actuated joints being what it moves; otherwise, carrying a gripper, a mobile
+  manipulator, whose base is held where it stands so its arm is tested as on a fixed one;
 * the gripper is the actuator that moves several coupled joints, a slide, or parts named like
   a gripper (finger, jaw, claw...), at the end of the chain;
 * the hand is the body the gripper's joints hang from, and the arm is every actuated joint on
@@ -29,7 +32,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .model import _PRINCIPAL, Attachment, RobotModel, _collision_geoms, _corners, fix_gripper, reset_data
+from .model import _PRINCIPAL, Attachment, RobotModel, _collision_geoms, _corners, _surface, fix_gripper, reset_data
 
 _FREE, _HINGE, _SLIDE = (int(t) for t in (mujoco.mjtJoint.mjJNT_FREE, mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE))
 _GRIP_WORDS = re.compile(r"grip|finger|jaw|claw|pinch|knuckle|thumb|tong|hand", re.I)
@@ -48,6 +51,13 @@ _NEEDED = np.array(
 )
 _AROUND = np.array([(x, y, z) for x in (0.12, 0.3) for y in (-0.12, 0.18) for z in (0.03, 0.1)])
 _HOME_HEIGHTS = (0.2, 0.15, 0.12, 0.1, 0.08)
+# Where the default scenes put objects (the cube, the bin, a second cube), with 5 mm to spare:
+# no part of the robot's base may stand on them.
+_OBJECTS = (
+    ((0.2025, -0.0775), (0.2375, -0.0425)),
+    ((0.1425, -0.1175), (0.1775, -0.0825)),
+    ((0.145, 0.065), (0.255, 0.175)),
+)
 
 
 @dataclass
@@ -63,7 +73,7 @@ class DetectionError(ValueError):
 
 
 def load(path: str | Path, name: str | None = None, **overrides) -> RobotModel:
-    """A :class:`RobotModel` for the robot in ``path`` (MJCF ``.xml``), registered under ``name``.
+    """A :class:`RobotModel` for the robot in ``path`` (MJCF ``.xml`` or ``.urdf``), registered under ``name``.
 
     Whatever :func:`detect` cannot work out, or gets wrong, can be passed as a keyword, using
     :class:`RobotModel`'s field names (``arm_joints``, ``hand``, ``left_finger``,
@@ -93,11 +103,28 @@ def build(path: str | Path, name: str | None = None, **overrides) -> Built:
     path = Path(path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"no robot model at {path}")
-    if path.suffix.lower() == ".urdf":
-        # A URDF has no actuators, and ROS packages resolve its mesh paths: reading one well is its own job.
-        raise DetectionError("URDF files are not read yet; give the robot's MJCF (MuJoCo Menagerie has most robots)")
-    mjcf = _named(path)
-    det = detect(mjcf, **{k: overrides[k] for k in ("attach",) if k in overrides})
+    first = []
+    if path.suffix.lower() in (".urdf", ".xacro"):
+        from .from_urdf import URDFError, to_mjcf
+        from .urdf import cache_root
+
+        try:
+            path_mjcf, first = to_mjcf(path, cache_root().parent / "from_urdf")
+        except URDFError as e:
+            raise DetectionError(str(e)) from e
+    else:
+        path_mjcf = path
+    mjcf = _named(path_mjcf)
+    mjcf, held = _hold_mobile_base(mjcf)
+    det = detect(mjcf, overrides.get("attach"), given=overrides)
+    det.notes[:0] = first + held
+    if first and det.fields.get("family", "arm") == "arm" and "attach" not in det.fields:
+        # From a URDF: grasping needs the jaws' real shapes where their hulls would not do.
+        from .from_urdf import split_jaws
+
+        f = {**det.fields, **overrides}
+        mjcf, more = split_jaws(mjcf, f["hand"], (f["left_finger"][0], f["right_finger"][0]), cache_root().parent / "from_urdf")
+        det.notes.extend(more)
     fields = {**det.fields, **overrides}
     for k in overrides:
         det.notes.append(f"{k}: given ({overrides[k]!r})")
@@ -130,6 +157,11 @@ def _named(path: Path) -> Path:
                     n += "_"
                 e.name = n
                 taken.add(n)
+    return _copy(spec, path, "named")
+
+
+def _copy(spec: mujoco.MjSpec, path: Path, kind: str) -> Path:
+    """``spec``, a changed copy of the model at ``path``, written to robowright's cache."""
     # Asset paths are resolved against the original's directory, wherever the copy is.
     for attr in ("meshdir", "texturedir"):
         setattr(spec, attr, str((path.parent / (getattr(spec, attr) or "")).resolve()))
@@ -137,7 +169,7 @@ def _named(path: Path) -> Path:
 
     from .urdf import cache_root
 
-    out = cache_root().parent / "named" / f"{path.stem}-{hashlib.sha1(str(path).encode()).hexdigest()[:10]}.xml"
+    out = cache_root().parent / kind / f"{path.stem}-{hashlib.sha1(str(path).encode()).hexdigest()[:10]}.xml"
     out.parent.mkdir(parents=True, exist_ok=True)
     xml = spec.to_xml()
     if not out.exists() or out.read_text() != xml:  # test workers write it at once: replace atomically
@@ -149,6 +181,34 @@ def _named(path: Path) -> Path:
             f.write(xml)
         os.replace(tmp, out)
     return out
+
+
+def _hold_mobile_base(path: Path) -> tuple[Path, list[str]]:
+    """A mobile manipulator (a free-floating base carrying a gripper) with its base held still
+    where it stands, so its arm is tested like any other; anything else as it is."""
+    spec = mujoco.MjSpec.from_file(str(path))
+    m = spec.compile()
+    free = [j for j in range(m.njnt) if m.jnt_type[j] == _FREE]
+    moved = _moved_joints(m)
+    if not free or not any(_is_gripper(m, a, j) for a, j in moved.items()) or _legs(m, int(m.jnt_bodyid[free[0]]), moved) >= 2:
+        return path, []  # fixed already, nothing to hold, or a legged robot (a humanoid's hands are not a mobile base)
+    base = m.body(int(m.jnt_bodyid[free[0]])).name
+    qa, va = int(m.jnt_qposadr[free[0]]), int(m.jnt_dofadr[free[0]])
+    for key in spec.keys:  # keyframes lose the free joint's position and velocity
+        if len(key.qpos):
+            key.qpos = np.delete(np.asarray(key.qpos), np.s_[qa : qa + 7])
+        if len(key.qvel):
+            key.qvel = np.delete(np.asarray(key.qvel), np.s_[va : va + 6])
+    spec.delete(spec.joint(m.joint(free[0]).name))
+    spec.compiler.fusestatic = False  # a jointless base would otherwise be merged into the world
+    # Standing on the floor: the lowest part of the robot at the floor's height.
+    m = spec.compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    low = min(_corners(m, d, g)[:, 2].min() for g in _collision_geoms(m, set(range(1, m.nbody))))
+    spec.body(base).pos[2] -= low
+    note = f"family: arm on a mobile base; {base!r} is held where it stands, so the arm is tested as on a fixed one"
+    return _copy(spec, path, "mobile"), [note]
 
 
 def _const(p: Path):
@@ -165,8 +225,14 @@ def _name_for(path: Path, registry) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
-def detect(mjcf: str | Path, attach: Attachment | None = None) -> Detection:
-    """Work out the :class:`RobotModel` fields for the robot in ``mjcf``."""
+def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | None = None) -> Detection:
+    """Work out the :class:`RobotModel` fields for the robot in ``mjcf``.
+
+    Fields in ``given`` are taken as they are, and what depends on them is worked out from them:
+    a model whose gripper range is a placeholder, say, is read once ``gripper_open`` and
+    ``gripper_closed`` say where it opens.
+    """
+    given = given or {}
     spec = mujoco.MjSpec.from_file(str(mjcf))
     m = spec.compile()
     notes: list[str] = []
@@ -180,11 +246,9 @@ def detect(mjcf: str | Path, attach: Attachment | None = None) -> Detection:
         notes.append(f"armature: motor inertia added to {[j for j, _ in floor]} so their force-limited servos do not shake")
     if free:
         moved = _moved_joints(m)
-        if any(_is_gripper(m, a, j) for a, j in moved.items()):
-            raise DetectionError(
-                "a free-floating base with a gripper is a mobile manipulator, which robowright does not drive yet"
-                " (arms on a fixed base, and legged robots, it does)"
-            )
+        if any(_is_gripper(m, a, j) for a, j in moved.items()) and _legs(m, int(m.jnt_bodyid[free[0]]), moved) < 2:
+            # (build() holds such a base still first; this is detect() called on the model as it is.)
+            raise DetectionError("a free-floating base with a gripper and no legs is a mobile manipulator: load it with robots.load")
         out.update(_legged(m, free[0], notes))
         return Detection(out, notes)
     if attach is None:
@@ -192,7 +256,13 @@ def detect(mjcf: str | Path, attach: Attachment | None = None) -> Detection:
     if attach is not None:
         out["attach"] = attach
         m = _with_attachment(spec, attach)
-    out.update(_arm(m, spec, notes))
+    elif m.opt.cone == int(mujoco.mjtCone.mjCONE_PYRAMIDAL) and m.opt.impratio < 2:
+        # MuJoCo's default friction (a pyramidal cone, impratio 1) lets a held object creep down
+        # through the fingers (TIAGo's slid out of a 4 N grip within seconds); MuJoCo's own
+        # gripper models hold with an elliptic cone and impratio 10.
+        out["grip_contacts"] = True
+        notes.append("grip_contacts: elliptic friction cone and impratio 10, as the model's defaults let a held object creep")
+    out.update(_arm(m, spec, notes, given))
     return Detection(out, notes)
 
 
@@ -362,24 +432,43 @@ def _default_attachment(m: mujoco.MjModel, spec: mujoco.MjSpec, notes) -> Attach
     joints = {j for js in moved.values() for j in js}
     if len(joints) < 3:
         raise DetectionError(f"no gripper found, and {len(joints)} actuated joint(s) is not an arm: pass gripper_actuator=..., hand=...")
-    b = max((int(m.jnt_bodyid[j]) for j in joints), key=lambda b: len(_ancestors(m, b)))
+    last = max(joints, key=lambda j: len(_ancestors(m, int(m.jnt_bodyid[j]))))
+    b = int(m.jnt_bodyid[last])
     while len(kids := [c for c in range(1, m.nbody) if m.body_parentid[c] == b]) == 1:
         b = kids[0]
     flange = m.body(b).name
     if not flange:
         raise DetectionError("no gripper found, and the arm's last link is unnamed: pass attach=Attachment(...)")
-    notes.append(f"gripper: none in the model, so a Robotiq 2F-85 is attached at the origin of {flange!r}, the end of the arm")
-    return Attachment(gripper, "robowright_flange", body=flange)
+    # The flange faces along the last joint's axis (a wrist roll turns the tool about its own
+    # axis), whichever axis of the link's frame that is: z on most arms, x on the Unitree Z1.
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    R = d.xmat[b].reshape(3, 3)
+    n = R.T @ d.xaxis[last]
+    if (R.T @ (d.xpos[b] - d.xanchor[last])) @ n < -1e-3 or (abs(n[2]) > 0.99 and n[2] < 0):
+        n = -n  # pointing away from the arm
+    quat = None
+    if n[2] < 0.99:
+        quat = np.zeros(4)
+        mujoco.mju_quatZ2Vec(quat, n)
+        quat = tuple(round(float(v), 9) for v in quat)
+    how = "" if quat is None else f", turned to face along the last joint's axis {np.round(n, 3).tolist()}"
+    notes.append(f"gripper: none in the model, so a Robotiq 2F-85 is attached at the origin of {flange!r}, the end of the arm{how}")
+    return Attachment(gripper, "robowright_flange", body=flange, quat=quat)
 
 
-def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes) -> dict:
+def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
     moved = _moved_joints(m)
     grippers = [(a, why) for a, j in moved.items() if (why := _is_gripper(m, a, j))]
-    if not grippers:
+    if "gripper_actuator" in given:
+        act, why = m.actuator(given["gripper_actuator"]).id, "given"
+        grippers = [(act, why), *((a, w) for a, w in grippers if a != act)]
+    elif not grippers:
         raise DetectionError("no gripper actuator found: pass gripper_actuator=... (and hand=..., left_finger=..., right_finger=...)")
-    # The deepest one: on a robot with a tool changer or a second gripper, the one at the tip.
-    depth = lambda a: max(len(_ancestors(m, m.jnt_bodyid[j])) for j in moved[a])  # noqa: E731
-    act, why = max(grippers, key=lambda g: (depth(g[0]), -g[0]))
+    else:
+        # The deepest one: on a robot with a tool changer or a second gripper, the one at the tip.
+        depth = lambda a: max(len(_ancestors(m, m.jnt_bodyid[j])) for j in moved[a])  # noqa: E731
+        act, why = max(grippers, key=lambda g: (depth(g[0]), -g[0]))
     fixes = _gripper_fixes(m, act, [a for a, _ in grippers if a != act], moved, notes)
     if any(fixes.values()):
         name = m.actuator(act).name
@@ -396,13 +485,16 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes) -> dict:
     # The hand: the deepest body above every gripper joint.
     chains = [_ancestors(m, int(m.body_parentid[b])) for b in gbodies]
     common = set(chains[0]).intersection(*chains[1:])
-    hand = next(b for b in chains[0] if b in common)
-    notes.append(f"hand: {m.body(hand).name!r} (the body the gripper's joints hang from)")
+    hand = m.body(given["hand"]).id if "hand" in given else next(b for b in chains[0] if b in common)
+    if "hand" not in given:
+        notes.append(f"hand: {m.body(hand).name!r} (the body the gripper's joints hang from)")
 
     # The arm: every joint from the base to the hand, each driven by its own actuator.
     path = [b for b in reversed(_ancestors(m, hand)) if b > 0]
     arm = [j for b in path for j in range(m.body_jntadr[b], m.body_jntadr[b] + m.body_jntnum[b]) if m.jnt_type[j] in (_HINGE, _SLIDE)]
     driven = {next(iter(js)) for a, js in moved.items() if len(js) == 1 and a != act}
+    if "arm_joints" in given:
+        arm = [m.joint(n).id for n in given["arm_joints"]]
     undriven = [m.joint(j).name for j in arm if j not in driven]
     if undriven:
         raise DetectionError(f"arm joints {undriven} have no actuator of their own; robowright drives every arm joint: pass arm_joints=...")
@@ -416,10 +508,18 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes) -> dict:
     soft = _soft_servos(m, arm, moved)
     if soft:
         notes.append(f"warning: the model's servos can only hold {soft} to within that of a target (joint friction / stiffness)")
-    lo, hi = _ctrl_range(m, act, moved[act])
-    left, right, opening = _fingers(m, hand, gj, act, (lo, hi), arm, notes)
+    if "gripper_open" in given and "gripper_closed" in given:
+        lo, hi = sorted((float(given["gripper_open"]), float(given["gripper_closed"])))
+    else:
+        lo, hi = _ctrl_range(m, act, moved[act])
+    if all(k in given for k in ("left_finger", "right_finger", "gripper_open", "gripper_closed")):
+        left, right = m.body(given["left_finger"][0]).id, m.body(given["right_finger"][0]).id
+        opening = 1 if given["gripper_open"] > given["gripper_closed"] else -1
+    else:
+        left, right, opening = _fingers(m, hand, gj, act, (lo, hi), arm, notes)
     open_, closed = (hi, lo) if opening > 0 else (lo, hi)
-    notes.append(f"gripper_open: {open_:g}, gripper_closed: {closed:g} (open leaves the fingers further apart)")
+    if "gripper_open" not in given:
+        notes.append(f"gripper_open: {open_:g}, gripper_closed: {closed:g} (open leaves the fingers further apart)")
     return {
         "arm_joints": tuple(m.joint(j).name for j in arm),
         "hand": m.body(hand).name,
@@ -467,19 +567,21 @@ def _mirror_ratio(m, lead: int, follow: int) -> float:
     """How far ``follow`` moves per unit of ``lead`` for the two fingers to open alike."""
     d = mujoco.MjData(m)
     reset_data(m, d)
-    a, b = int(m.jnt_bodyid[lead]), int(m.jnt_bodyid[follow])
 
-    def gap(j, dq):
-        d.qpos[m.jnt_qposadr[j]] += dq
+    def velocity(j):  # how the finger's body moves per unit of its joint
+        b, eps = int(m.jnt_bodyid[j]), 1e-4
+        d.qpos[m.jnt_qposadr[j]] += eps
         mujoco.mj_kinematics(m, d)
-        g = float(np.linalg.norm(d.xpos[a] - d.xpos[b]))
-        d.qpos[m.jnt_qposadr[j]] -= dq
-        return g
+        p = d.xpos[b].copy()
+        d.qpos[m.jnt_qposadr[j]] -= 2 * eps
+        mujoco.mj_kinematics(m, d)
+        d.qpos[m.jnt_qposadr[j]] += eps
+        return (p - d.xpos[b]) / (2 * eps)
 
-    eps = 1e-4
-    ga = (gap(lead, eps) - gap(lead, -eps)) / (2 * eps)
-    gb = (gap(follow, eps) - gap(follow, -eps)) / (2 * eps)
-    return round(ga / gb, 6) if abs(gb) > 1e-9 else 1.0
+    # The follower moves opposite to the leader. (Not from the gap between the two bodies: two
+    # fingers whose frames start at the same point, as on the AgileX PiPER, have no gap to vary.)
+    va, vb = velocity(lead), velocity(follow)
+    return round(-float(va @ vb) / float(vb @ vb), 6) if float(vb @ vb) > 1e-12 else 1.0
 
 
 def _soft_servos(m, arm, moved) -> str:
@@ -574,6 +676,11 @@ def _fingers(m, hand, gj, act, rng, arm, notes):
         moves = {b: at_hi[b] - at_lo[b] for b in tips}
         moving = {b: v for b, v in moves.items() if np.linalg.norm(v - axis * (v @ axis)) > 1e-3}
         if not moving:
+            if rng[1] - rng[0] > 2 * np.pi - 1e-3:  # both ends of a full turn are the same place
+                raise DetectionError(
+                    f"the gripper {m.actuator(act).name!r} has a full turn for its range ({rng[0]:g} to {rng[1]:g}), a placeholder"
+                    " that says nothing of where it opens: pass gripper_open=... and gripper_closed=..."
+                )
             raise DetectionError(f"the gripper actuator {m.actuator(act).name!r} does not move the fingers: pass gripper_actuator=...")
         pairs = [(a, b) for a in moving for b in moving if a < b and moving[a] @ moving[b] < 0]
         if pairs:
@@ -621,6 +728,29 @@ def _legged(m: mujoco.MjModel, free: int, notes) -> dict:
     return out
 
 
+def _legs(m, base, moved) -> int:
+    """Chains from the base down to the ground that move on two or more actuated joints: legs,
+    where a wheel turns on one and a caster on none."""
+    actuated = {j for js in moved.values() for j in js}
+    d = mujoco.MjData(m)
+    if m.nkey:
+        mujoco.mj_resetDataKeyframe(m, d, 0)
+    else:
+        mujoco.mj_resetData(m, d)
+    mujoco.mj_forward(m, d)
+    tree = _subtree(m, base)
+    leaves = [b for b in tree if not any(m.body_parentid[c] == b for c in range(m.nbody))]
+    low = min(d.xpos[b][2] for b in leaves)
+    span = max(d.xpos[base][2] - low, 0.05)
+    legs = 0
+    for b in leaves:
+        if d.xpos[b][2] < low + 0.15 * span and d.xpos[b][2] < d.xpos[base][2] - 0.05:  # down at the ground, below the base
+            chain = [c for c in _ancestors(m, b) if c in tree]
+            if sum(1 for c in chain for j in range(m.body_jntadr[c], m.body_jntadr[c] + m.body_jntnum[c]) if j in actuated) >= 2:
+                legs += 1
+    return legs
+
+
 def _feet(m, base) -> int:
     """Leaf chains of the base that end near the ground in the model's first keyframe (or zero pose)."""
     d = mujoco.MjData(m)
@@ -635,6 +765,21 @@ def _feet(m, base) -> int:
     low = min(zs.values())
     span = d.xpos[base][2] - low
     return sum(1 for z in zs.values() if z < low + 0.15 * max(span, 0.05))
+
+
+def _base_footprint(model: RobotModel) -> list[tuple[np.ndarray, bool]]:
+    """For each collision shape fixed to the robot's base that comes down to the table (a
+    mounting plate, say): points (x, y) on it, with the robot at the origin facing +x, and
+    whether they are a mesh's vertices (else the corners of its box)."""
+    m = model.robot_spec(calibrated=False).compile()
+    d = mujoco.MjData(m)
+    mujoco.mj_forward(m, d)
+    out = []
+    for g in _collision_geoms(m, {b for b in range(1, m.nbody) if m.body_weldid[b] == 0}):
+        pts = _surface(m, d, g)
+        if pts[:, 2].min() < 0.05:
+            out.append((pts[:, :2], m.geom_type[g] == int(mujoco.mjtGeom.mjGEOM_MESH)))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -654,8 +799,21 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
     lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
     seeds = [seed, (lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]
 
-    def reaches(p):
-        return any(kin.ik(np.asarray(p, float), s, DOWN, yaw=0.0, rest=seed)[1] < 1e-3 for s in seeds)
+    any_yaw = False  # set for an arm with no wrist roll, which grips at whatever angle it reaches with
+
+    def solve(p, turned):
+        """Joint angles reaching ``p`` top-down, or None. Grasps are square to the world (yaw 0),
+        which on a robot turned by ``turned`` is -turned in its own frame."""
+        p = np.asarray(p, float)
+        for y in (-turned, None) if any_yaw else (-turned,):
+            for s in seeds:
+                q, err = kin.ik(p, s, DOWN, yaw=y, rest=seed)
+                if err < 1e-3:
+                    return q
+        return None
+
+    def reaches(p, turned):
+        return solve(p, turned) is not None
 
     def local(p, x, yaw):  # a world point in the frame of a robot mounted at (x, 0, 0) facing yaw
         c, sn = np.cos(yaw), np.sin(yaw)
@@ -663,12 +821,30 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
         return np.array([c * v[0] + sn * v[1], -sn * v[0] + c * v[1], v[2]])
 
     base, yaw = np.asarray(model.base_pos, float), float(model.base_yaw)
-    if not keep_base:
+    footprint = _base_footprint(model)
+
+    def clear(x, turned):  # no part of the base stands on an object
+        c, sn = np.cos(turned), np.sin(turned)
+        for pts, is_mesh in footprint:
+            xy = pts @ np.array([[c, sn], [-sn, c]]) + (x, 0.0)
+            for lo, hi in _OBJECTS:
+                if is_mesh:  # a mesh's own vertices: its bounding box can be far bigger than it
+                    if np.any(np.all((xy > lo) & (xy < hi), axis=1)):
+                        return False
+                elif xy[:, 0].max() > lo[0] and xy[:, 0].min() < hi[0] and xy[:, 1].max() > lo[1] and xy[:, 1].min() < hi[1]:
+                    return False
+        return True
+
+    def search():
         xs = np.round(np.arange(0.15, -1.2, -0.025), 3)
         best = (-1, [], 0.0)
         # Facing the task area first: a model whose arm points along another axis is turned.
         for y in (0.0, np.pi / 2, -np.pi / 2, np.pi):
-            score = {x: sum(reaches(local(p, x, y)) for p in _AROUND) for x in xs if all(reaches(local(p, x, y)) for p in _NEEDED)}
+            score = {
+                x: sum(reaches(local(p, x, y), y) for p in _AROUND)
+                for x in xs
+                if clear(x, y) and all(reaches(local(p, x, y), y) for p in _NEEDED)
+            }
             if not score:
                 continue
             # Of the positions that reach the most, the middle of the longest run leaves the most margin.
@@ -687,7 +863,17 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
                 best = (top, longest, y)
             if top == len(_AROUND):
                 break  # facing this way already reaches everything
-        top, run, yaw = best
+        return best
+
+    if not keep_base:
+        top, run, yaw = search()
+        if not run:
+            # An arm without a wrist roll (four joints, say) cannot square its grip to the
+            # world; picks then grip at the angle the arm reaches with (see robot.solve_ik).
+            any_yaw = True
+            top, run, yaw = search()
+            if run:
+                notes.append("yaw: the arm cannot turn its grip square to the task area, so it grips at the angle it reaches with")
         if not run:
             raise DetectionError("no mounting position lets top-down grasps reach the task area: pass base_pos=... and home=...")
         base = np.array([float(run[len(run) // 2]), 0.0, 0.0])
@@ -698,8 +884,23 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
         )
     home = model.home
     if not keep_home:
-        home = next(((0.2, 0.0, h) for h in _HOME_HEIGHTS if reaches(local((0.2, 0.0, h), base[0], yaw))), None)
+        home = next(((0.2, 0.0, h) for h in _HOME_HEIGHTS if reaches(local((0.2, 0.0, h), base[0], yaw), yaw)), None)
         if home is None:
             raise DetectionError("no reachable home pose above the task area: pass home=...")
         notes.append(f"home: {home}")
-    return replace(model, base_pos=tuple(float(v) for v in base), base_yaw=yaw, home=home)
+    start = model.start
+    if start is None and _zero_pose_touches_table(model):
+        q = solve(local(home, base[0], yaw), yaw)
+        if q is not None:
+            start = tuple(round(float(v), 6) for v in q)
+            notes.append("start: the home pose, as the model's zero pose puts the arm into the table")
+    return replace(model, base_pos=tuple(float(v) for v in base), base_yaw=yaw, home=home, start=start)
+
+
+def _zero_pose_touches_table(model: RobotModel) -> bool:
+    """Whether a moving part of the arm, in the model's zero pose, comes down to the table."""
+    m = model.robot_spec(calibrated=False).compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    moving = {b for b in range(1, m.nbody) if m.body_weldid[b] != 0}
+    return any(_corners(m, d, g)[:, 2].min() < 0.005 for g in _collision_geoms(m, moving))

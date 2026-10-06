@@ -352,9 +352,8 @@ class Robot:
         """Top-down grasp of ``obj``, then lift. Returns once the grasp is checked."""
         o = as_subject(self.world, obj)
         if isinstance(o, ObjectHandle) and o.spec.kind != "bin":
-            size = o.spec.size
-            width = 2 * (min(size[0], size[1]) if o.spec.kind == "box" else size[0])
-            opens = self.model.derived.max_aperture
+            width = grasp_width(o.spec)
+            opens = widest_gap(self.model)
             if width > opens:
                 raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
         p = o.position
@@ -552,10 +551,28 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None)
     for y in yaws:
         for s in (seed, home):
             q, err = kin.ik(p, s, approach, y, rest=rest)
-            cands.append((float(np.abs(q - seed).sum()), err, q))
-    reached = [c for c in cands if c[1] < 1e-3]
-    _, err, q = min(reached, key=lambda c: c[0]) if reached else min(cands, key=lambda c: c[1])
+            # A solution reaches the target only if it also turns the grip as asked: IK
+            # gives up on orientation before position, so a candidate can arrive with the
+            # wrist short of the yaw (and would win here for having moved least).
+            cands.append((float(np.abs(q - seed).sum()), err, q, y is None or _yaw_error(kin, q, y) < np.radians(2)))
+    reached = [c for c in cands if c[1] < 1e-3 and c[3]] or [c for c in cands if c[1] < 1e-3]
+    if not reached and yaw is not None:
+        # An arm without a wrist roll (four joints, say) cannot choose its grip angle: the base
+        # turning towards the target sets it. Grip at whatever angle reaches.
+        for s in (seed, home):
+            q, err = kin.ik(p, s, approach, None, rest=rest)
+            cands.append((float(np.abs(q - seed).sum()), err, q, False))
+        reached = [c for c in cands if c[1] < 1e-3]
+    _, err, q, _ = min(reached, key=lambda c: c[0]) if reached else min(cands, key=lambda c: c[1])
     return q, err
+
+
+def _yaw_error(kin: Kinematics, q, yaw: float) -> float:
+    """How far the grip axis is turned from ``yaw`` about the vertical (modulo pi: fingers are symmetric)."""
+    g = kin.fk(q)[:3, :3] @ kin.grip_axis
+    if g[0] ** 2 + g[1] ** 2 < 1e-6:
+        return 0.0
+    return abs((np.arctan2(g[1], g[0]) - yaw + np.pi / 2) % np.pi - np.pi / 2)
 
 
 @functools.cache
@@ -573,14 +590,29 @@ def home_q(name: str) -> np.ndarray:
         # mid-range and a few fixed random poses (as robots.detect does when it places the arm).
         rng = np.random.default_rng(0)
         lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
-        for s in [(lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]:
-            q, err = kin.ik(m.home, s, DOWN, yaw=0.0, rest=seed)
+        for y in (0.0, None):  # None: an arm with no wrist roll grips at the angle it reaches with
+            for s in [seed, (lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]:
+                q, err = kin.ik(m.home, s, DOWN, yaw=y, rest=seed)
+                if err <= 1e-3:
+                    break
             if err <= 1e-3:
                 break
     if err > 1e-3:
         raise UnreachableError(f"{name}: home pose {m.home} unreachable (closest {err * 1000:.1f} mm)")
     q.setflags(write=False)
     return q
+
+
+def widest_gap(model) -> float:
+    """The widest object the gripper opens around: its aperture at its widest, less where its
+    fingers meet. (A jaw that swings past upright is widest before fully open.)"""
+    curve = model.derived.apertures
+    return float(max(curve) - curve[0]) if curve else float(model.derived.max_aperture)
+
+
+def grasp_width(spec) -> float:
+    """How wide an object is where a top-down grasp closes on it."""
+    return 2 * (min(spec.size[0], spec.size[1]) if spec.kind == "box" else spec.size[0])
 
 
 def _minjerk(s: float) -> float:

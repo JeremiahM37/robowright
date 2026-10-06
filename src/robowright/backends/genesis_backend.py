@@ -472,9 +472,19 @@ class GenesisBackend(Backend):
 
     def render(self, camera, width, height):
         cam = self._cams[camera]
-        if tuple(cam.res) != (width, height):
-            self._resize(cam, width, height)
-        rgb = cam.render(rgb=True)[0]
+        # No garbage collection while Genesis has its GL context current: a MuJoCo renderer
+        # collected then (one a dropped scene left in a reference cycle) frees its own EGL
+        # context with eglReleaseThread, which un-currents Genesis's too, and the render fails
+        # with "Attempt to retrieve context when no valid context".
+        collecting = gc.isenabled()
+        gc.disable()
+        try:
+            if tuple(cam.res) != (width, height):
+                self._resize(cam, width, height)
+            rgb = cam.render(rgb=True)[0]
+        finally:
+            if collecting:
+                gc.enable()
         return np.ascontiguousarray(np.asarray(rgb, dtype=np.uint8)[..., :3])
 
     def _resize(self, cam, width, height):

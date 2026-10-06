@@ -251,6 +251,10 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
             _KEPT.pop(k).close()
     _reclaim()
     b = cls(spec, seed=seed, **kw)
+    start = b.robot_model.start
+    if start is not None and not b.robot_model.floating:
+        # An arm whose zero pose is not a place to start (a URDF's arm folded into the table).
+        b.set_joint_positions(np.append(start, 1.0) if b.has_gripper else np.asarray(start, float))
     # Captured on every build, kept or not: on Genesis and Isaac a capture snaps the simulation
     # onto the captured state, so a kept scene and a new one must both have taken it.
     b._snapshot_built()

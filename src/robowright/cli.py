@@ -175,7 +175,7 @@ def main(argv=None) -> int:
     rb = sub.add_parser("robots", help="list the robots tests can run on")
     rb.add_argument("--family", choices=["arm", "legged"])
     rb.add_argument("--markdown", action="store_true")
-    rb.add_argument("--inspect", metavar="FILE", help="show what robowright works out about the robot in an MJCF file, and why")
+    rb.add_argument("--inspect", metavar="FILE", help="show what robowright makes of the robot in a model file (MJCF or URDF), and why")
     rd = sub.add_parser("render", help="render a trace to video (mp4, or gif) from its recorded state")
     rd.add_argument("trace")
     rd.add_argument("-o", "--output", help="output file (.mp4 or .gif); default: next to the trace")

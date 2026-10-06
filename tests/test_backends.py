@@ -1,3 +1,4 @@
+import os
 from importlib.util import find_spec
 
 import numpy as np
@@ -61,3 +62,46 @@ def test_scene_spec_round_trip():
 def test_unknown_backend():
     with pytest.raises(ValueError, match="unknown backend"):
         rw.launch(backend="gazebo")
+
+
+@pytest.mark.skipif(not find_spec("genesis"), reason="Genesis not installed")
+def test_no_garbage_collection_while_genesis_renders(quiet_world, monkeypatch):
+    """A MuJoCo renderer freed by the garbage collector mid-render (one a dropped scene left in a
+    reference cycle) releases the thread's EGL context, Genesis's included, and the render fails
+    with "no valid context": seen now and then in mixed test runs. Collection stays off while
+    Genesis's context is current, and is back on after."""
+    import gc
+
+    from genesis.ext.pyrender import renderer
+
+    w = quiet_world(backend="genesis")
+    seen = []
+    render = renderer.Renderer.render
+
+    def watched(self, *args, **kwargs):
+        seen.append(gc.isenabled())
+        return render(self, *args, **kwargs)
+
+    monkeypatch.setattr(renderer.Renderer, "render", watched)
+    img = w.backend.render(w.spec.cameras[0].name, 64, 48)
+    assert seen and not any(seen) and gc.isenabled()
+    assert img.std() > 5
+
+
+def test_a_collected_mujoco_renderer_releases_the_threads_gl_context():
+    """Why the test above matters: freeing a MuJoCo renderer un-currents whatever EGL context
+    the thread has, not only its own."""
+    import mujoco
+
+    pytest.importorskip("OpenGL.EGL")
+    from OpenGL import EGL
+
+    if os.environ.get("MUJOCO_GL") != "egl":
+        pytest.skip("MuJoCo is not rendering through EGL")
+    m = mujoco.MjModel.from_xml_string("<mujoco><worldbody><geom size='1'/></worldbody></mujoco>")
+    mine, other = mujoco.Renderer(m, 32, 32), mujoco.Renderer(m, 32, 32)
+    other._gl_context.make_current()
+    assert EGL.eglGetCurrentContext()
+    mine.close()
+    assert not EGL.eglGetCurrentContext()
+    other.close()

@@ -47,7 +47,7 @@ def load(path, name: str | None = None, **overrides) -> RobotModel:
 
 def is_file(name: str) -> bool:
     """Whether ``name`` names a model file rather than a registered robot."""
-    return name.lower().endswith((".xml", ".mjcf", ".urdf")) or "/" in name or "\\" in name
+    return name.lower().endswith((".xml", ".mjcf", ".urdf", ".xacro")) or "/" in name or "\\" in name
 
 
 def names(family: str | None = None) -> list[str]:

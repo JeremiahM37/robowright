@@ -39,11 +39,15 @@ class Attachment:
     site: str  # a site of the arm; or, with ``body``, the name given to a new site at that body's origin
     prefix: str = "gripper/"
     body: str | None = None  # for arms whose model has no site at the flange
+    quat: tuple | None = None  # with ``body``: the new site's orientation, its z the flange's normal
 
     def at(self, s: mujoco.MjSpec):
         """The site of arm spec ``s`` the attachment goes on (added at ``body`` if given)."""
         if self.body is not None:
-            return s.body(self.body).add_site(name=self.site)
+            site = s.body(self.body).add_site(name=self.site)
+            if self.quat is not None:
+                site.quat = list(self.quat)
+            return site
         return s.site(self.site)
 
 
@@ -64,6 +68,7 @@ class RobotModel:
     attach: Attachment | None = None
     home: tuple = (0.2, 0.0, 0.1)  # TCP position of the home pose (world frame)
     seed: tuple | None = None  # IK seed for the home pose; default: the model's "home" keyframe
+    start: tuple | None = None  # arm joint angles a world starts in; default: the model's zero pose
     tool_axis: tuple | None = None  # override the derived tool axis (hand frame)
     tcp_inset: float | None = None  # how far behind the fingertips the TCP sits
     tcp: tuple | None = None  # override the derived TCP (hand frame)
@@ -82,6 +87,7 @@ class RobotModel:
     # MuJoCo integrator to run the robot with (a mjtIntegrator name, e.g. "implicitfast"); None
     # keeps the model's own.
     integrator: str | None = None
+    grip_contacts: bool = False  # elliptic friction cone, impratio 10: a held object creeps out under MuJoCo's defaults
     # (joint, armature): a floor of reflected motor inertia for joints a force-limited servo would
     # otherwise shake at the step rate (models that leave a geared motor's inertia out).
     armature: tuple = ()
@@ -107,6 +113,9 @@ class RobotModel:
             s.delete(k)
         if self.integrator is not None:
             s.option.integrator = getattr(mujoco.mjtIntegrator, f"mjINT_{self.integrator.upper()}")
+        if self.grip_contacts:
+            s.option.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
+            s.option.impratio = max(float(s.option.impratio), 10.0)
         if self.attach is not None:
             g = mujoco.MjSpec.from_file(str(self.attach.mjcf()))
             for k in list(g.keys):
@@ -205,6 +214,7 @@ class Derived:
     gripper_joints: dict  # joint -> (q_closed, q_open), every non-arm joint
     gripper_joint: str  # the joint whose travel defines "opening"
     max_aperture: float  # metres between the fingers when open
+    apertures: tuple = ()  # metres between the fingers' tips at openings 0, 0.1, ... 1
 
 
 _OPTIONS = ("timestep", "iterations", "ls_iterations", "impratio", "integrator", "cone", "noslip_iterations")
@@ -245,10 +255,28 @@ def fix_gripper(s: mujoco.MjSpec, actuator: str | None, servo: tuple | None, mir
         a.biasprm[0], a.biasprm[1], a.biasprm[2] = 0.0, -kp, -kv
         a.ctrlrange = list(j.range)
         a.ctrllimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    if mirrors:
+        # Keyframes' controls lose the deleted motors' entries.
+        names = [a.name for a in s.actuators]
+        gone = [names.index(act) for act, *_ in mirrors]
+        for key in s.keys:
+            if len(key.ctrl):
+                key.ctrl = np.delete(np.asarray(key.ctrl), gone)
     for act, joint, leader, ratio in mirrors:
         s.delete(s.actuator(act))
         e = s.add_equality(type=mujoco.mjtEq.mjEQ_JOINT, name1=joint, name2=leader)
         e.data[:5] = [0.0, ratio, 0.0, 0.0, 0.0]
+    if mirrors and actuator is not None:
+        # One motor now closes every finger: it gets their stiffness and force together, or each
+        # finger would squeeze with a fraction of what its own motor gave it (half, for two).
+        a = s.actuator(actuator)
+        stiff, force = 1.0 + sum(r * r for *_, r in mirrors), 1.0 + sum(abs(r) for *_, r in mirrors)
+        a.gainprm[0] *= stiff
+        a.biasprm[1] *= stiff
+        if a.biasprm[2] < 0:  # a damping gain (positive is MuJoCo's damping ratio, which follows kp)
+            a.biasprm[2] *= stiff
+        if a.forcelimited != mujoco.mjtLimited.mjLIMITED_FALSE:
+            a.forcerange = [v * force for v in a.forcerange]
 
 
 def _motors_to_servos(s: mujoco.MjSpec, kp: float, kv: float) -> None:
@@ -576,7 +604,14 @@ def _derive(model: RobotModel) -> Derived:
     tcp = mid - axis * (mid @ axis) + axis * (tip - inset) if model.tcp is None else np.asarray(model.tcp, float)
     # Swinging jaws can reach further open than closed; clearance must cover both.
     inset = max(inset, inset + tip_open - tip)
-    return Derived(axis, grip, tcp, inset, joints, main, aperture)
+    # Across the grip, at each opening: how wide an object the gripper takes is the widest of
+    # these less the closed one (a jaw that swings past upright is widest before fully open).
+    apertures = []
+    for f in np.linspace(0.0, 1.0, 11):
+        _settle(m, d, act, model.gripper_closed + f * (model.gripper_open - model.gripper_closed))
+        a, b, _ = tips(*finger_points())
+        apertures.append(round(float(abs((a - b) @ grip)), 5))
+    return Derived(axis, grip, tcp, inset, joints, main, aperture, tuple(apertures))
 
 
 def _without_meshes(spec: mujoco.MjSpec) -> mujoco.MjModel:
@@ -620,6 +655,7 @@ class Kinematics:
         lim = m.jnt_limited[jid].astype(bool)
         self.lower = np.where(lim, m.jnt_range[jid, 0], -2 * np.pi)
         self.upper = np.where(lim, m.jnt_range[jid, 1], 2 * np.pi)
+        self._turns = ~lim & (m.jnt_type[jid] == int(mujoco.mjtJoint.mjJNT_HINGE))  # continuous joints
         # A position servo cannot be told to go past its control range, even where the joint could.
         for a in range(m.nu):
             if m.actuator_trntype[a] == int(mujoco.mjtTrn.mjTRN_JOINT) and m.actuator_trnid[a, 0] in jid and m.actuator_ctrllimited[a]:
@@ -627,6 +663,7 @@ class Kinematics:
                     i = jid.index(m.actuator_trnid[a, 0])
                     lo, hi = m.actuator_ctrlrange[a]
                     self.lower[i], self.upper[i] = max(self.lower[i], lo), min(self.upper[i], hi)
+                    self._turns[i] = False
         self.hand = m.body(PREFIX + model.hand).id
         der = model.derived
         self.tool_axis, self.grip_axis, self.tcp_offset = der.tool_axis, der.grip_axis, der.tcp_offset
@@ -694,6 +731,11 @@ class Kinematics:
             if step > 0.4:
                 dq *= 0.4 / step
             q = np.clip(q + dq, self.lower, self.upper)
+        if self._turns.any():
+            # A continuous joint reaches the same pose a whole turn either way: take the angle
+            # nearest where it starts, not one that swings the arm round through everything.
+            start = np.clip(np.array(q0, float), self.lower, self.upper)
+            q = np.where(self._turns, start + (q - start + np.pi) % (2 * np.pi) - np.pi, q)
         return q, float(np.linalg.norm(self.tcp(q) - target))
 
 

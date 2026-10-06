@@ -95,12 +95,12 @@ $ pytest --rw-robot legged                       # every legged robot
 
 ### Any robot, from its model file
 
-The robots above are not special: point `--rw-robot` at any arm's MJCF file and the same tests
-run on it.
+The robots above are not special: point `--rw-robot` at any arm's model file, MJCF or URDF, and
+the same tests run on it.
 
 ```console
-$ robowright robots --inspect path/to/my_arm.xml   # what robowright makes of it, and why
-$ pytest --rw-robot path/to/my_arm.xml             # every robot test, on that robot
+$ robowright robots --inspect path/to/my_arm.urdf   # what robowright makes of it, and why
+$ pytest --rw-robot path/to/my_arm.urdf             # every robot test, on that robot
 ```
 
 A model file describes every robot the same way (bodies, joints, actuators), but not what the
@@ -114,16 +114,46 @@ role:
   towards each other, or one moving jaw against the hand (SO-100, SO-101, Koch). **Open** is
   whichever end of the gripper's range leaves them further apart.
 - **Mounting:** the arm is placed (and turned, if its model faces another way) where top-down
-  grasps reach the whole task area.
-- **A bare arm** gets a Robotiq 2F-85 on its flange. A model with no site there gets it at the
-  last link.
+  grasps reach the whole task area, with no part of its base standing where objects go. An arm
+  whose zero pose lies in the table starts in its home pose instead.
+- **A bare arm** gets a Robotiq 2F-85 on its flange, facing along the last joint's axis. A
+  model with no site there gets it at the last link.
+- **A mobile manipulator** (a free-floating base with a gripper and no legs, such as TIAGo) has
+  its base held where it stands, and its arm is tested as on a fixed one.
+- **An arm with no wrist roll** (four joints, say) grips at whatever angle it reaches with.
 - **Models that need adapting:**
-  - fingers with a motor each are made to follow one;
+  - fingers with a motor each are made to follow one, which gets their force together;
   - a force-motor gripper becomes a position servo;
   - an Euler-integrated model whose servos would oscillate runs `implicitfast`;
-  - a force-limited joint too light to integrate stably gets the motor inertia the model left out.
+  - a force-limited joint too light to integrate stably gets the motor inertia the model left out;
+  - a model on MuJoCo's default friction (a pyramidal cone, impratio 1), under which a held
+    object creeps out of the fingers, gets the elliptic cone and impratio 10 that MuJoCo's own
+    gripper models use.
 
-Each decision is listed by `--inspect`. Any of them can be overridden in a `conftest.py`:
+**URDF** is read with MuJoCo's own URDF reader, plus what it cannot do on its own:
+
+- `package://` mesh paths are found the way ROS finds them: `ROS_PACKAGE_PATH`, then the
+  directories around the file.
+- COLLADA meshes are converted to OBJ.
+- A URDF names no motors, so each joint gets a position servo that reaches its `effort` limit
+  0.02 rad (2 mm on a slide) from its target. Where the file gives no effort, or an obvious
+  placeholder (1000 N m on a hobby servo), the effort is twice what holding up and accelerating
+  the arm and 1.5 kg needs. Geared joints get the motor inertia their stiffness needs to
+  integrate stably.
+- `<mimic>` joints follow their leader. The links collide with the world but not with each
+  other, as PyBullet treats a URDF.
+- Every engine collides a mesh as its convex hull. Where a gripper mesh's hull would fill the
+  space between the jaws (an L-shaped fixed jaw), that mesh is split into convex parts with
+  CoACD. A finger whose inner face is a pocket for a rubber pad keeps its hull, which stands in
+  for the pad.
+
+`pip install -e ".[urdf]"` brings the mesh tools (trimesh, pycollada, CoACD). Without them,
+COLLADA visuals are left out and concave jaws stay hulls, both with a warning. A `.xacro`
+template has to be expanded first (`xacro arm.urdf.xacro > arm.urdf`).
+
+Each decision is listed by `--inspect`. Any of them can be overridden in a `conftest.py`, and
+detection works from what is given (a model whose gripper range is a placeholder full turn,
+say, is read once `gripper_open` and `gripper_closed` say where it opens):
 
 ```python
 from robowright import robots
@@ -132,27 +162,33 @@ robots.load("my_arm.xml", grip_force=40.0, home=(0.2, 0.0, 0.12))  # then: pytes
 ```
 
 **Measured:** re-detected from their bare model files, all 19 built-in robots come out as their
-hand-written entries say. On robots robowright had never seen (Menagerie robots that aren't
-built in), the arm contract and examples on MuJoCo:
+hand-written entries say. On robots robowright had never seen, the arm contract and examples
+(21 tests) on MuJoCo:
 
-| | Result |
+| From MJCF (MuJoCo Menagerie robots that aren't built in) | Result |
 |---|---|
-| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 tests pass |
-| Unitree Z1 | gripper works; pick fails: its swinging jaw needs the tool 2 cm up for clearance and sweeps a 25 mm cube away |
-| Lite 6, narrow gripper | 16 mm opening; `pick` refuses a 25 mm cube up front |
+| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
+| PAL TIAGo, TIAGo Dual (base held) | 19 and 20 of 21: the sensor-noise trial (0.02 rad of joint noise on a 0.9 m arm puts the tool 2 cm out) and a settle timeout |
+| Unitree Z1 | gripper works; pick fails: its swinging jaw sweeps a 25 mm cube away |
+| Lite 6, narrow gripper | 12 mm gap; `pick` refuses a 25 mm cube up front |
 | Google Robot | its servos can hold a joint only to 0.03–0.10 rad of a target (joint friction / stiffness); `--inspect` warns |
 | TidyBot | arm on a mobile base modelled as slides; the wrist sags 0.04 rad under load |
 | Trossen AI | every motor capped at ±1 rad in the model; refused: no mounting reaches the task area |
-| TIAGo, Stretch | refused: mobile manipulators aren't driven yet |
-| 13 legged robots (ANYmal B, Barkour, H1, T1, OP3, Apollo, TALOS, N1, Cassie...) | detected as quadrupeds or humanoids |
+| Hello Robot Stretch | refused: its telescoping arm is four joints on one motor, and robowright drives each arm joint |
+| Legged robots (ANYmal B, Barkour, H1, T1, OP3, Apollo, TALOS, N1, Cassie, ToddlerBot, G1 with hands, Spot with its arm...) | detected as quadrupeds or humanoids: chains of actuated joints reach the ground, so hands do not make them mobile manipulators |
 
-On the other engines, SO-100, Koch, FR3 and FR3 v2 from their files pass the arm contract on
-PyBullet and Drake. Genesis passes SO-100, FR3 and FR3 v2. The Koch's jaws close through the
-cube there, touching nothing.
+| From URDF (ROS description packages, PyBullet's and Drake's models) | Result |
+|---|---|
+| Franka Panda (two URDFs), KUKA LBR iiwa (three), AgileX PiPER, SO-100, Unitree Z1, I2RT YAM, UFACTORY xArm 6 with gripper | all 21 pass |
+| SO-101, OpenMANIPULATOR-X, Fanuc M-710iC | 20 of 21: a second cube set down on the first (SO-101); the cube slips under a shove, on a gripper whose effort the file only gives as a placeholder (OpenMANIPULATOR-X); 0.02 rad of joint noise on a 2 m arm (M-710iC) |
+| Comau e.DO | 17 of 21: every joint unlimited and no effort given, so its home pose is an awkward one the guessed wrist effort cannot hold |
+| OpenMANIPULATOR-X follower (OMX-F) | refused until given `gripper_open` and `gripper_closed`: its gripper range is a placeholder full turn |
 
-URDF files aren't read yet. A URDF has no actuators, and ROS packages resolve its mesh paths,
-so it needs more than a format conversion. For now give the robot's MJCF; MuJoCo Menagerie has
-most robots.
+On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 207/210 on
+Drake and 205/210 on Genesis. The misses are the e.DO's home pose (Drake, Genesis), the
+OpenMANIPULATOR-X's grasp (PyBullet) and the xArm 6 placing (Genesis). Among the
+Menagerie arms, SO-100, Koch, FR3 and FR3 v2 pass on PyBullet and Drake. Genesis passes
+SO-100, FR3 and FR3 v2; the Koch's jaws close through the cube there, touching nothing.
 
 Models come from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie),
 fetched on first use (a sparse checkout of just the robots you run, pinned to one commit),
@@ -195,6 +231,7 @@ pip install -e ".[dev]"          # MuJoCo is required; PyBullet, xdist and ruff 
 pip install -e ".[drake]"        # optional: Drake (Python 3.12+)
 pip install -e ".[genesis]"      # optional: Genesis (install a CPU or CUDA torch first)
 pip install -e ".[mcp]"          # optional: the MCP server for AI agents
+pip install -e ".[urdf]"         # optional: mesh tools for reading URDFs (COLLADA, concave jaws)
 robowright info                  # versions, backends, and whether offscreen rendering works
 robowright robots                # the robots you can test on
 pytest examples
@@ -672,8 +709,8 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 - **Simulation only:** no hardware backend yet. The backend interface is written with one
   in mind (capabilities, perception hooks, `Settings(realtime=True)`), but nothing has run
   on a real robot.
-- **Top-down grasps:** `pick`/`place` grasp from above. Side grasps and mobile
-  manipulation are not built in.
+- **Top-down grasps:** `pick`/`place` grasp from above. Side grasps are not built in, and a
+  mobile manipulator's base is held still: its arm is tested, not its driving.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at their datasheet force only where the maker
