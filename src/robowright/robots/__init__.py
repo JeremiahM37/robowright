@@ -47,7 +47,8 @@ def load(path, name: str | None = None, **overrides) -> RobotModel:
 
 def is_file(name: str) -> bool:
     """Whether ``name`` names a model file rather than a registered robot."""
-    return name.lower().endswith((".xml", ".mjcf", ".urdf", ".xacro")) or "/" in name or "\\" in name
+    file = name.partition("?")[0]  # arm.urdf.xacro?ur_type=ur5e: a xacro template's arguments
+    return file.lower().endswith((".xml", ".mjcf", ".urdf", ".xacro")) or "/" in file or "\\" in file
 
 
 def names(family: str | None = None) -> list[str]:

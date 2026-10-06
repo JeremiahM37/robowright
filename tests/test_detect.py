@@ -2,6 +2,7 @@
 
 import warnings
 
+import numpy as np
 import pytest
 
 import robowright as rw
@@ -194,8 +195,79 @@ def test_a_urdf_with_a_mesh_it_cannot_find_says_where_it_looked(tmp_path):
         build(path)
 
 
-def test_a_xacro_template_is_refused_with_how_to_expand_it(tmp_path):
-    path = tmp_path / "arm.urdf.xacro"
-    path.write_text('<robot name="a" xmlns:xacro="http://www.ros.org/wiki/xacro"><xacro:property name="l" value="1"/></robot>')
-    with pytest.raises(DetectionError, match="xacro"):
-        build(path)
+def test_a_xacro_template_is_expanded_with_its_arguments(tmp_path):
+    """The same arm as a xacro template: an argument sets the upper arm's length, and the
+    hand's mesh is found through ``$(find pkg)``. Arguments follow the path after a ``?``."""
+    pytest.importorskip("xacro")
+    urdf = _urdf_arm(tmp_path)
+    text = urdf.read_text().replace(
+        '<robot name="toy">', '<robot name="toy" xmlns:xacro="http://www.ros.org/wiki/xacro"><xacro:arg name="upper" default="0.1"/>'
+    )
+    text = text.replace('<origin xyz="0.2 0 0"/>', '<origin xyz="$(arg upper) 0 0"/>')
+    text = text.replace("package://toy_description/meshes/hand.obj", "file://$(find toy_description)/meshes/hand.obj")
+    path = urdf.with_name("toy.urdf.xacro")
+    path.write_text(text)
+    import mujoco
+
+    elbow = {u: mujoco.MjModel.from_xml_path(str(build(f"{path}?upper={u}").model.mjcf())).body("l3").pos[0] for u in ("0.15", "0.2")}
+    assert elbow == pytest.approx({"0.15": 0.15, "0.2": 0.2})
+    assert mujoco.MjModel.from_xml_path(str(build(path).model.mjcf())).body("l3").pos[0] == pytest.approx(0.1)  # the default
+    model = robots.load(f"{path}?upper=0.2")
+    assert model.name == "toy_0_2" and model.extra["xacro_args"] == {"upper": "0.2"}
+    with rw.launch(scene=default_scene(f"{path}?upper=0.2"), settings=rw.Settings(trace="off")) as w:
+        w.robot.pick(w.scene["cube"])
+        w.robot.place(on=w.scene["bin"])
+        rw.expect(w.scene["cube"]).to_be_inside(w.scene["bin"])
+
+
+def test_a_telescoping_arm_is_driven_as_one_joint(tmp_path):
+    """Two slides kept in step by an equality constraint and driven together through a tendon
+    (Stretch's telescope, in small): one arm joint, its follower moved with it in the kinematics
+    and when the arm is set to a pose."""
+    path = _arm(tmp_path, "tendon")
+    text = path.read_text()
+    text = text.replace(
+        '<body name="l3" pos="0.2 0 0">',
+        '<body name="t1" pos="0.12 0 0"><joint name="s1" type="slide" axis="1 0 0" range="0 0.04"/>'
+        '<geom type="box" size="0.04 0.015 0.015" pos="-0.02 0 0" mass="0.1"/>'
+        '<body name="t2" pos="0 0 0"><joint name="s2" type="slide" axis="1 0 0" range="0 0.04"/>'
+        '<geom type="box" size="0.04 0.012 0.012" pos="0.02 0 0" mass="0.1"/>'
+        '<body name="l3" pos="0.08 0 0">',
+    )
+    text = text.replace("</body></body></body></body></body></body>", "</body></body></body></body></body></body></body></body>")
+    text = text.replace("<equality>", '<equality><joint joint1="s1" joint2="s2"/>')
+    text = text.replace(
+        "<actuator>", '<tendon><fixed name="extend"><joint joint="s1" coef="1"/><joint joint="s2" coef="1"/></fixed></tendon><actuator>'
+    )
+    text = text.replace(
+        '<position joint="j3" ctrlrange="-3 3"/>',
+        '<position joint="j3" ctrlrange="-3 3"/><position name="extend" tendon="extend" kp="400" ctrlrange="0 0.08"/>',
+    )
+    path.write_text(text)
+    built = build(path)
+    f = built.model
+    assert f.arm_couplings == (("extend", "s2", 2.0),) and "s2" in f.arm_joints and "s1" not in f.arm_joints
+    with rw.launch(scene=default_scene(str(path)), settings=rw.Settings(trace="off")) as w:
+        r = w.robot
+        q = r.home_q.copy()
+        q[list(f.arm_joints).index("s2")] = 0.03
+        r.reset_to(q)
+        pos, quat = w.backend.hand_pose()
+        import mujoco
+
+        R = np.zeros(9)
+        mujoco.mju_quat2Mat(R, quat)
+        assert np.linalg.norm(pos + R.reshape(3, 3) @ r.kin.tcp_offset - r.kin.tcp(q)) < 1e-6
+        r.reset_to()
+        r.pick(w.scene["cube"])
+        r.place(on=w.scene["bin"])
+        rw.expect(w.scene["cube"]).to_be_inside(w.scene["bin"])
+
+
+def test_stretch_drives_its_base_to_reach(monkeypatch):
+    """Hello Robot's Stretch reaches along one line from where it stands (a telescope out to the
+    side): its base drives, forward and turning, and its telescope is one joint."""
+    monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
+    m = robots.get(str(robots.menagerie.path("hello_robot_stretch_3/stretch.xml")))
+    assert m.arm_joints[:2] == ("robowright_drive", "robowright_turn")
+    assert m.arm_couplings == (("arm", "joint_arm_l3", 4.0),)

@@ -556,6 +556,17 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None)
             # wrist short of the yaw (and would win here for having moved least).
             cands.append((float(np.abs(q - seed).sum()), err, q, y is None or _yaw_error(kin, q, y) < np.radians(2)))
     reached = [c for c in cands if c[1] < 1e-3 and c[3]] or [c for c in cands if c[1] < 1e-3]
+    if not reached:
+        # IK is local: from where the arm is and from home it can stall against a joint limit
+        # short of a target other poses reach. Try from mid-range and a few fixed random poses.
+        for s in _far_seeds(kin):
+            for y in yaws:
+                q, err = kin.ik(p, s, approach, y, rest=rest)
+                if err < 1e-3 and (y is None or _yaw_error(kin, q, y) < np.radians(2)):
+                    cands.append((float(np.abs(q - seed).sum()), err, q, True))
+            if any(c[1] < 1e-3 for c in cands):
+                break
+        reached = [c for c in cands if c[1] < 1e-3]
     if not reached and yaw is not None:
         # An arm without a wrist roll (four joints, say) cannot choose its grip angle: the base
         # turning towards the target sets it. Grip at whatever angle reaches.
@@ -565,6 +576,14 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None)
         reached = [c for c in cands if c[1] < 1e-3]
     _, err, q, _ = min(reached, key=lambda c: c[0]) if reached else min(cands, key=lambda c: c[1])
     return q, err
+
+
+def _far_seeds(kin: Kinematics) -> list[np.ndarray]:
+    """IK starting poses away from the arm's own: mid-range and four fixed random ones (the
+    same as robots.detect places the arm with, so what placement reached, a move reaches)."""
+    rng = np.random.default_rng(0)
+    lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
+    return [(lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]
 
 
 def _yaw_error(kin: Kinematics, q, yaw: float) -> float:

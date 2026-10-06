@@ -49,11 +49,21 @@ class URDFError(ValueError):
     """The URDF could not be read; the message says why."""
 
 
-def to_mjcf(path: Path, cache: Path) -> tuple[Path, list[str]]:
-    """An MJCF file for the URDF at ``path`` (written once under ``cache``), and notes on how."""
+def to_mjcf(path: Path, cache: Path, xacro_args: dict | None = None) -> tuple[Path, list[str]]:
+    """An MJCF file for the URDF at ``path`` (written once under ``cache``), and notes on how.
+
+    A xacro template (``.xacro``, or a file using the xacro namespace) is expanded first, with
+    ``xacro_args`` for its ``<xacro:arg>``s.
+    """
     raw = path.read_bytes()
-    out = cache / f"{path.stem}-{hashlib.sha1(raw + str(path).encode() + str(VERSION).encode()).hexdigest()[:12]}.xml"
     notes: list[str] = []
+    if path.suffix.lower() == ".xacro" or b"ros.org/wiki/xacro" in raw:
+        raw = _expand(path, xacro_args or {}).encode()
+        given = ", ".join(f"{k}={v}" for k, v in (xacro_args or {}).items())
+        notes.append(f"xacro: expanded {path.name}" + (f" with {given}" if given else ""))
+    elif xacro_args:
+        raise URDFError(f"xacro arguments given, but {path.name} is not a xacro template")
+    out = cache / f"{path.stem}-{hashlib.sha1(raw + str(path).encode() + str(VERSION).encode()).hexdigest()[:12]}.xml"
     tree = _resolved(path, raw, cache / "meshes", notes)
     spec = _load(tree, cache)
     notes.append("collision: the robot's links collide with the world but not with each other (as PyBullet treats a URDF)")
@@ -63,6 +73,33 @@ def to_mjcf(path: Path, cache: Path) -> tuple[Path, list[str]]:
         _write(out, xml)
     notes.insert(0, f"model: read from URDF {path.name} (converted to {out})")
     return out, notes
+
+
+def _expand(path: Path, args: dict) -> str:
+    """The URDF a xacro template makes, ``$(find pkg)`` resolved as ``package://`` paths are."""
+    try:
+        import xacro
+        from xacro import substitution_args
+    except ImportError:
+        raise URDFError(f"{path.name} is a xacro template: pip install xacro (or expand it: xacro {path.name} > robot.urdf)") from None
+
+    def find(pkg):
+        for d in _package_dirs(pkg, path):
+            if d.is_dir() and (d.name == pkg or _package_name(d) == pkg):
+                return str(d)
+        raise URDFError(f"$(find {pkg}) in {path.name}: no package {pkg!r} in ROS_PACKAGE_PATH or the directories around the file")
+
+    saved = substitution_args._eval_find, substitution_args._eval_dict.get("find")
+    substitution_args._eval_find = substitution_args._eval_dict["find"] = find
+    try:
+        doc = xacro.process_file(str(path), mappings={str(k): str(v) for k, v in args.items()})
+    except URDFError:
+        raise
+    except Exception as e:  # noqa: BLE001 - xacro raises its own XacroException and plain errors alike
+        raise URDFError(f"xacro could not expand {path.name}: {e}") from e
+    finally:
+        substitution_args._eval_find, substitution_args._eval_dict["find"] = saved
+    return doc.toxml()
 
 
 def _write(out: Path, text: str) -> None:
@@ -80,11 +117,9 @@ def _resolved(path: Path, raw: bytes, meshes: Path, notes) -> ET.ElementTree:
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as e:
-        raise URDFError(f"{path.name} is not valid XML ({e}); a .xacro file must be expanded first: xacro FILE > robot.urdf") from e
+        raise URDFError(f"{path.name} is not valid XML ({e})") from e
     if root.tag != "robot":
         raise URDFError(f"{path.name} is not a URDF (its root element is <{root.tag}>, not <robot>)")
-    if any(el.tag.startswith("{http://www.ros.org/wiki/xacro}") or el.tag.startswith("xacro:") for el in root.iter()):
-        raise URDFError(f"{path.name} is a xacro template; expand it first: xacro {path.name} > robot.urdf")
     # A link drawn but given no collision shape (the SO-100's gripper and jaw) could not touch
     # anything; its visual meshes are what it is shaped like. Not a massless one: that is a
     # frame drawn as a marker (an end-effector point), not a part.
@@ -211,14 +246,14 @@ _GEOM_ATTRS = ("contype", "conaffinity", "condim", "friction", "solref", "solimp
 _COACD = dict(threshold=0.05, max_convex_hull=16, resolution=1000, preprocess_resolution=30, mcts_nodes=10, mcts_iterations=60, seed=0)
 
 
-def _convex_parts(file: Path, out: Path) -> list[Path] | None:
+def _convex_parts(file: Path, out: Path, force: bool = False) -> list[Path] | None:
     """``file`` as convex pieces: ``[file]`` if it is (nearly) convex already, and None if it
     is not but cannot be split (no trimesh or CoACD). Pieces are cached next to converted meshes."""
     try:
         import trimesh
     except ImportError:
         return [file]  # cannot tell; MuJoCo takes the hull
-    key = hashlib.sha1(file.read_bytes() + repr(sorted(_COACD.items())).encode()).hexdigest()[:12]
+    key = hashlib.sha1(file.read_bytes() + repr(sorted(_COACD.items())).encode() + bytes([force])).hexdigest()[:12]
     done = out / f"{file.stem}-{key}.parts"
     if done.exists():
         return [Path(p) for p in done.read_text().split("\n") if p]
@@ -226,13 +261,15 @@ def _convex_parts(file: Path, out: Path) -> list[Path] | None:
     with _locked(out / f"{file.stem}-{key}.lock"):  # test workers wait for one split, not each do it
         if done.exists():
             return [Path(p) for p in done.read_text().split("\n") if p]
-        return _split(file, key, done, out, trimesh)
+        return _split(file, key, done, out, trimesh, force)
 
 
-def _split(file: Path, key: str, done: Path, out: Path, trimesh) -> list[Path] | None:
+def _split(file: Path, key: str, done: Path, out: Path, trimesh, force: bool) -> list[Path] | None:
     mesh = trimesh.load(str(file), force="mesh")
-    # Volume means something only for a closed surface; an open one is taken as it is.
-    if mesh.is_empty or not mesh.is_watertight or mesh.volume <= 0 or mesh.convex_hull.volume < _CONCAVE * mesh.volume:
+    # Volume means something only for a closed surface; an open one is taken as it is (unless
+    # the caller already knows it needs splitting: CoACD repairs an open surface first).
+    near_convex = not mesh.is_watertight or mesh.volume <= 0 or mesh.convex_hull.volume < _CONCAVE * mesh.volume
+    if mesh.is_empty or (near_convex and not force):
         parts = [file]
     else:
         try:
@@ -335,15 +372,20 @@ def split_jaws(mjcf: Path, hand: str, fingers: tuple[str, str], cache: Path) -> 
         g = spec.geom(name)
         mesh = spec.mesh(g.meshname)
         file = Path(mesh.file) if Path(mesh.file).is_absolute() else Path(spec.meshdir or mjcf.parent) / mesh.file
-        parts = _convex_parts(file, cache / "meshes")
-        if not parts or len(parts) < 2:
+        parts = _convex_parts(file, cache / "meshes", force=True)
+        if parts is None:
             unsplit.append(file.name)
+            continue
+        if len(parts) < 2:
             continue
         body = g.parent
         for k, part in enumerate(parts):
-            pm = spec.add_mesh(name=f"{mesh.name}_part{k}", file=str(part))
-            pm.scale = mesh.scale
-            c = body.add_geom(name=f"{name}_part{k}", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=pm.name, pos=g.pos, quat=g.quat)
+            if spec.mesh(f"{mesh.name}_part{k}") is None:  # one mesh can shape several fingers
+                pm = spec.add_mesh(name=f"{mesh.name}_part{k}", file=str(part))
+                pm.scale = mesh.scale
+            c = body.add_geom(
+                name=f"{name}_part{k}", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=f"{mesh.name}_part{k}", pos=g.pos, quat=g.quat
+            )
             for attr in _GEOM_ATTRS:
                 setattr(c, attr, getattr(g, attr))
         spec.delete(g)

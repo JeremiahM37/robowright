@@ -37,6 +37,11 @@ def cache_root() -> Path:
 
 def export(model: RobotModel) -> Path:
     """Directory holding ``robot.urdf``, ``robot.json`` and ``meshes/``; built once and cached."""
+    if model.arm_couplings:
+        # URDF has no tendons, and these engines are not yet told how such joints move together.
+        raise NotImplementedError(
+            f"{model.name}: arm joints moved together through a tendon ({model.arm_couplings[0][0]!r}) run on MuJoCo only so far"
+        )
     h = hashlib.sha1(f"{VERSION}|{_cache_key(model)}".encode()).hexdigest()[:12]
     out = cache_root() / f"{model.name}-{h}"
     if (out / "robot.json").exists():

@@ -119,8 +119,14 @@ role:
 - **A bare arm** gets a Robotiq 2F-85 on its flange, facing along the last joint's axis. A
   model with no site there gets it at the last link.
 - **A mobile manipulator** (a free-floating base with a gripper and no legs, such as TIAGo) has
-  its base held where it stands, and its arm is tested as on a fixed one.
+  its base held where it stands, and its arm is tested as on a fixed one. If its arm cannot
+  reach the task area from anywhere that way (Stretch reaches along one line), its base drives
+  instead: a joint forward and one turning in place, which IK moves like any other.
 - **An arm with no wrist roll** (four joints, say) grips at whatever angle it reaches with.
+- **Joints that move together** (Stretch's telescope: four slides kept in step by the model's
+  constraints, driven through one tendon) are one arm joint; its partners move with it.
+- **A hand with several fingers**, each with motors of its own at the base and the tip (the
+  three-finger Kinova Jaco), closes as one: every finger joint follows one finger's base joint.
 - **Models that need adapting:**
   - fingers with a motor each are made to follow one, which gets their force together;
   - a force-motor gripper becomes a position servo;
@@ -147,9 +153,16 @@ role:
   CoACD. A finger whose inner face is a pocket for a rubber pad keeps its hull, which stands in
   for the pad.
 
-`pip install -e ".[urdf]"` brings the mesh tools (trimesh, pycollada, CoACD). Without them,
-COLLADA visuals are left out and concave jaws stay hulls, both with a warning. A `.xacro`
-template has to be expanded first (`xacro arm.urdf.xacro > arm.urdf`).
+**xacro** templates are expanded on the way in, `$(find pkg)` resolved like `package://`. Their
+arguments follow the path after a `?`, or go in `xacro_args`:
+
+```console
+$ pytest --rw-robot "ur_description/urdf/ur.urdf.xacro?ur_type=ur5e&name=ur5e"
+```
+
+`pip install -e ".[urdf]"` brings the tools (trimesh, pycollada, CoACD, xacro). Without them,
+COLLADA visuals are left out and concave jaws stay hulls, both with a warning, and a xacro file
+is refused with how to expand it by hand.
 
 Each decision is listed by `--inspect`. Any of them can be overridden in a `conftest.py`, and
 detection works from what is given (a model whose gripper range is a placeholder full turn,
@@ -169,12 +182,13 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 |---|---|
 | Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
 | PAL TIAGo, TIAGo Dual (base held) | 19 and 20 of 21: the sensor-noise trial (0.02 rad of joint noise on a 0.9 m arm puts the tool 2 cm out) and a settle timeout |
+| Hello Robot Stretch 3 (base drives, telescope as one joint) | 8 of 21: it moves, reaches and tracks (its kinematics match the simulation), but its long curved fingers close above a 25 mm cube when their tips are kept off the table |
 | Unitree Z1 | gripper works; pick fails: its swinging jaw sweeps a 25 mm cube away |
 | Lite 6, narrow gripper | 12 mm gap; `pick` refuses a 25 mm cube up front |
 | Google Robot | its servos can hold a joint only to 0.03–0.10 rad of a target (joint friction / stiffness); `--inspect` warns |
 | TidyBot | arm on a mobile base modelled as slides; the wrist sags 0.04 rad under load |
 | Trossen AI | every motor capped at ±1 rad in the model; refused: no mounting reaches the task area |
-| Hello Robot Stretch | refused: its telescoping arm is four joints on one motor, and robowright drives each arm joint |
+| Hello Robot Stretch 2 | refused: its standard gripper has no wrist pitch, so it cannot point down for a top-down grasp |
 | Legged robots (ANYmal B, Barkour, H1, T1, OP3, Apollo, TALOS, N1, Cassie, ToddlerBot, G1 with hands, Spot with its arm...) | detected as quadrupeds or humanoids: chains of actuated joints reach the ground, so hands do not make them mobile manipulators |
 
 | From URDF (ROS description packages, PyBullet's and Drake's models) | Result |
@@ -183,6 +197,11 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | SO-101, OpenMANIPULATOR-X, Fanuc M-710iC | 20 of 21: a second cube set down on the first (SO-101); the cube slips under a shove, on a gripper whose effort the file only gives as a placeholder (OpenMANIPULATOR-X); 0.02 rad of joint noise on a 2 m arm (M-710iC) |
 | Comau e.DO | 17 of 21: every joint unlimited and no effort given, so its home pose is an awkward one the guessed wrist effort cannot hold |
 | OpenMANIPULATOR-X follower (OMX-F) | refused until given `gripper_open` and `gripper_closed`: its gripper range is a placeholder full turn |
+
+| From xacro (ROS 2 description packages, with their arguments) | Result |
+|---|---|
+| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv Rizon 4 and MICO-Core | all 21 pass |
+| Kinova Jaco 2 (three fingers) | 9 of 21: its three fingers close together, but they splay to 21 cm open and sweep 4 cm below the grasp point while closing, so they miss a 25 mm cube on a table |
 
 On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 207/210 on
 Drake and 205/210 on Genesis. The misses are the e.DO's home pose (Drake, Genesis), the
@@ -709,8 +728,11 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 - **Simulation only:** no hardware backend yet. The backend interface is written with one
   in mind (capabilities, perception hooks, `Settings(realtime=True)`), but nothing has run
   on a real robot.
-- **Top-down grasps:** `pick`/`place` grasp from above. Side grasps are not built in, and a
-  mobile manipulator's base is held still: its arm is tested, not its driving.
+- **Top-down grasps:** `pick`/`place` grasp from above. Side grasps need motion planning
+  that keeps the arm clear of the table and objects on its way, which robowright does not do:
+  moves interpolate joints, which is safe only from above. A mobile base drives only where the
+  arm cannot reach otherwise, as two idealised joints (no wheel slip), tested on MuJoCo; robots whose
+  arm joints move together through a tendon (Stretch) also run on MuJoCo only for now.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at their datasheet force only where the maker

@@ -97,7 +97,8 @@ def _robot_names(config) -> list[str]:
         elif _robots.is_file(r):  # a model file: tests get its absolute path, so traces replay from anywhere
             from pathlib import Path
 
-            out.append(str(Path(r).expanduser().resolve()))
+            file, _, query = r.partition("?")  # arm.urdf.xacro?ur_type=ur5e: xacro arguments
+            out.append(str(Path(file).expanduser().resolve()) + (f"?{query}" if query else ""))
             from .robots.detect import DetectionError
 
             try:

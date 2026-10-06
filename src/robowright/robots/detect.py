@@ -32,7 +32,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .model import _PRINCIPAL, Attachment, RobotModel, _collision_geoms, _corners, _surface, fix_gripper, reset_data
+from .model import _PRINCIPAL, Attachment, RobotModel, _collision_geoms, _corners, _surface, couple_arm, fix_gripper, reset_data
 
 _FREE, _HINGE, _SLIDE = (int(t) for t in (mujoco.mjtJoint.mjJNT_FREE, mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE))
 _GRIP_WORDS = re.compile(r"grip|finger|jaw|claw|pinch|knuckle|thumb|tong|hand", re.I)
@@ -81,15 +81,24 @@ def load(path: str | Path, name: str | None = None, **overrides) -> RobotModel:
     """
     from . import REGISTRY, register
 
-    path = Path(path).expanduser().resolve()
+    path, query = _split_query(path)
+    if query:
+        overrides = {**overrides, "xacro_args": {**query, **overrides.get("xacro_args", {})}}
     key = (str(path), name, tuple(sorted((k, repr(v)) for k, v in overrides.items())))
     if key not in _LOADED:
-        model = build(path, name or _name_for(path, REGISTRY), **overrides).model
+        model = build(path, name or _name_for(path, REGISTRY, overrides.get("xacro_args")), **overrides).model
         _LOADED[key] = register(model)
     return _LOADED[key]
 
 
 _LOADED: dict[tuple, RobotModel] = {}
+
+
+def _split_query(path) -> tuple[Path, dict]:
+    """``arm.urdf.xacro?ur_type=ur5e&name=ur5e``: the file, and the xacro arguments after it."""
+    text, _, query = str(path).partition("?")
+    args = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
+    return Path(text).expanduser().resolve(), args
 
 
 @dataclass
@@ -99,23 +108,40 @@ class Built:
 
 
 def build(path: str | Path, name: str | None = None, **overrides) -> Built:
-    """Detect, apply ``overrides``, and place the robot; nothing is registered."""
-    path = Path(path).expanduser().resolve()
+    """Detect, apply ``overrides``, and place the robot; nothing is registered.
+
+    A mobile manipulator is tried with its base held still; if its arm cannot reach the task
+    area from anywhere that way (Stretch's reaches along one line), its base drives.
+    """
+    try:
+        return _build(path, name, False, **overrides)
+    except DetectionError as e:
+        if not getattr(e, "held", False):
+            raise
+        built = _build(path, name, True, **overrides)
+        built.notes.insert(0, f"(held still: {e})")
+        return built
+
+
+def _build(path, name, drive: bool, **overrides) -> Built:
+    path, query = _split_query(path)
+    overrides = dict(overrides)
+    xacro_args = {**query, **overrides.pop("xacro_args", {})}
     if not path.exists():
         raise FileNotFoundError(f"no robot model at {path}")
     first = []
-    if path.suffix.lower() in (".urdf", ".xacro"):
+    if path.suffix.lower() in (".urdf", ".xacro") or xacro_args:
         from .from_urdf import URDFError, to_mjcf
         from .urdf import cache_root
 
         try:
-            path_mjcf, first = to_mjcf(path, cache_root().parent / "from_urdf")
+            path_mjcf, first = to_mjcf(path, cache_root().parent / "from_urdf", xacro_args)
         except URDFError as e:
             raise DetectionError(str(e)) from e
     else:
         path_mjcf = path
     mjcf = _named(path_mjcf)
-    mjcf, held = _hold_mobile_base(mjcf)
+    mjcf, held = (_drive_mobile_base if drive else _hold_mobile_base)(mjcf)
     det = detect(mjcf, overrides.get("attach"), given=overrides)
     det.notes[:0] = first + held
     if first and det.fields.get("family", "arm") == "arm" and "attach" not in det.fields:
@@ -135,10 +161,14 @@ def build(path: str | Path, name: str | None = None, **overrides) -> Built:
         _const(mjcf),
         tuple(fields.pop("arm_joints")),
         **fields,
-        extra={"file": str(path)},
+        extra={"file": str(path), **({"xacro_args": xacro_args} if xacro_args else {})},
     )
     if model.family == "arm" and ("base_pos" not in overrides or "home" not in overrides):
-        model = _place(model, det.notes, keep_base="base_pos" in overrides, keep_home="home" in overrides)
+        try:
+            model = _place(model, det.notes, keep_base="base_pos" in overrides, keep_home="home" in overrides)
+        except DetectionError as e:
+            e.held = bool(held) and not drive  # the caller tries again with the base driving
+            raise
     return Built(model, det.notes)
 
 
@@ -211,12 +241,75 @@ def _hold_mobile_base(path: Path) -> tuple[Path, list[str]]:
     return _copy(spec, path, "mobile"), [note]
 
 
+def _drive_mobile_base(path: Path) -> tuple[Path, list[str]]:
+    """A mobile manipulator whose base drives: a joint along its forward axis then one turning
+    it in place (what a differential drive can do), each a stiff position servo, in place of
+    its free joint. The base's own wheels are kept off the floor; the joints carry it."""
+    import xml.etree.ElementTree as ET
+
+    held, notes = _hold_mobile_base(path)
+    if not notes:
+        return path, []
+    spec = mujoco.MjSpec.from_file(str(held))
+    m = spec.compile()
+    base = next(b for b in range(1, m.nbody) if m.body_parentid[b] == 0 and m.body_jntnum[b] == 0 and len(_subtree(m, b)) > 1)
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    on_floor = [m.body(b).name for b in _subtree(m, base) if any(_corners(m, d, g)[:, 2].min() < 0.01 for g in _collision_geoms(m, {b}))]
+    base_name = m.body(base).name
+
+    root = ET.fromstring(spec.to_xml())
+    if root.find("size") is not None:
+        root.find("size").attrib.pop("nkey", None)
+    for k in root.findall("keyframe"):  # the robot's keyframes no longer fit its joints
+        root.remove(k)
+    wb = root.find("worldbody")
+    body = next(b for b in wb.findall("body") if b.get("name") == m.body(base).name)
+    i = list(wb).index(body)
+    wb.remove(body)
+    drive = ET.Element("body", name="robowright_drive")
+    ET.SubElement(drive, "joint", name="robowright_drive", type="slide", axis="1 0 0", range="-2 2", limited="true")
+    turn = ET.SubElement(drive, "body", name="robowright_turn")
+    ET.SubElement(turn, "joint", name="robowright_turn", type="hinge", axis="0 0 1", range="-3.14159 3.14159", limited="true")
+    for b in (drive, turn):  # light carriers: the base's own mass is what the servos move
+        ET.SubElement(b, "inertial", pos="0 0 0", mass="0.001", diaginertia="1e-6 1e-6 1e-6")
+    turn.append(body)
+    wb.insert(i, drive)
+    contact = root.find("contact") if root.find("contact") is not None else ET.SubElement(root, "contact")
+    for b in on_floor:
+        ET.SubElement(contact, "exclude", body1="world", body2=b)
+    spec = mujoco.MjSpec.from_string(ET.tostring(root, encoding="unicode"))
+    m = spec.compile()
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    M = np.zeros((m.nv, m.nv))
+    try:
+        mujoco.mj_fullM(m, d, M)
+    except TypeError:
+        mujoco.mj_fullM(m, M, d.qM)
+    for j in ("robowright_drive", "robowright_turn"):
+        dof = m.joint(j).dofadr[0]
+        kp = float(M[dof, dof]) * 20.0**2  # settles in about a quarter second
+        a = spec.add_actuator(name=j, target=j, trntype=mujoco.mjtTrn.mjTRN_JOINT)
+        a.set_to_position(kp=kp, kv=2.0 * np.sqrt(kp * float(M[dof, dof])))
+        a.ctrlrange, a.ctrllimited = list(spec.joint(j).range), 1
+    note = (
+        f"family: arm on a mobile base; {base_name!r} drives (forward, then turning in place) as the arm reaches, its wheels off the floor"
+    )
+    return _copy(spec, held, "drive"), [note]
+
+
 def _const(p: Path):
     return lambda: p
 
 
-def _name_for(path: Path, registry) -> str:
-    stem = path.stem if path.stem.lower() not in ("robot", "model", "scene", "main", "urdf") else path.parent.name
+def _name_for(path: Path, registry, xacro_args: dict | None = None) -> str:
+    stem = re.sub(r"(\.urdf|\.xacro)+$", "", path.name, flags=re.I)
+    stem = re.sub(r"\.(xml|mjcf)$", "", stem, flags=re.I)
+    if stem.lower() in ("robot", "model", "scene", "main", "urdf"):
+        stem = path.parent.name
+    if xacro_args:  # one template, many robots: ur.urdf.xacro?ur_type=ur5e is "ur5e"
+        stem = str(xacro_args.get("name") or "_".join([stem, *map(str, xacro_args.values())]))
     stem = re.sub(r"[^A-Za-z0-9_]+", "_", stem).strip("_").lower() or "robot"
     name, i = stem, 2
     while name in registry and registry[name].extra.get("file") != str(path):
@@ -469,7 +562,18 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
         # The deepest one: on a robot with a tool changer or a second gripper, the one at the tip.
         depth = lambda a: max(len(_ancestors(m, m.jnt_bodyid[j])) for j in moved[a])  # noqa: E731
         act, why = max(grippers, key=lambda g: (depth(g[0]), -g[0]))
-    fixes = _gripper_fixes(m, act, [a for a, _ in grippers if a != act], moved, notes)
+    hand_of = _finger_group(m, moved, [a for a, _ in grippers]) if "gripper_actuator" not in given else None
+    if hand_of is not None:
+        # Several fingers, each with motors of its own (the Kinova Jaco's three, at the base and
+        # the tip): one finger's base joint is the gripper, and every other finger joint follows.
+        act, mirrors = hand_of
+        why = "the base joint of one of several fingers"
+        fixes = _gripper_fixes(m, act, [], moved, notes)
+        fixes["gripper_mirrors"] = mirrors
+        lead = m.joint(next(iter(moved[act]))).name
+        notes.append(f"gripper_mirrors: finger joints {[x[1] for x in mirrors]} have motors of their own; they close with {lead!r}")
+    else:
+        fixes = _gripper_fixes(m, act, [a for a, _ in grippers if a != act], moved, notes)
     if any(fixes.values()):
         name = m.actuator(act).name
         fix_gripper(spec, name, fixes["gripper_servo"], fixes["gripper_mirrors"])
@@ -489,10 +593,23 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
     if "hand" not in given:
         notes.append(f"hand: {m.body(hand).name!r} (the body the gripper's joints hang from)")
 
-    # The arm: every joint from the base to the hand, each driven by its own actuator.
+    # The arm: every joint from the base to the hand, each driven by its own actuator - or moved
+    # with one that is, by the model's equality constraints (a telescope driven through a tendon).
     path = [b for b in reversed(_ancestors(m, hand)) if b > 0]
     arm = [j for b in path for j in range(m.body_jntadr[b], m.body_jntadr[b] + m.body_jntnum[b]) if m.jnt_type[j] in (_HINGE, _SLIDE)]
-    driven = {next(iter(js)) for a, js in moved.items() if len(js) == 1 and a != act}
+    couplings = _arm_couplings(m, moved, act, set(arm))
+    if couplings:
+        couple_arm(spec, couplings)
+        name = m.actuator(act).name
+        m = spec.compile()
+        act, moved = m.actuator(name).id, _moved_joints(m)
+        notes.append(
+            "arm_couplings: "
+            + "; ".join(f"{a!r} moves its joints together through a tendon, driven as one joint {j!r} (x{k:g})" for a, j, k in couplings)
+        )
+    followers = _followers(m)
+    arm = [j for j in arm if j not in followers]
+    driven = {next(iter(js)) for a, js in moved.items() if len(js) == 1 and a != act} | {m.joint(j).id for _, j, _ in couplings}
     if "arm_joints" in given:
         arm = [m.joint(n).id for n in given["arm_joints"]]
     undriven = [m.joint(j).name for j in arm if j not in driven]
@@ -529,8 +646,124 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
         "gripper_open": float(open_),
         "gripper_closed": float(closed),
         "tags": (f"{len(arm)}dof",),
+        **({"arm_couplings": couplings} if couplings else {}),
         **{k: v for k, v in fixes.items() if v},
     }
+
+
+def _finger_group(m, moved, candidates) -> tuple[int, tuple] | None:
+    """For a hand whose fingers have motors of their own on more than one joint (a base and a
+    tip), or more than two fingers: one finger's base actuator, and how every other finger joint
+    follows it, as ``(actuator, joint, leader joint, ratio, offset)`` with closed matched to
+    closed and open to open. None for anything simpler (one gripper actuator, or two fingers on
+    one motor each, which ``_gripper_fixes`` mirrors)."""
+    single = {a: next(iter(moved[a])) for a in candidates if len(moved[a]) == 1}
+    single = {a: j for a, j in single.items() if m.jnt_type[j] in (_HINGE, _SLIDE)}
+    if len(single) < 3:
+        return None
+    body = {a: int(m.jnt_bodyid[j]) for a, j in single.items()}
+    # The hand: the deepest body with two or more children whose subtrees hold finger joints.
+    best = None
+    for h in {p for b in body.values() for p in _ancestors(m, b)[1:]}:
+        kids = [c for c in range(1, m.nbody) if m.body_parentid[c] == h and any(c in _ancestors(m, b) for b in body.values())]
+        if len(kids) >= 2 and (best is None or len(_ancestors(m, h)) > len(_ancestors(m, best[0]))):
+            best = (h, kids)
+    if best is None:
+        return None
+    hand, kids = best
+    group = [a for a in single if hand in _ancestors(m, body[a])[1:]]
+    # Fingers hang straight from the hand: no other actuated joint between (where there is one,
+    # these are two arms' grippers, as on ALOHA, not one hand's fingers).
+    others = {j for a, js in moved.items() if a not in group for j in js}
+    for a in group:
+        between = [b for b in _ancestors(m, body[a]) if hand in _ancestors(m, b)[1:]]
+        if any(j in others for b in between for j in range(m.body_jntadr[b], m.body_jntadr[b] + m.body_jntnum[b])):
+            return None
+    roots = [min((a for a in group if kid in _ancestors(m, body[a])), key=lambda a: len(_ancestors(m, body[a]))) for kid in kids]
+    if len(group) < 3:
+        return None
+    # Closed: the end of a joint's range that brings its fingertip in towards the hand's axis.
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    js = {a: single[a] for a in group}
+    for j in js.values():
+        if m.jnt_limited[j]:
+            d.qpos[m.jnt_qposadr[j]] = m.jnt_range[j].mean()
+    mujoco.mj_forward(m, d)
+    tips = {a: max(_subtree(m, body[a]), key=lambda b: len(_ancestors(m, b))) for a in group}
+
+    def tip(a):  # the middle of the fingertip's shape: a tip joint turns its body about its own origin
+        gs = _collision_geoms(m, {tips[a]})
+        return np.vstack([_corners(m, d, g) for g in gs]).mean(axis=0) if gs else d.xpos[tips[a]]
+
+    p0 = d.xpos[hand].copy()
+    axis = np.mean([tip(a) for a in group], axis=0) - p0
+    axis /= np.linalg.norm(axis)
+
+    def inward(a):
+        j, ends = js[a], []
+        if not m.jnt_limited[j]:
+            return None
+        mid = d.qpos[m.jnt_qposadr[j]]
+        for q in m.jnt_range[j]:
+            d.qpos[m.jnt_qposadr[j]] = q
+            mujoco.mj_forward(m, d)
+            v = tip(a) - p0
+            ends.append(float(np.linalg.norm(v - axis * (v @ axis))))
+        d.qpos[m.jnt_qposadr[j]] = mid
+        mujoco.mj_forward(m, d)
+        lo, hi = m.jnt_range[j]
+        return (lo, hi) if ends[0] < ends[1] else (hi, lo)  # (closed, open)
+
+    ends = {a: inward(a) for a in group}
+    if any(e is None for e in ends.values()):
+        return None
+    lead = roots[0]
+    lc, lo_ = ends[lead]
+    mirrors = []
+    for a in group:
+        if a == lead:
+            continue
+        fc, fo = ends[a]
+        ratio = (fo - fc) / (lo_ - lc)
+        mirrors.append(
+            (m.actuator(a).name, m.joint(js[a]).name, m.joint(js[lead]).name, round(float(ratio), 6), round(float(fc - ratio * lc), 6))
+        )
+    return lead, tuple(mirrors)
+
+
+def _followers(m) -> set[int]:
+    """Joints an active joint equality makes follow another joint."""
+    joint = int(mujoco.mjtEq.mjEQ_JOINT)
+    return {int(m.eq_obj1id[e]) for e in range(m.neq) if m.eq_type[e] == joint and m.eq_active0[e] and m.eq_obj2id[e] >= 0}
+
+
+def _arm_couplings(m, moved, gripper, arm: set[int]) -> tuple:
+    """Tendon actuators moving several arm joints that equality constraints keep in step: for
+    each, ``(actuator, leader joint, scale)``, the tendon's length being scale times the leader's
+    position."""
+    out = []
+    for a, js in moved.items():
+        if a == gripper or len(js) < 2 or m.actuator_trntype[a] != int(mujoco.mjtTrn.mjTRN_TENDON) or not js <= arm:
+            continue
+        # The leader is the one joint the others follow; each one's ratio to it, through the chain.
+        follows = {
+            int(m.eq_obj1id[e]): (int(m.eq_obj2id[e]), float(m.eq_data[e, 1]))
+            for e in range(m.neq)
+            if m.eq_type[e] == int(mujoco.mjtEq.mjEQ_JOINT) and m.eq_active0[e] and int(m.eq_obj1id[e]) in js and int(m.eq_obj2id[e]) in js
+        }
+        leaders = [j for j in js if j not in follows]
+        if len(leaders) != 1 or len(follows) != len(js) - 1:
+            continue
+        ratio = {leaders[0]: 1.0}
+        while len(ratio) < len(js):
+            ratio.update({f: r * ratio[by] for f, (by, r) in follows.items() if by in ratio and f not in ratio})
+        t = int(m.actuator_trnid[a, 0])
+        adr, num = int(m.tendon_adr[t]), int(m.tendon_num[t])
+        scale = sum(float(m.wrap_prm[w]) * ratio.get(int(m.wrap_objid[w]), 0.0) for w in range(adr, adr + num))
+        if abs(scale) > 1e-9:
+            out.append((m.actuator(a).name, m.joint(leaders[0]).name, round(scale, 6)))
+    return tuple(out)
 
 
 def _gripper_fixes(m, act, others, moved, notes) -> dict:
@@ -622,6 +855,15 @@ def _fingers(m, hand, gj, act, rng, arm, notes):
     # passive joints (the Robotiq 2F-85's followers) are closed by connect constraints.
     below = {j for j in range(m.njnt) if m.jnt_type[j] in (_HINGE, _SLIDE) and m.jnt_bodyid[j] in _subtree(m, hand) - {hand}}
     branches = [c for c in range(1, m.nbody) if m.body_parentid[c] == hand and any(m.jnt_bodyid[j] in _subtree(m, c) for j in below | gj)]
+    # A branch that splits into fingers further down (Stretch's: a slider carrying both) is those fingers.
+    split = True
+    while split:
+        split, out = False, []
+        for c in branches:
+            kids = [k for k in range(1, m.nbody) if m.body_parentid[k] == c and any(m.jnt_bodyid[j] in _subtree(m, k) for j in gj)]
+            out.extend(kids if len(kids) >= 2 else [c])
+            split |= len(kids) >= 2
+        branches = out
     # A model with no collision geometry on the fingers cannot grasp in any engine.
     sub = {c: _subtree(m, c) for c in branches}
     if not any(_collision_geoms(m, s) for s in sub.values()):

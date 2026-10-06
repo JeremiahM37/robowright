@@ -87,6 +87,7 @@ class RobotModel:
     # MuJoCo integrator to run the robot with (a mjtIntegrator name, e.g. "implicitfast"); None
     # keeps the model's own.
     integrator: str | None = None
+    arm_couplings: tuple = ()  # (tendon actuator, leader joint, scale): joints moved together, driven as one (Stretch's telescope)
     grip_contacts: bool = False  # elliptic friction cone, impratio 10: a held object creeps out under MuJoCo's defaults
     # (joint, armature): a floor of reflected motor inertia for joints a force-limited servo would
     # otherwise shake at the step rate (models that leave a geared motor's inertia out).
@@ -127,12 +128,15 @@ class RobotModel:
         if self.servo is not None:
             _motors_to_servos(s, *self.servo)
         fix_gripper(s, self.gripper_actuator, self.gripper_servo, self.gripper_mirrors)
+        couple_arm(s, self.arm_couplings)
         for name, value in self.armature:
             j = s.joint(name)
             j.armature = max(float(j.armature), value)
         _exclude_resting_contacts(s)
         if calibrated and self.grip_force is not None and self.has_gripper:
             _limit_grip(s, self)
+        for k in list(s.keys):  # a compile after an actuator changes brings deleted keyframes back, unnamed
+            s.delete(k)
         return s
 
     @property
@@ -262,21 +266,42 @@ def fix_gripper(s: mujoco.MjSpec, actuator: str | None, servo: tuple | None, mir
         for key in s.keys:
             if len(key.ctrl):
                 key.ctrl = np.delete(np.asarray(key.ctrl), gone)
-    for act, joint, leader, ratio in mirrors:
+    for act, joint, leader, ratio, *offset in mirrors:
         s.delete(s.actuator(act))
         e = s.add_equality(type=mujoco.mjtEq.mjEQ_JOINT, name1=joint, name2=leader)
-        e.data[:5] = [0.0, ratio, 0.0, 0.0, 0.0]
+        e.data[:5] = [offset[0] if offset else 0.0, ratio, 0.0, 0.0, 0.0]
     if mirrors and actuator is not None:
         # One motor now closes every finger: it gets their stiffness and force together, or each
         # finger would squeeze with a fraction of what its own motor gave it (half, for two).
         a = s.actuator(actuator)
-        stiff, force = 1.0 + sum(r * r for *_, r in mirrors), 1.0 + sum(abs(r) for *_, r in mirrors)
+        stiff, force = 1.0 + sum(x[3] ** 2 for x in mirrors), 1.0 + sum(abs(x[3]) for x in mirrors)
         a.gainprm[0] *= stiff
         a.biasprm[1] *= stiff
         if a.biasprm[2] < 0:  # a damping gain (positive is MuJoCo's damping ratio, which follows kp)
             a.biasprm[2] *= stiff
         if a.forcelimited != mujoco.mjtLimited.mjLIMITED_FALSE:
             a.forcerange = [v * force for v in a.forcerange]
+
+
+def couple_arm(s: mujoco.MjSpec, couplings: tuple) -> None:
+    """Drive joints that move together as one: each tendon actuator is commanded in its leader
+    joint's position, the tendon still spreading its force over every joint it moves (so the
+    model's equality constraints, which keep them in step, carry no load).
+
+    The tendon's length is ``scale`` times the leader's position: a gear of 1 / scale makes the
+    actuator's length the leader's position, and the same behaviour then takes stiffness and
+    damping times scale**2, force times scale, and the control range over scale.
+    """
+    for actuator, _leader, k in couplings:
+        a = s.actuator(actuator)
+        a.gear[0] = a.gear[0] / k
+        a.gainprm[0] *= k * k
+        a.biasprm[1] *= k * k
+        if a.biasprm[2] < 0:
+            a.biasprm[2] *= k * k
+        a.ctrlrange = sorted(v / k for v in a.ctrlrange)
+        if a.forcelimited != mujoco.mjtLimited.mjLIMITED_FALSE:
+            a.forcerange = [v * abs(k) for v in a.forcerange]
 
 
 def _motors_to_servos(s: mujoco.MjSpec, kp: float, kv: float) -> None:
@@ -635,6 +660,28 @@ def _without_meshes(spec: mujoco.MjSpec) -> mujoco.MjModel:
     return spec.compile()
 
 
+def joint_followers(m: mujoco.MjModel, arm: list[int]) -> list[tuple]:
+    """Joints the model's equality constraints move with an arm joint (Stretch's telescope), as
+    ``(qpos address, dof address, index of the arm joint, offset, ratio)``: the follower's
+    position is offset + ratio * the arm joint's."""
+    out = []
+    lead = {j: (i, 0.0, 1.0) for i, j in enumerate(arm)}
+    found = True
+    while found:
+        found = False
+        for e in range(m.neq):
+            if m.eq_type[e] != int(mujoco.mjtEq.mjEQ_JOINT) or not m.eq_active0[e]:
+                continue
+            f, by = int(m.eq_obj1id[e]), int(m.eq_obj2id[e])
+            if by in lead and f not in lead and not np.any(m.eq_data[e, 2:5]):
+                i, o, r = lead[by]
+                a0, a1 = float(m.eq_data[e, 0]), float(m.eq_data[e, 1])
+                lead[f] = (i, a0 + a1 * o, a1 * r)
+                out.append((int(m.jnt_qposadr[f]), int(m.jnt_dofadr[f]), i, a0 + a1 * o, a1 * r))
+                found = True
+    return out
+
+
 class Kinematics:
     """Forward and inverse kinematics of the arm, computed on the MJCF model.
 
@@ -665,6 +712,7 @@ class Kinematics:
                     self.lower[i], self.upper[i] = max(self.lower[i], lo), min(self.upper[i], hi)
                     self._turns[i] = False
         self.hand = m.body(PREFIX + model.hand).id
+        self._followers = joint_followers(m, jid)
         der = model.derived
         self.tool_axis, self.grip_axis, self.tcp_offset = der.tool_axis, der.grip_axis, der.tcp_offset
         self._jacp = np.zeros((3, m.nv))
@@ -672,6 +720,8 @@ class Kinematics:
 
     def _set(self, q):
         self.d.qpos[self.qadr] = q
+        for qa, _, i, offset, ratio in self._followers:
+            self.d.qpos[qa] = offset + ratio * q[i]
         mujoco.mj_kinematics(self.m, self.d)
         mujoco.mj_comPos(self.m, self.d)
 
@@ -704,7 +754,10 @@ class Kinematics:
             T = self.fk(q)
             R, p = T[:3, :3], T[:3, 3]
             mujoco.mj_jac(m, d, self._jacp, self._jacr, p, self.hand)
-            Jp, Jr = self._jacp[:, self.dadr], self._jacr[:, self.dadr]
+            Jp, Jr = self._jacp[:, self.dadr].copy(), self._jacr[:, self.dadr].copy()
+            for _, da, i, _, ratio in self._followers:  # a follower moves the hand too, as its leader moves
+                Jp[:, i] += ratio * self._jacp[:, da]
+                Jr[:, i] += ratio * self._jacr[:, da]
             res, rows = [p - target], [Jp]
             if a is not None:
                 t = R @ self.tool_axis

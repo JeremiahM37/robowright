@@ -11,7 +11,7 @@ import mujoco
 import numpy as np
 
 from ..robots import PREFIX, body_labels
-from ..robots.model import reset_data
+from ..robots.model import joint_followers, reset_data
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 
@@ -130,7 +130,10 @@ class MujocoBackend(Backend):
         self._qadr = np.array([m.joint(n).qposadr[0] for n in arm])
         self._dadr = np.array([m.joint(n).dofadr[0] for n in arm])
         by_joint = {m.actuator_trnid[i, 0]: i for i in range(m.nu) if m.actuator_trntype[i] == mujoco.mjtTrn.mjTRN_JOINT}
+        for actuator, leader, _ in rm.arm_couplings:  # a tendon actuator commanded in its leader joint's position
+            by_joint[m.joint(PREFIX + leader).id] = m.actuator(PREFIX + actuator).id
         self._act = np.array([by_joint[m.joint(n).id] for n in arm])
+        self._followers = joint_followers(m, [m.joint(n).id for n in arm])
         self._kp = m.actuator_gainprm[self._act, 0].copy()
         self._bias = m.actuator_biasprm[self._act, 1].copy()
         if self.has_gripper:
@@ -212,6 +215,9 @@ class MujocoBackend(Backend):
                 j = self.model.joint(PREFIX + name)
                 self.data.qpos[j.qposadr[0]] = c + s * (o - c)
                 self.data.qvel[j.dofadr[0]] = 0
+        for qa, da, i, offset, ratio in self._followers:  # joints moved with an arm joint (a telescope)
+            self.data.qpos[qa] = offset + ratio * q[i]
+            self.data.qvel[da] = 0
         self.set_ctrl(q)
         mujoco.mj_forward(self.model, self.data)
 
