@@ -23,10 +23,10 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .model import RobotModel, closing_speeds
+from .model import RobotModel, closing_speeds, joint_followers
 
 BASE = "robowright_base"
-VERSION = 19  # bump when the output format changes, to invalidate caches
+VERSION = 26  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
@@ -37,11 +37,6 @@ def cache_root() -> Path:
 
 def export(model: RobotModel) -> Path:
     """Directory holding ``robot.urdf``, ``robot.json`` and ``meshes/``; built once and cached."""
-    if model.arm_couplings:
-        # URDF has no tendons, and these engines are not yet told how such joints move together.
-        raise NotImplementedError(
-            f"{model.name}: arm joints moved together through a tendon ({model.arm_couplings[0][0]!r}) run on MuJoCo only so far"
-        )
     h = hashlib.sha1(f"{VERSION}|{_cache_key(model)}".encode()).hexdigest()[:12]
     out = cache_root() / f"{model.name}-{h}"
     if (out / "robot.json").exists():
@@ -147,6 +142,22 @@ def _write(model: RobotModel, out: Path) -> None:
             return False
         return True
 
+    # A telescope's joints move together, driven through a tendon (see model.couple_arm): its
+    # leader joint takes the tendon motor's gains (in the leader's position, as robowright commands
+    # it), and each follower is tied to the leader by the engine (a coupler, a gear, a mimic joint).
+    lead = {}
+    for act, leader, _ in model.arm_couplings:
+        a = m.actuator(act).id
+        effort = float(np.abs(m.actuator_forcerange[a]).max()) if m.actuator_forcelimited[a] else 1000.0
+        lead[leader] = {"kp": float(m.actuator_gainprm[a, 0]), "kv": float(-m.actuator_biasprm[a, 2]), "effort": effort}
+    # Springs the gripper does not move (Stretch's rubber fingertip pads, which give a little where
+    # they touch) are welded: URDF has no joint springs, and held by soft constraints or motors in
+    # their place the pads folded under the squeeze and the jaws closed past the object.
+    rigid = {
+        m.joint(n).id
+        for n, (c, o) in (model.derived.gripper_joints if model.has_gripper else {}).items()
+        if abs(o - c) < 1e-6 and m.jnt_stiffness[m.joint(n).id] > 0
+    }
     floating = model.floating
     if not floating:
         # A massless root at the robot's base frame: the model's first body may sit at an offset.
@@ -155,7 +166,7 @@ def _write(model: RobotModel, out: Path) -> None:
         body = m.body(b)
         link = _safe(body.name)
         parent = m.body_parentid[b]
-        joints = [j for j in range(m.njnt) if m.jnt_bodyid[j] == b and m.jnt_type[j] in (_HINGE, _SLIDE)]
+        joints = [j for j in range(m.njnt) if m.jnt_bodyid[j] == b and m.jnt_type[j] in (_HINGE, _SLIDE) and j not in rigid]
         free = [j for j in range(m.njnt) if m.jnt_bodyid[j] == b and m.jnt_type[j] not in (_HINGE, _SLIDE)]
         if free and not (floating and parent == 0 and body.name == model.base_body):
             raise ValueError(f"{model.name}: body {body.name} has a free or ball joint; only the floating base may")
@@ -186,13 +197,13 @@ def _write(model: RobotModel, out: Path) -> None:
                     ET.SubElement(je, "axis", xyz=_fmt(m.jnt_axis[j]))
                     dof = m.jnt_dofadr[j]
                     lo, hi = (m.jnt_range[j] if m.jnt_limited[j] else (-np.pi, np.pi)) if jt != "continuous" else (0, 0)
-                    effort = _effort(m, j)
+                    effort = lead[jname]["effort"] if jname in lead else _effort(m, j)
                     if jt != "continuous":
                         ET.SubElement(je, "limit", lower=f"{lo:.9g}", upper=f"{hi:.9g}", effort=f"{effort:.9g}", velocity="10")
                     else:
                         ET.SubElement(je, "limit", effort=f"{effort:.9g}", velocity="10")
                     ET.SubElement(je, "dynamics", damping=f"{m.dof_damping[dof]:.9g}", friction=f"{m.dof_frictionloss[dof]:.9g}")
-                    meta["joints"][m.joint(j).name] = _joint_meta(m, j, effort)
+                    meta["joints"][m.joint(j).name] = {**_joint_meta(m, j, effort), **lead.get(jname, {})}
             if child != link:
                 le = ET.SubElement(root, "link", name=child)
                 _inertial(le, 1e-4, np.zeros(3), [1, 0, 0, 0], np.full(3, 1e-8))
@@ -232,12 +243,18 @@ def _write(model: RobotModel, out: Path) -> None:
         excluded.add(tuple(sorted((_safe(m.body(sig >> 16).name), _safe(m.body(sig & 0xFFFF).name)))))
     meta["excluded_pairs"] = sorted(excluded)
     meta["arm_joints"] = list(model.arm_joints)
+    arm = [m.joint(n).id for n in model.arm_joints]
+    by_qadr = {int(m.jnt_qposadr[j]): j for j in range(m.njnt)}
+    # follower joint -> (leader arm joint, offset, ratio): its position is offset + ratio * the leader's
+    meta["followers"] = {m.joint(by_qadr[qa]).name: [model.arm_joints[i], o, r] for qa, _, i, o, r in joint_followers(m, arm)}
     if model.has_gripper:
         der = model.derived
         effort, driven = _grip_effort(m, model)
         per_driver = _moving_fingers(m, model) / len(driven)
+        kept = [n for n in der.gripper_joints if m.joint(n).id not in rigid]
+        effort = {n: effort[n] for n in kept}
         meta["gripper"] = {
-            "joints": {n: list(v) for n, v in der.gripper_joints.items()},
+            "joints": {n: list(der.gripper_joints[n]) for n in kept},
             "main": der.gripper_joint,
             "effort": effort,
             # For engines that drive only the driven joints and couple the rest (mimic joints,
@@ -250,6 +267,15 @@ def _write(model: RobotModel, out: Path) -> None:
             # MuJoCo couples with equality constraints: drive them from the measured
             # position of driven[0], or a blocked finger tilts its pad into the object.
             "driven": driven,
+            # Linkage joints a joint equality ties to a driven joint they hang below, as (driven,
+            # offset, ratio): Stretch's fingers, which swing ten times as far as the slide they
+            # ride on. (Engines that gear joints side by side cannot gear one inside another.)
+            "nested": {
+                m.joint(by_qadr[qa]).name: [d, o, r]
+                for d in driven
+                for qa, _, _, o, r in joint_followers(m, [m.joint(d).id])
+                if _below(m, m.jnt_bodyid[by_qadr[qa]], m.jnt_bodyid[m.joint(d).id])
+            },
         }
     meta["hand"] = _safe(model.hand)
     meta["root"] = _safe(model.base_body) if floating else BASE
@@ -262,6 +288,13 @@ def _write(model: RobotModel, out: Path) -> None:
     ET.indent(root)
     (out / "robot.urdf").write_text('<?xml version="1.0"?>\n' + ET.tostring(root, encoding="unicode"))
     (out / "robot.json").write_text(json.dumps(meta, indent=1))
+
+
+def _below(m, b: int, ancestor: int) -> bool:
+    """Whether body ``b`` hangs below body ``ancestor`` (or is it)."""
+    while b > 0 and b != ancestor:
+        b = int(m.body_parentid[b])
+    return b == ancestor
 
 
 def _inertial(link, mass, pos, quat, inertia):
@@ -345,6 +378,11 @@ def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
     for name, f in own.items():
         kind = m.jnt_type[m.joint(name).id]
         peers = [g for n, g in own.items() if m.jnt_type[m.joint(n).id] == kind]
+        if f <= 1e-6 and max(peers) <= 1e-6 and driven:
+            # No joint of its kind is driven (Stretch's swinging fingers, ten times its slide's
+            # travel): the driver's force, through the ratio of their travels.
+            (cd, od), (cf, of) = der.gripper_joints[driven[0]], der.gripper_joints[name]
+            f = own[driven[0]] * abs(od - cd) / abs(of - cf) if abs(of - cf) > 1e-6 else 0.0
         out[name] = min(f if f > 1e-6 else max(peers), cap(name))
     return out, driven
 

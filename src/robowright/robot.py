@@ -12,11 +12,12 @@ import functools
 import time as _time
 from collections import deque
 
+import mujoco
 import numpy as np
 
 from .errors import ActionTimeoutError, GraspError, UnreachableError
 from .locators import ObjectHandle, Subject, as_subject
-from .robots import Kinematics
+from .robots import PREFIX, Kinematics
 
 # Keep robowright internals out of pytest failure tracebacks (--full-trace shows them).
 __tracebackhide__ = True
@@ -285,7 +286,10 @@ class Robot:
         self._target[-1] = GRIPPER_OPEN
         self._home_q = None
         self._planner = None
-        self._held_from = None  # after a side pick: (approach, yaw, TCP height above the object's underside)
+        # After a side pick: (approach, yaw, how high above a surface the TCP sets the object down:
+        # the object's underside, or a tilted hand's lowest point, whichever is further below it).
+        self._held_from = None
+        self._grip_open = 1.0  # the opening the held object was taken with, to let go of it with
 
     @property
     def base(self):
@@ -320,7 +324,11 @@ class Robot:
 
     def qpos(self) -> np.ndarray:
         """Joint readings as the robot sees them (with any injected sensor noise)."""
-        return self.world.faults.filter_qpos(self.world.backend.qpos())
+        q = self.world.backend.qpos()
+        units = self._joint_units
+        if (units == 1).all():
+            return self.world.faults.filter_qpos(q)
+        return self.world.faults.filter_qpos(q, np.append(units, np.ones(len(q) - len(units))))
 
     @property
     def joints(self) -> dict[str, float]:
@@ -358,18 +366,31 @@ class Robot:
         w = self.world
         n = self.n_arm
 
+        # The tolerance is in radians; a sliding joint (a lift, a telescope, a driven base) gets a
+        # centimetre for its 0.03 rad, or it reports arriving while still 3 cm away.
+        unit = self._joint_units
+
         def settled():
             # Stopped near the goal - or held well inside the tolerance while a servo
             # dithers (a held object can sustain a small limit cycle in a stiff wrist).
             q = self.qpos()[:n]
-            err = np.max(np.abs(q - goal))
-            return err < tol / 4 or err < tol and np.max(np.abs(w.backend.qvel()[:n])) < 0.08
+            err = np.max(np.abs(q - goal) / unit)
+            return err < tol / 4 or err < tol and np.max(np.abs(w.backend.qvel()[:n]) / unit) < 0.08
 
         if not w.run_until(settled, timeout, hold=0.06):
             err = np.abs(self.true_qpos()[:n] - goal)
             j = self.joint_names[int(np.argmax(err))]
             what = "arm" if self.model.family == "arm" else "robot"
             raise ActionTimeoutError(f"{what} did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
+
+    @functools.cached_property
+    def _joint_units(self) -> np.ndarray:
+        """Each arm joint's measure against a radian: 1 for a hinge, 1/3 m for a slide."""
+        if getattr(self, "kin", None) is None:  # a legged robot's joints are all hinges
+            return np.ones(self.n_arm)
+        m = self.kin.m
+        slide = int(mujoco.mjtJoint.mjJNT_SLIDE)
+        return np.array([1 / 3 if m.jnt_type[m.joint(PREFIX + j).id] == slide else 1.0 for j in self.model.arm_joints])
 
     @property
     def planner(self):
@@ -430,11 +451,14 @@ class Robot:
         """Grasp ``obj``, then lift. Returns once the grasp is checked.
 
         ``approach`` is ``"top"`` (from above), ``"side"`` (horizontally: for a tall object, or
-        one under something), or the horizontal direction to come in along. A side grasp
-        plans its way to the object (see :attr:`planner`), the hand turned to the side away
+        one under something), or the direction to come in along: horizontal, or tilted down
+        (``(1, 0, -1)`` comes in at 45 degrees), the fingers closing level either way. A side or
+        tilted grasp plans its way to the object (see :attr:`planner`), the hand turned away
         from the table and the objects.
         """
         o = as_subject(self.world, obj)
+        if not isinstance(approach, str) and approach is not None and np.linalg.norm(np.asarray(approach, float)[:2]) < 1e-6:
+            approach = "top"  # straight down
         if approach not in (None, "top"):
             return self._pick_from_side(o, approach, lift, timeout)
         if isinstance(o, ObjectHandle) and o.spec.kind != "bin":
@@ -444,10 +468,14 @@ class Robot:
                 raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
         p = o.position
         yaw = getattr(o, "yaw", 0.0)
-        self.gripper.open.__wrapped__(self.gripper)
         grasp = p.copy()
-        if isinstance(o, ObjectHandle):
+        opening = 1.0
+        if isinstance(o, ObjectHandle) and o.spec.kind != "bin":
+            opening, grasp[2] = self._top_grasp(o, width)
+        elif isinstance(o, ObjectHandle):
             grasp[2] = max(p[2], self.min_grasp_z)
+        self.gripper.open.__wrapped__(self.gripper, opening)
+        self._grip_open = opening
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, 0.05], yaw=yaw, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, grasp, yaw=yaw, linear=True, timeout=timeout)
         self.gripper.close.__wrapped__(self.gripper)
@@ -465,20 +493,35 @@ class Robot:
                     f"touching {sorted(fixed) or 'nothing'} / {sorted(moving) or 'nothing'}"
                 )
 
+    def _top_grasp(self, o, width: float) -> tuple[float, float]:
+        """The opening to take ``o`` from above with, and the TCP height to close at (see :func:`top_grasp`)."""
+        p = o.position
+        return top_grasp(self.model.derived, p[2], o.top, _bottom(o), width)
+
     def _pick_from_side(self, o, approach, lift, timeout):
         if isinstance(o, ObjectHandle):
             width, opens = grasp_width(o.spec), widest_gap(self.model)
             if width > opens:
                 raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
+        tilt = 0.0  # radians below horizontal
+        if not isinstance(approach, str):
+            d = np.asarray(approach, float)
+            d = np.append(d, 0.0) if d.size == 2 else d
+            if d[2] > 1e-9:
+                raise ValueError(f"approach must point level or down, not {np.round(d, 3).tolist()}")
+            tilt = float(np.arctan2(-d[2], np.linalg.norm(d[:2])))
+        der = self.model.derived
         p = o.position
         grasp = p.copy()
-        # High on the object (2.5 cm under its top): the arm then stays well off the table.
+        # High on the object (2.5 cm under its top): the arm then stays well off the table. Tilted,
+        # the hand's lower side drops by less, and the fingertips reach down by more.
         top = o.top if isinstance(o, ObjectHandle) else p[2]
-        grasp[2] = max(p[2], top - 0.025, self.model.derived.side_reach + TABLE_CLEARANCE)
+        low = der.side_reach * np.cos(tilt) + max(der.finger_reach, 0.0) * np.sin(tilt)
+        grasp[2] = max(p[2], top - 0.025, low + TABLE_CLEARANCE)
         drop = float(grasp[2] - _bottom(o)) if isinstance(o, ObjectHandle) else 0.0  # the TCP above the underside
         if isinstance(approach, str):
             if approach != "side":
-                raise ValueError(f"approach must be 'top', 'side' or a horizontal direction, not {approach!r}")
+                raise ValueError(f"approach must be 'top', 'side' or a direction, not {approach!r}")
             v = p[:2] - np.asarray(self.model.base_pos[:2], float)
             base = float(np.arctan2(v[1], v[0]))
             # From the robot's side of the object first; turned 45 then 90 degrees either way if
@@ -490,9 +533,9 @@ class Robot:
         geoms = {g for g in range(self.planner.m.ngeom) if self.planner.m.geom_bodyid[g] == self.planner.objects.get(o.name, -1)}
         why = []
         for angle in angles:
-            a = np.array([np.cos(angle), np.sin(angle), 0.0])
+            a = np.array([np.cos(angle) * np.cos(tilt), np.sin(angle) * np.cos(tilt), -np.sin(tilt)])
             yaw = angle + np.pi / 2  # the fingers close across the approach
-            along = f"along {np.round(a[:2], 2).tolist()}"
+            along = f"along {np.round(a if tilt else a[:2], 2).tolist()}"
             try:
                 backs = self._clear_iks(grasp - a * 0.06, a, yaw, level=True, want=4)
             except UnreachableError:
@@ -516,10 +559,11 @@ class Robot:
             self.arm.move_to.__wrapped__(self.arm, grasp, linear=True, **kw)
             self.gripper.close.__wrapped__(self.gripper)
             self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, lift], linear=True, **kw)
-            self._held_from = (a, yaw, drop) if isinstance(o, ObjectHandle) else None
+            self._held_from = (a, yaw, max(drop, low)) if isinstance(o, ObjectHandle) else None
             self._check_held(o)
             return
-        raise UnreachableError(f"pick({o.name!r}) from the side at {np.round(grasp, 3).tolist()}: " + "; ".join(why))
+        how = "from the side" if not tilt else f"{np.degrees(tilt):.0f} degrees down"
+        raise UnreachableError(f"pick({o.name!r}) {how} at {np.round(grasp, 3).tolist()}: " + "; ".join(why))
 
     def _check_held(self, o):
         w = self.world
@@ -548,8 +592,9 @@ class Robot:
             return self._place_from_side(t, p, top, height, timeout)
         if yaw is None:
             yaw = self.grip_yaw
+        opening = self._grip_open
         if height is None:
-            height = max(0.015, self.model.derived.finger_reach + 0.006)
+            height = max(0.015, release_reach(self.model.derived, opening) + 0.006)
         if isinstance(t, ObjectHandle) and t.spec.kind == "bin":
             p[:2] = self._free_spot(t, top + height + 0.03, yaw)
         above = np.array([p[0], p[1], top + height + 0.03])
@@ -566,7 +611,8 @@ class Robot:
                 self.arm.move_to.__wrapped__(self.arm, [here[0], here[1], above[2]], yaw=yaw, linear=True, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
-        self.gripper.open.__wrapped__(self.gripper)
+        self.gripper.open.__wrapped__(self.gripper, opening)
+        self._grip_open = 1.0
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
 
     def _place_from_side(self, t, p, top, height, timeout):
@@ -603,7 +649,8 @@ class Robot:
                 raise UnreachableError(f"place: no clear straight way down to {np.round(down, 3).tolist()} holding from the side")
             self.arm.follow.__wrapped__(self.arm, self.planner.plan(q_now, q), timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, down, linear=True, **kw)
-        self.gripper.open.__wrapped__(self.gripper)
+        # Let go: opened as far as the fingers go, which down in a bin may be onto its wall.
+        self.gripper._go(GRIPPER_OPEN, timeout, stall_ok=True)
         self._held_from = None
         self.planner.sync()
         # Back out the way the fingers came in, if that way is clear; else straight up off the object.
@@ -824,6 +871,57 @@ def home_q(name: str) -> np.ndarray:
         raise UnreachableError(f"{name}: home pose {m.home} unreachable (closest {err * 1000:.1f} mm)")
     q.setflags(write=False)
     return q
+
+
+def top_grasp(der, centre: float, top: float, bottom: float, width: float) -> tuple[float, float]:
+    """The opening to take an object from above with, and the TCP height to close at: the
+    object's centre is at height ``centre``, its top and underside at ``top`` and ``bottom``,
+    and it is ``width`` across where the jaws close (``der``: the robot's derived geometry).
+
+    Fully open, at the lowest height that keeps the fingertips off the table - unless jaws that
+    swing reach so much further down part-open than shut that, held off the table there, they
+    would close above the object (Stretch's fingertips stand 5 cm past where they meet when open,
+    1 cm when shut). Then they open only as wide as the object needs.
+    """
+    lowest = der.finger_reach + TABLE_CLEARANCE
+    if not der.reaches:
+        return 1.0, max(centre, lowest)
+    f = np.linspace(0.0, 1.0, 101)
+    grid = np.linspace(0.0, 1.0, len(der.reaches))
+    gap = np.interp(f, grid, der.apertures) - der.apertures[0]
+    reach = np.interp(f, grid, der.reaches)
+    meets = int(np.argmax(gap >= width)) if (gap >= width).any() else len(f) - 1  # where the jaws close on it
+    # The fingertips close on it at least a centimetre below its top (half a short object).
+    deep = top - min(0.01, (top - bottom) / 2)
+
+    def height(i):  # the jaws sweep every opening between this and the object's width
+        return max(centre, float(reach[min(meets, i) : max(meets, i) + 1].max()) + TABLE_CLEARANCE)
+
+    # Fully open, the tips keep the clearance where they start and finish; passing through a lower
+    # opening on the way, they need only stay off the table (the Gen3 lite's dip 3 mm, above it).
+    full = max(centre, lowest, float(reach[meets:].max()))
+    if full - reach[meets] <= deep:
+        return 1.0, full
+    for i in range(len(f) - 1, meets, -1):
+        if gap[i] < width + 0.015:  # 7.5 mm to spare on each side, no narrower
+            break
+        if height(i) - reach[meets] <= deep:
+            return float(f[i]), height(i)
+    return 1.0, full
+
+
+def release_reach(der, opening: float) -> float:
+    """How far past the TCP the fingertips reach while opening to ``opening`` from shut, less the
+    margin a release keeps over it (so a release 6 mm higher clears the surface by that much)."""
+    if not der.reaches:
+        return der.finger_reach
+    grid = np.linspace(0.0, 1.0, len(der.reaches))
+    sweep = float(np.interp(np.linspace(0.0, opening, 21), grid, der.reaches).max())
+    if opening < 1.0:
+        return sweep
+    # Fully open, the tips may dip on the way (the Jaco's swing 3 cm lower half open than open,
+    # and dug into the bin they were letting go in): passing through, they need only not touch.
+    return max(der.finger_reach, sweep - 0.006)
 
 
 def _bottom(o) -> float:

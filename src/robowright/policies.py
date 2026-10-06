@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import robots
-from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, TABLE_CLEARANCE, _kinematics, home_q, solve_ik
+from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, _kinematics, home_q, release_reach, solve_ik, top_grasp
 
 
 class ScriptedPickPlace:
@@ -28,9 +28,11 @@ class ScriptedPickPlace:
         speed: float = 1.5,
         tolerance: float = 0.012,
         tool_speed: float = 0.5,
+        size: tuple = (0.025, 0.025),
     ):
         self.object, self.target = object, target
         self.chunk, self.speed, self.tolerance, self.tool_speed = chunk, speed, tolerance, tool_speed
+        self.size = tuple(size)  # the object's width and height: how far to open, how low to go
         self.robot = None
         self.reset()
 
@@ -42,6 +44,7 @@ class ScriptedPickPlace:
             "speed": self.speed,
             "tolerance": self.tolerance,
             "tool_speed": self.tool_speed,
+            "size": list(self.size),
         }
 
     def reset(self):
@@ -55,8 +58,7 @@ class ScriptedPickPlace:
             self.robot = robot
             self.kin = _kinematics(robot)
             self.home = home_q(robot)
-            self.reach = robots.get(robot).derived.finger_reach
-            self.min_z = self.reach + TABLE_CLEARANCE
+            self.der = robots.get(robot).derived
 
     def _ik(self, p, seed, yaw):
         return solve_ik(self.kin, p, seed, self.home, yaw=yaw)[0]
@@ -66,18 +68,21 @@ class ScriptedPickPlace:
         tp, tq = objs[self.target]
         oyaw = 2 * np.arctan2(oq[3], oq[0])
         tyaw = 2 * np.arctan2(tq[3], tq[0])
-        grasp = np.array([op[0], op[1], max(op[2], self.min_z)])
+        width, h = self.size
+        opening, z = top_grasp(self.der, op[2], op[2] + h / 2, op[2] - h / 2, width)
+        grasp = np.array([op[0], op[1], z])
+        open_ = GRIPPER_CLOSED + opening * (GRIPPER_OPEN - GRIPPER_CLOSED)
         rim = tp[2] + 0.04
-        release = rim + max(0.015, self.reach + 0.006)
+        release = rim + max(0.015, release_reach(self.der, opening) + 0.006)
         return [  # (tcp goal, yaw, gripper, settle steps)
-            (grasp + [0, 0, 0.05], oyaw, GRIPPER_OPEN, 0),
-            (grasp, oyaw, GRIPPER_OPEN, 0),
+            (grasp + [0, 0, 0.05], oyaw, open_, 0),
+            (grasp, oyaw, open_, 0),
             (grasp, oyaw, GRIPPER_CLOSED, 20),
             (grasp + [0, 0, 0.05], oyaw, GRIPPER_CLOSED, 0),
             (np.array([tp[0], tp[1], release + 0.03]), tyaw, GRIPPER_CLOSED, 0),
             (np.array([tp[0], tp[1], release]), tyaw, GRIPPER_CLOSED, 0),
-            (np.array([tp[0], tp[1], release]), tyaw, GRIPPER_OPEN, 15),
-            (np.array([tp[0], tp[1], release + 0.03]), tyaw, GRIPPER_OPEN, 0),
+            (np.array([tp[0], tp[1], release]), tyaw, open_, 15),
+            (np.array([tp[0], tp[1], release + 0.03]), tyaw, open_, 0),
         ]
 
     def __call__(self, obs) -> np.ndarray:

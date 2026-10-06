@@ -272,6 +272,9 @@ class DrakeBackend(Backend):
         def side(n):
             return max(driven, key=lambda d: (len(_common_prefix(n, d)), -driven.index(d)))
 
+        # A telescope's other joints are coupled to the arm joint that drives them (Stretch's arm).
+        for n, (leader, offset, ratio) in meta.get("followers", {}).items():
+            plant.AddCouplerConstraint(js(n), js(leader), ratio, offset)
         self._follow = {}
         for n, (c_f, o_f) in grip["joints"].items():
             if n in driven:
@@ -372,6 +375,10 @@ class DrakeBackend(Backend):
         sel_q = np.sort([i for ji in plant.GetJointIndices(self.robot) for i in _positions(plant.get_joint(ji))])
         self._qlo, self._qhi = lo[sel_q], hi[sel_q]
         self._qa = np.array([j.position_start() for j in self._arm_joints])
+        self._arm_followers = []
+        for n, (leader, offset, ratio) in self.meta.get("followers", {}).items():
+            j = self.plant.GetJointByName(urdf._safe(n), self.robot)
+            self._arm_followers.append((j.position_start(), j.velocity_start(), self.robot_model.arm_joints.index(leader), offset, ratio))
         self._va = np.array([j.velocity_start() for j in self._arm_joints])
         js = lambda n: plant.GetJointByName(urdf._safe(n), self.robot)  # noqa: E731
         if self.has_gripper:
@@ -459,6 +466,8 @@ class DrakeBackend(Backend):
         vv = plant.GetVelocities(self.pc)
         qq[self._qa] = q[: self.n_arm]
         vv[self._va] = 0
+        for qa, va, i, offset, ratio in self._arm_followers:
+            qq[qa], vv[va] = offset + ratio * q[i], 0.0
         if self.has_gripper:
             s = float(np.clip(q[self.n_arm], 0, 1))
             for n, (c, o) in self.meta["gripper"]["joints"].items():

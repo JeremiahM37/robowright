@@ -56,3 +56,27 @@ def test_no_path_through_a_closed_box_is_reported():
     with _launch() as w:
         with pytest.raises(rw.UnreachableError):
             w.robot.arm.move_to((0.2, 0.0, 0.05), plan=True)  # inside the wall
+
+
+# A can and a cube taken 45 degrees down from above and set in a bin, on an arm that reaches that way.
+@pytest.mark.parametrize("shape", [("cylinder", (0.02, 0.05)), ("box", (0.0125, 0.0125, 0.0125))], ids=["can", "cube"])
+def test_a_tilted_grasp_picks_and_places(rw_backend, shape):
+    scene = tabletop(
+        ObjectSpec("thing", shape[0], shape[1], (0.22, -0.06, None), color="red"),
+        ObjectSpec("bin", "bin", (0.05, 0.05, 0.035), (0.2, 0.12, 0.0), color="blue", mass=0.0),
+        robot="ur5e",
+    )
+    with rw.launch(scene=scene, backend=rw_backend, settings=rw.Settings(trace="off")) as w:
+        r, thing = w.robot, w.scene["thing"]
+        r.pick(thing, approach=(1, 0, -1))
+        rw.expect(r.gripper).to_be_holding(thing)
+        T = r.kin.fk(r.true_qpos()[: r.n_arm])
+        assert T[:3, :3] @ r.kin.tool_axis @ np.array([1, 0, -1]) / np.sqrt(2) > 0.98  # still 45 degrees down
+        r.place(w.scene["bin"])
+        rw.expect(thing).to_be_inside(w.scene["bin"])
+
+
+def test_an_approach_pointing_up_is_refused():
+    with _launch() as w:
+        with pytest.raises(ValueError, match="level or down"):
+            w.robot.pick(w.scene["cube"], approach=(1, 0, 0.5))

@@ -92,6 +92,9 @@ class RobotModel:
     # (joint, armature): a floor of reflected motor inertia for joints a force-limited servo would
     # otherwise shake at the step rate (models that leave a geared motor's inertia out).
     armature: tuple = ()
+    # (actuator, factor): a sliding joint's servo stiffened so its dry friction cannot stop it more
+    # than a millimetre short (Stretch's lift: 1.5 N against 400 N/m stalls up to 4 mm out).
+    stiffen: tuple = ()
     maker: str = ""
     dof_note: str = ""
     tags: tuple = ()
@@ -132,6 +135,12 @@ class RobotModel:
         for name, value in self.armature:
             j = s.joint(name)
             j.armature = max(float(j.armature), value)
+        for name, k in self.stiffen:
+            a = s.actuator(name)
+            a.gainprm[0] *= k
+            a.biasprm[1] *= k
+            if a.biasprm[2] < 0:  # damping for the same damping ratio
+                a.biasprm[2] *= np.sqrt(k)
         _exclude_resting_contacts(s)
         if calibrated and self.grip_force is not None and self.has_gripper:
             _limit_grip(s, self)
@@ -220,6 +229,7 @@ class Derived:
     max_aperture: float  # metres between the fingers when open
     apertures: tuple = ()  # metres between the fingers' tips at openings 0, 0.1, ... 1
     side_reach: float = 0.0  # how far the gripper stands out from the TCP across the grip (down, in a side grasp)
+    reaches: tuple = ()  # fingertips' reach beyond the TCP along the tool axis at openings 0, 0.1, ... 1
 
 
 _OPTIONS = ("timestep", "iterations", "ls_iterations", "impratio", "integrator", "cone", "noslip_iterations")
@@ -571,15 +581,20 @@ def _derive(model: RobotModel) -> Derived:
     q_closed = {m.joint(j).name: float(d.qpos[m.jnt_qposadr[j]]) for j in others}
     _settle(m, d, act, model.gripper_open)
     q_open = {m.joint(j).name: float(d.qpos[m.jnt_qposadr[j]]) for j in others}
-    joints = {n: (q_closed[n], q_open[n]) for n in q_closed}
+    hand = m.body(model.hand).id
+    below = {hand}
+    for b in range(hand + 1, m.nbody):  # bodies come after their parents
+        if m.body_parentid[b] in below:
+            below.add(b)
+    # The gripper's joints are the hand's: a mobile robot's wheels, head or telescope stir by a
+    # hair as the fingers move, and are not the gripper's to set.
+    joints = {n: (q_closed[n], q_open[n]) for n in q_closed if m.jnt_bodyid[m.joint(n).id] in below}
     if not joints:
         raise ValueError(f"{model.name}: no gripper joints found")
     travel = {
         n: abs(o - c) / (1.0 if m.jnt_type[m.joint(n).id] == int(mujoco.mjtJoint.mjJNT_HINGE) else 0.05) for n, (c, o) in joints.items()
     }
     main = max(travel, key=travel.get)
-
-    hand = m.body(model.hand).id
     labels = body_labels(m, model)
     left = [b for b, lab in labels.items() if lab == "left_finger"]
     right = [b for b, lab in labels.items() if lab == "right_finger"]
@@ -643,12 +658,13 @@ def _derive(model: RobotModel) -> Derived:
     pts = np.vstack([(_surface(m, d, g) - p) @ R for g in _collision_geoms(m, parts)])
     pts = pts[pts @ axis > tip - 0.12]
     side_reach = float(np.abs((pts - tcp) @ across).max()) if len(pts) else 0.0
-    apertures = []
+    apertures, reaches = [], []
     for f in np.linspace(0.0, 1.0, 11):
         _settle(m, d, act, model.gripper_closed + f * (model.gripper_open - model.gripper_closed))
-        a, b, _ = tips(*finger_points())
+        a, b, t = tips(*finger_points())
         apertures.append(round(float(abs((a - b) @ grip)), 5))
-    return Derived(axis, grip, tcp, inset, joints, main, aperture, tuple(apertures), round(side_reach, 5))
+        reaches.append(round(float(t - tcp @ axis), 5))
+    return Derived(axis, grip, tcp, inset, joints, main, aperture, tuple(apertures), round(side_reach, 5), tuple(reaches))
 
 
 def _without_meshes(spec: mujoco.MjSpec) -> mujoco.MjModel:
@@ -729,6 +745,10 @@ class Kinematics:
         self.tool_axis, self.grip_axis, self.tcp_offset = der.tool_axis, der.grip_axis, der.tcp_offset
         self._jacp = np.zeros((3, m.nv))
         self._jacr = np.zeros((3, m.nv))
+        # A driven base (Stretch's) moves the whole robot: the solver reaches with the arm first,
+        # moving the base a tenth as readily, or it drives into the table to save extending.
+        base = np.array([j in ("robowright_drive", "robowright_turn") for j in model.arm_joints])
+        self._ease = np.where(base, 0.1, 1.0) if base.any() else None
 
     def _set(self, q):
         self.d.qpos[self.qadr] = q
@@ -792,10 +812,11 @@ class Kinematics:
             r, J = np.concatenate(res), np.vstack(rows)
             if np.linalg.norm(r[:3]) < tol and (r.size == 3 or np.linalg.norm(r[3:]) < 10 * tol):
                 break
-            JJt = J @ J.T + damping * np.eye(r.size)
-            dq = -J.T @ np.linalg.solve(JJt, r)
+            JW = J.T if self._ease is None else self._ease[:, None] * J.T
+            JJt = J @ JW + damping * np.eye(r.size)
+            dq = -JW @ np.linalg.solve(JJt, r)
             # null-space pull toward the rest posture keeps 7-DoF arms out of odd elbows
-            N = np.eye(q.size) - J.T @ np.linalg.solve(JJt, J)
+            N = np.eye(q.size) - JW @ np.linalg.solve(JJt, J)
             dq += N @ (0.1 * (rest - q))
             step = np.max(np.abs(dq))
             if step > 0.4:

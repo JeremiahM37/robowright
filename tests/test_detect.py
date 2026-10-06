@@ -271,3 +271,42 @@ def test_stretch_drives_its_base_to_reach(monkeypatch):
     m = robots.get(str(robots.menagerie.path("hello_robot_stretch_3/stretch.xml")))
     assert m.arm_joints[:2] == ("robowright_drive", "robowright_turn")
     assert m.arm_couplings == (("arm", "joint_arm_l3", 4.0),)
+    # Its fingertips meet a seventh of the way along the slide's command: "closed" is where they meet.
+    assert -0.0115 < m.gripper_closed < -0.0105
+    assert dict(m.stiffen) == {"lift": pytest.approx(3.75)}  # 1.5 N of friction against 400 N/m: 4 mm, now 1
+
+
+@pytest.mark.parametrize("backend", ["mujoco", "pybullet", "drake", "genesis"])
+def test_stretch_picks_and_places_on_every_engine(monkeypatch, backend):
+    """The telescope's four joints move as one on every engine (MuJoCo's equality constraints are a
+    motor per segment, a coupler or a mimic joint elsewhere), and its swinging jaws open only as far as
+    the cube needs, so they close on it rather than above it."""
+    monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
+    path = str(robots.menagerie.path("hello_robot_stretch_3/stretch.xml"))
+    pytest.importorskip({"mujoco": "mujoco", "pybullet": "pybullet", "drake": "pydrake", "genesis": "genesis"}[backend])
+    with rw.launch(scene=default_scene(path), backend=backend, settings=rw.Settings(trace="off")) as w:
+        r = w.robot
+        r.arm.move_to((0.25, -0.02, 0.08))
+        rw.expect(r.tcp).to_be_near((0.25, -0.02, 0.08), tol=0.005)
+        assert r.qpos()[0] == pytest.approx(r.model.start[0], abs=0.02)  # reached with the arm, the base where it was
+        if backend == "genesis":
+            return  # its rounded pads let the cube slide out in Genesis (see conftest.py)
+        r.pick(w.scene["cube"])
+        assert 0.0 < r.gripper.opening < 0.3  # on the cube, the jaws opened to 0.35 for it
+        r.place(on=w.scene["bin"])
+        rw.expect(w.scene["cube"]).to_be_inside(w.scene["bin"])
+
+
+def test_stretch_exports_its_telescope_and_rigid_pads(monkeypatch):
+    monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
+    from robowright.robots import urdf
+
+    m = robots.get(str(robots.menagerie.path("hello_robot_stretch_3/stretch.xml")))
+    path, meta = urdf.load(m)
+    assert meta["followers"] == {f"joint_arm_l{i}": ["joint_arm_l3", 0.0, 1.0] for i in (0, 1, 2)}
+    assert meta["joints"]["joint_arm_l3"]["kp"] == pytest.approx(2400.0)  # the tendon motor, in the leader's metres
+    g = meta["gripper"]
+    assert set(g["nested"]) == {"joint_gripper_finger_left_open", "joint_gripper_finger_right_open"}
+    assert not any(n.startswith("rubber") for n in g["joints"])  # springy pads welded: URDF has no springs
+    assert all(f > 0 for f in g["effort"].values())
+    assert 'name="rubber_left_x"' not in path.read_text()

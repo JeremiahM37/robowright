@@ -81,5 +81,8 @@ def test_picks_a_tall_can_from_the_side(robot, scene):
     except UnreachableError as e:  # decided before the arm moves
         pytest.skip(f"this arm cannot hold its hand level beside the can from where it is mounted: {e}")
     expect(robot.gripper).to_be_holding(can)
-    robot.place(on=bin)
+    try:
+        robot.place(on=bin)
+    except UnreachableError as e:  # decided before the arm moves
+        pytest.skip(f"this arm cannot hold the can level above the bin from where it is mounted: {e}")
     expect(can).to_be_inside(bin)

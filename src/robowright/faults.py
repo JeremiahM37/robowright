@@ -21,7 +21,7 @@ class Fault:
 
 @dataclass
 class JointNoise(Fault):
-    """Gaussian noise (radians) on every joint reading the robot sees."""
+    """Gaussian noise (radians; a third of it in metres on a sliding joint) on every joint reading the robot sees."""
 
     std: float = 0.01
 
@@ -119,10 +119,13 @@ class Faults:
         self._delay.append(target.copy())
         return self._delay.popleft()
 
-    def filter_qpos(self, q: np.ndarray) -> np.ndarray:
+    def filter_qpos(self, q: np.ndarray, units: np.ndarray | None = None) -> np.ndarray:
+        """``q`` as the robot reads it. ``units`` scales the noise of each reading (a slide's
+        metres against a hinge's radians)."""
         for f in self.active:
             if isinstance(f, JointNoise):
-                q = q + self._rng["joint_noise"].normal(0, f.std, q.shape)
+                noise = self._rng["joint_noise"].normal(0, f.std, q.shape)
+                q = q + (noise if units is None else noise * units)
         return q
 
     def filter_image(self, img: np.ndarray) -> np.ndarray:

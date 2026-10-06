@@ -84,6 +84,18 @@ def test_actions_assertions_and_a_reproducing_test(session, tmp_path):
     assert np.array_equal(captured["final"], expected)
 
 
+def test_a_tilted_pick_is_saved_with_its_direction(session):
+    session.launch(robot="ur5e")
+    assert "holding cube" in session.pick("cube", approach=[1, 0, -1])
+    session.place("bin")
+    assert session.expect("cube", "to_be_inside", {"container": "bin"}).startswith("PASS")
+    code = session.generate_test("test_tilted")
+    assert "approach=[1.0, 0.0, -1.0]" in code
+    namespace = {}
+    exec(compile(code, "tilted", "exec"), namespace)
+    namespace["test_tilted"]()
+
+
 def test_failed_actions_explain_and_keep_the_session(session):
     session.launch(robot="panda")
     with pytest.raises(KeyError, match="scene has"):

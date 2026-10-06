@@ -622,6 +622,9 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
         notes.append(f"other actuated joints, held still: {[m.joint(j).name for j in others]}")
     notes.append(f"arm_joints: {len(arm)} on the chain from the base to the hand")
 
+    if stiffen := _stiff_slides(m, arm, moved):
+        most = max(k for _, k in stiffen)
+        notes.append(f"stiffen: {[n for n, _ in stiffen]} slide servos stiffened (up to x{most:g}) to stop within 1 mm of a target")
     soft = _soft_servos(m, arm, moved)
     if soft:
         notes.append(f"warning: the model's servos can only hold {soft} to within that of a target (joint friction / stiffness)")
@@ -637,6 +640,9 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
     open_, closed = (hi, lo) if opening > 0 else (lo, hi)
     if "gripper_open" not in given:
         notes.append(f"gripper_open: {open_:g}, gripper_closed: {closed:g} (open leaves the fingers further apart)")
+    if "gripper_closed" not in given and (shut := _fingers_meet(m, act, hand, arm, open_, closed)) is not None:
+        notes.append(f"gripper_closed: {shut:g}, where the fingers meet ({closed:g} would push them through each other)")
+        closed = shut
     return {
         "arm_joints": tuple(m.joint(j).name for j in arm),
         "hand": m.body(hand).name,
@@ -647,8 +653,41 @@ def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:
         "gripper_closed": float(closed),
         "tags": (f"{len(arm)}dof",),
         **({"arm_couplings": couplings} if couplings else {}),
+        **({"stiffen": stiffen} if stiffen else {}),
         **{k: v for k, v in fixes.items() if v},
     }
+
+
+def _fingers_meet(m, act, hand, arm, open_, closed) -> float | None:
+    """Where a gripper's fingers stop on each other, if well short of its closed command, for a
+    position servo on a joint (its command is that joint's position). Stretch's fingertips meet
+    at a seventh of their stroke: commanded further, a gripper shut on nothing reads a seventh
+    open, and an opening between is not where it is told to go."""
+    if not (
+        m.actuator_trntype[act] == int(mujoco.mjtTrn.mjTRN_JOINT)
+        and m.actuator_biastype[act] == int(mujoco.mjtBias.mjBIAS_AFFINE)
+        and m.actuator_gear[act, 0] == 1.0
+    ):
+        return None
+    j = int(m.actuator_trnid[act, 0])
+    gripper = {hand} | _subtree(m, hand)
+    gravity = m.opt.gravity.copy()
+    m.opt.gravity[:] = 0
+    try:
+        d = mujoco.MjData(m)
+        reset_data(m, d)
+        for i in range(m.nu):  # hold the arm where it is
+            if m.actuator_trntype[i] == int(mujoco.mjtTrn.mjTRN_JOINT) and m.actuator_trnid[i, 0] in arm:
+                d.ctrl[i] = d.qpos[m.jnt_qposadr[m.actuator_trnid[i, 0]]]
+        _settled(m, d, act, open_, arm)
+        _settled(m, d, act, closed, arm)
+    finally:
+        m.opt.gravity[:] = gravity
+    touching = [{int(m.geom_bodyid[c.geom1]), int(m.geom_bodyid[c.geom2])} & gripper for c in d.contact[: d.ncon]]
+    if not any(len(t) == 2 for t in touching) or any(len(t) == 1 for t in touching):
+        return None  # shut on nothing, or on the arm in its zero pose: no measure
+    q = float(d.qpos[m.jnt_qposadr[j]])
+    return round(q, 5) if abs(q - closed) > 0.05 * abs(open_ - closed) else None
 
 
 def _finger_group(m, moved, candidates) -> tuple[int, tuple] | None:
@@ -815,6 +854,21 @@ def _mirror_ratio(m, lead: int, follow: int) -> float:
     # fingers whose frames start at the same point, as on the AgileX PiPER, have no gap to vary.)
     va, vb = velocity(lead), velocity(follow)
     return round(-float(va @ vb) / float(vb @ vb), 6) if float(vb @ vb) > 1e-12 else 1.0
+
+
+def _stiff_slides(m, arm, moved) -> tuple:
+    """``(actuator, factor)`` for sliding arm joints whose position servo dry friction can stall
+    more than a millimetre from a target: a lift or a telescope is a stiff closed-loop drive on
+    the real robot, and a grasp's height is decided in millimetres."""
+    out = []
+    for a, js in moved.items():
+        servo = m.actuator_biastype[a] == int(mujoco.mjtBias.mjBIAS_AFFINE)
+        if servo and len(js) == 1 and (j := next(iter(js))) in arm and m.jnt_type[j] == _SLIDE:
+            kp = -float(m.actuator_biasprm[a, 1])
+            stall = float(m.dof_frictionloss[m.jnt_dofadr[j]]) / kp if kp > 0 else 0.0
+            if stall > 0.001:
+                out.append((m.actuator(a).name, round(stall / 0.001, 3)))
+    return tuple(out)
 
 
 def _soft_servos(m, arm, moved) -> str:

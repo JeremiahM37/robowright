@@ -134,9 +134,12 @@ def _isaac_urdf(path: Path, meta: dict) -> Path:
             shutil.copyfile(path.parent / src, tmp)
             tmp.replace(meshes / name)
         m.set("filename", f"meshes_isaac/{name}")
+    joints = {j.get("name"): j for j in root.iter("joint")}
+    # A telescope's other joints mimic the arm joint that drives them (Stretch's arm).
+    for name, (leader, offset, ratio) in meta.get("followers", {}).items():
+        ET.SubElement(joints[urdf._safe(name)], "mimic", joint=urdf._safe(leader), multiplier=f"{ratio:.12g}", offset=f"{offset:.12g}")
     g = meta.get("gripper")
     if g:
-        joints = {j.get("name"): j for j in root.iter("joint")}
         ref = (g.get("driven") or [g["main"]])[0]
         rc, ro = g["joints"][ref]
         for name, (c, o) in g["joints"].items():
@@ -446,6 +449,8 @@ class IsaacBackend(Backend):
         self._art_root = str(art_root.GetPath())
         if meta.get("gripper"):
             self._couple_fingers(meta["gripper"])
+        for name, (leader, offset, ratio) in meta.get("followers", {}).items():
+            self._mimic(name, leader, ratio, offset)
 
         # MuJoCo never collides bodies welded to the world with each other: the robot's base with the
         # floor or a bin. Those links are the root and whatever hangs off it by fixed joints.
@@ -516,28 +521,31 @@ class IsaacBackend(Backend):
         the coupling is rewritten here from the calibration. PhysX's relation
         is ``q + gearing * q_ref + offset = 0`` in USD units (degrees for hinges).
         """
-        from pxr import PhysxSchema, Sdf
-
         ref = (g.get("driven") or [g["main"]])[0]
         rc, ro = g["joints"][ref]
-        ref_prim = self._joints[urdf._safe(ref)]
-        unit = {True: 180.0 / np.pi, False: 1.0}
-        u_ref = unit[self.meta["joints"][ref]["type"] == "hinge"]
         for name, (c, o) in g["joints"].items():
             if name == ref:
                 continue
-            prim = self._joints[urdf._safe(name)]
             k = (o - c) / (ro - rc)
-            u = unit[self.meta["joints"][name]["type"] == "hinge"]
-            insts = [i for i in ("rotX", "rotY", "rotZ") if prim.HasAPI(PhysxSchema.PhysxMimicJointAPI, i)] or ["rotX"]
-            for inst in insts:
-                mj = PhysxSchema.PhysxMimicJointAPI.Apply(prim, inst)
-                mj.CreateReferenceJointRel().SetTargets([ref_prim.GetPath()])
-                mj.CreateGearingAttr().Set(float(-k * u / u_ref))
-                mj.CreateOffsetAttr().Set(float(-u * (c - k * rc)))
-                # The importer makes the mimic compliant (25 Hz); zero makes it a hard constraint, as MuJoCo's equality is.
-                prim.CreateAttribute(f"physxMimicJoint:{inst}:naturalFrequency", Sdf.ValueTypeNames.Float).Set(0.0)
-                prim.CreateAttribute(f"physxMimicJoint:{inst}:dampingRatio", Sdf.ValueTypeNames.Float).Set(0.0)
+            self._mimic(name, ref, k, c - k * rc)
+
+    def _mimic(self, name: str, ref: str, k: float, offset: float) -> None:
+        """Make joint ``name`` a hard PhysX mimic of joint ``ref``: q = offset + k * q_ref (SI units)."""
+        from pxr import PhysxSchema, Sdf
+
+        unit = {True: 180.0 / np.pi, False: 1.0}
+        u_ref = unit[self.meta["joints"][ref]["type"] == "hinge"]
+        u = unit[self.meta["joints"][name]["type"] == "hinge"]
+        prim = self._joints[urdf._safe(name)]
+        insts = [i for i in ("rotX", "rotY", "rotZ") if prim.HasAPI(PhysxSchema.PhysxMimicJointAPI, i)] or ["rotX"]
+        for inst in insts:
+            mj = PhysxSchema.PhysxMimicJointAPI.Apply(prim, inst)
+            mj.CreateReferenceJointRel().SetTargets([self._joints[urdf._safe(ref)].GetPath()])
+            mj.CreateGearingAttr().Set(float(-k * u / u_ref))
+            mj.CreateOffsetAttr().Set(float(-u * offset))
+            # The importer makes the mimic compliant (25 Hz); zero makes it a hard constraint, as MuJoCo's equality is.
+            prim.CreateAttribute(f"physxMimicJoint:{inst}:naturalFrequency", Sdf.ValueTypeNames.Float).Set(0.0)
+            prim.CreateAttribute(f"physxMimicJoint:{inst}:dampingRatio", Sdf.ValueTypeNames.Float).Set(0.0)
 
     def _index(self, meta: dict) -> None:
         art, rm = self._art, self.robot_model
@@ -546,6 +554,8 @@ class IsaacBackend(Backend):
         self._ndof = len(self._dof_names)
         dof = {n: i for i, n in enumerate(self._dof_names)}
         self._arm = np.array([dof[urdf._safe(j)] for j in rm.arm_joints])
+        followers = meta.get("followers", {}).items()
+        self._arm_followers = [(dof[urdf._safe(n)], rm.arm_joints.index(lead), o, r) for n, (lead, o, r) in followers]
         lim = self._row(art.get_dof_limits()).reshape(self._ndof, 2)
         self._qlo, self._qhi = lim[:, 0], lim[:, 1]
         self._lo, self._hi = self._qlo[self._arm], self._qhi[self._arm]
@@ -747,6 +757,8 @@ class IsaacBackend(Backend):
             s = float(np.clip(q[self.n_arm], 0, 1))
             for d, c, o in self._fingers.values():
                 pos[d] = c + s * (o - c)
+        for d, i, offset, ratio in self._arm_followers:
+            pos[d] = offset + ratio * q[i]
         self._write_dofs(pos, np.zeros(self._ndof))
         self._ramp.reset()  # placed, not moved: no ramp
         self.set_ctrl(q)

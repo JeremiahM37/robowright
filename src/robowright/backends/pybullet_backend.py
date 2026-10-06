@@ -93,6 +93,15 @@ class PybulletBackend(Backend):
         if self.has_gripper:
             g = meta["gripper"]
             driven = g["driven"]
+            slide = lambda n: meta["joints"][n]["type"] == "slide"  # noqa: E731
+            pair = []  # fingers geared to the driven one, side by side
+            if g.get("nested"):
+                # Fingers a joint equality ties to the driven joint, hanging below it (Stretch's
+                # swing from its slide): one finger is driven, as the fingers are what meets the
+                # object, its twin geared to it, and the slide follows them. Geared to the slide
+                # (nested joints) they slipped; following it, a blocked finger let it run on; each
+                # on a motor of its own, whichever reached the object first shoved it aside.
+                driven, pair = list(g["nested"])[:1], list(g["nested"])[1:]
             linkage = [n for n in g["joints"] if n not in driven]
             self._fingers = [joints[urdf._safe(n)] for n in driven]
             self._finger_q = np.array([g["joints"][n] for n in driven])  # (k, 2): closed, open
@@ -106,15 +115,14 @@ class PybulletBackend(Backend):
             # keep following by motor: geared, the Robotiq 2F-85's six-joint linkage jammed open.
             self._ref = self._fingers[0]
             self._ref_q = rc, ro = g["joints"][driven[0]]
-            slide = lambda n: meta["joints"][n]["type"] == "slide"  # noqa: E731
-            geared = [n for n in linkage if slide(n) and slide(driven[0])]
+            geared = [n for n in linkage if slide(n) and slide(driven[0])] + pair
             follow = [n for n in linkage if n not in geared]
             self._links_j = [joints[urdf._safe(n)] for n in follow]
             self._links_q = np.array([g["joints"][n] for n in follow]).reshape(-1, 2)
             self._links_force = [g["effort"][n] for n in follow]
             # A passive linkage is moved by the drivers: they need both fingers' force.
             effort = g.get("coupled_effort", g["effort"]) if geared and not follow else g["effort"]
-            self._finger_force = np.array([effort.get(n, g["effort"][n]) for n in driven])
+            self._finger_force = np.array([effort.get(n, g["effort"][n]) * (1 + len(pair)) for n in driven])
             self._geared = [(joints[urdf._safe(n)], *g["joints"][n]) for n in geared]
             for j, lc, lo in self._geared:
                 k = (lo - lc) / (ro - rc)
@@ -127,6 +135,18 @@ class PybulletBackend(Backend):
             self._main = joints[urdf._safe(g["main"])]
             self._main_q = g["joints"][g["main"]]
         self._arm_force = np.array([meta["joints"][n]["effort"] for n in rm.arm_joints])
+        # A telescope's other joints move with the arm joint that drives them (Stretch's arm): each
+        # gets a motor of its own, sent where the leader is sent, the leader's force shared out
+        # among them. (Gear constraints, as the sliding fingers have, let the segments shuffle
+        # against each other by a centimetre while the leader held still.)
+        self._arm_followers = []
+        for name, (leader, offset, ratio) in meta.get("followers", {}).items():
+            self._arm_followers.append((joints[urdf._safe(name)], rm.arm_joints.index(leader), offset, ratio))
+        if self._arm_followers:
+            share = self._arm_force.copy()
+            for _, i, _, _ in self._arm_followers:
+                share[i] = self._arm_force[i] / (1 + sum(f[1] == i for f in self._arm_followers))
+            self._arm_force = share
         self._lo = np.array([(meta["joints"][n]["range"] or (-2 * np.pi, 2 * np.pi))[0] for n in rm.arm_joints])
         self._hi = np.array([(meta["joints"][n]["range"] or (-2 * np.pi, 2 * np.pi))[1] for n in rm.arm_joints])
         self._gain = np.full(self.n_arm, POSITION_GAIN)
@@ -292,6 +312,18 @@ class PybulletBackend(Backend):
             positionGains=list(self._gain),
             physicsClientId=self.cid,
         )
+        if self._arm_followers:
+            f = self._arm_followers
+            p.setJointMotorControlArray(
+                self.robot,
+                [j for j, *_ in f],
+                p.POSITION_CONTROL,
+                targetPositions=[o + r * self._sq[i] for _, i, o, r in f],
+                targetVelocities=[r * self._sv[i] for _, i, _, r in f],
+                forces=[self._arm_force[i] for _, i, _, _ in f],
+                positionGains=[self._gain[i] for _, i, _, _ in f],
+                physicsClientId=self.cid,
+            )
 
     def ctrl(self):
         return self._ctrl.copy()
@@ -305,6 +337,8 @@ class PybulletBackend(Backend):
         self._ramp.reset()  # placed, not moved: no ramp
         for j, v in zip(self._arm, q[: self.n_arm]):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
+        for j, i, offset, ratio in self._arm_followers:
+            p.resetJointState(self.robot, j, float(offset + ratio * q[i]), 0.0, physicsClientId=self.cid)
         if not self.has_gripper:
             self.set_ctrl(q)
             return

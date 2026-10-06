@@ -125,10 +125,13 @@ role:
 - **A mobile manipulator** (a free-floating base with a gripper and no legs, such as TIAGo) has
   its base held where it stands, and its arm is tested as on a fixed one. If its arm cannot
   reach the task area from anywhere that way (Stretch reaches along one line), its base drives
-  instead: a joint forward and one turning in place, which IK moves like any other.
+  instead: a joint forward and one turning in place. IK moves them a tenth as readily as the
+  arm's joints, so the arm reaches first and the base drives for the rest.
 - **An arm with no wrist roll** (four joints, say) grips at whatever angle it reaches with.
 - **Joints that move together** (Stretch's telescope: four slides kept in step by the model's
-  constraints, driven through one tendon) are one arm joint; its partners move with it.
+  constraints, driven through one tendon) are one arm joint; its partners move with it, on
+  every engine: a coupler constraint in Drake, a mimic joint in Genesis and Isaac Sim, a motor
+  per segment in PyBullet (where geared, nested segments shuffled against each other).
 - **A hand with several fingers**, each with motors of its own at the base and the tip (the
   three-finger Kinova Jaco), closes as one: every finger joint follows one finger's base joint.
 - **Models that need adapting:**
@@ -138,7 +141,11 @@ role:
   - a force-limited joint too light to integrate stably gets the motor inertia the model left out;
   - a model on MuJoCo's default friction (a pyramidal cone, impratio 1), under which a held
     object creeps out of the fingers, gets the elliptic cone and impratio 10 that MuJoCo's own
-    gripper models use.
+    gripper models use;
+  - a gripper whose fingers stop on each other well short of its closed command (Stretch's tips
+    meet a seventh of the way along) reads closed where they meet;
+  - a lift or telescope whose servo the joint's dry friction could stall more than 1 mm from a
+    target (Stretch's lift: 4 mm) is stiffened to stall within 1 mm.
 
 **URDF** is read with MuJoCo's own URDF reader, plus what it cannot do on its own:
 
@@ -185,9 +192,10 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | From MJCF (MuJoCo Menagerie robots that aren't built in) | Result |
 |---|---|
 | Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
-| PAL TIAGo, TIAGo Dual (base held) | 19 and 20 of 21: the sensor-noise trial (0.02 rad of joint noise on a 0.9 m arm puts the tool 2 cm out) and a settle timeout |
-| Hello Robot Stretch 3 (base drives, telescope as one joint) | 8 of 21: it moves, reaches and tracks (its kinematics match the simulation), but its long curved fingers close above a 25 mm cube when their tips are kept off the table |
-| Unitree Z1 | gripper works; pick fails: its swinging jaw sweeps a 25 mm cube away |
+| PAL TIAGo Dual (base held) | all 21 pass |
+| PAL TIAGo (base held) | 20 of 21: a second cube set down on the first |
+| Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 19 that run on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
+| Unitree Z1 | gripper works; pick fails: at the lowest height it can go, its moving jaw meets a 25 mm cube on its top edge, pressing down at 20 degrees, and tips it over |
 | Lite 6, narrow gripper | 12 mm gap; `pick` refuses a 25 mm cube up front |
 | Google Robot | its servos can hold a joint only to 0.03–0.10 rad of a target (joint friction / stiffness); `--inspect` warns |
 | TidyBot | arm on a mobile base modelled as slides; the wrist sags 0.04 rad under load |
@@ -204,8 +212,9 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 
 | From xacro (ROS 2 description packages, with their arguments) | Result |
 |---|---|
-| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv Rizon 4 and MICO-Core | all 21 pass |
-| Kinova Jaco 2 (three fingers) | 9 of 21: its three fingers close together, but they splay to 21 cm open and sweep 4 cm below the grasp point while closing, so they miss a 25 mm cube on a table |
+| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv MICO-Core | all 21 pass |
+| Flexiv Rizon 4 | 20 of 21: its side grasp knocks the can over |
+| Kinova Jaco 2 (three fingers) | 20 of 21: told to open halfway, its fingers swing between 0.47 and 0.52 open and never settle |
 
 On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 207/210 on
 Drake and 205/210 on Genesis. The misses are the e.DO's home pose (Drake, Genesis), the
@@ -284,6 +293,7 @@ robot.gripper.close()  # returns when the jaws stop: on an object, or shut
 robot.pick(cube)  # returns once the cube is held in both jaws after the lift
 robot.place(on=bin)  # into the bin's centre, or the free spot farthest from what is already there
 robot.pick(can, approach="side")  # a tall object, from the side: a planned path, then straight in
+robot.pick(can, approach=(1, 0, -1))  # coming in along a direction: here 45 degrees down, along +x
 robot.arm.move_to(point, plan=True)  # round the table and the objects, not through them
 ```
 
@@ -299,6 +309,19 @@ On the built-in arms, a 10 cm can picked from the side and set in a bin works on
 PiPER, SO-101, YAM and ARX cannot hold the hand level beside it from where they are mounted,
 and the WidowX's gripper opens 4 mm wider than the can. On Genesis the can creeps out of the
 fingers mid-carry on 5 of the 7 (a recorded divergence).
+
+A grasp can come in at any angle between level and straight down, the fingers closing level:
+`approach=(1, 0, -1)` comes in at 45 degrees. It plans and checks its moves as a side grasp
+does, and sets the object down with the tilted hand's lowest point clear of the surface. At 45
+degrees, a can and a cube are picked and set in a bin by the UR5e, UR10e, xArm 7, Gen3 and
+Sawyer on MuJoCo; the Panda's grip lets the can slip as it starts to carry it, and the iiwa and
+SO-101 cannot reach that way from where they are mounted.
+
+Jaws that swing rather than slide (Stretch's fingers) can reach further down
+part-open than shut. A top-down `pick` opens them fully, as it always has, unless held off the
+table that way they would close above a short object; then they open only as wide as the object
+needs (7.5 mm to spare each side) and come down lower. `place` lets go at the same opening,
+high enough that fingertips which dip as they open (the Jaco's, by 3 cm) clear the surface.
 
 When an action can't finish, it says why:
 
@@ -496,7 +519,10 @@ $ pytest --rw-backend mujoco,pybullet,drake,genesis,isaac
 The robot, kinematics, actions and assertions are shared; only physics differs. Every
 engine loads the same description of each robot: a URDF and OBJ meshes exported from its
 MuJoCo model, plus a sidecar for what URDF can't express (servo gains, armature, finger
-calibration, excluded collision pairs). Each backend has to pass the same contract
+calibration, joints that move together, excluded collision pairs). URDF has no joint springs,
+so a spring the gripper never moves (Stretch's rubber fingertip pads, which give a little
+where they touch) is welded on the other engines: held by soft constraints or motors in its
+place, the pads folded under the squeeze. Each backend has to pass the same contract
 (`tests/test_conformance.py`, `tests/test_legged.py`) on every robot before it ships.
 
 A test that passes on one engine and fails on another usually means the behaviour depends
@@ -747,11 +773,10 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 - **Simulation only:** no hardware backend yet. The backend interface is written with one
   in mind (capabilities, perception hooks, `Settings(realtime=True)`), but nothing has run
   on a real robot.
-- **Grasps:** from above, or from the side with a planned approach; no other angles yet, and
-  plain moves interpolate joints without checking for collisions (pass `plan=True`). A mobile
-  base drives only where the arm cannot reach otherwise, as two idealised joints (no wheel
-  slip), tested on MuJoCo; robots whose arm joints move together through a tendon (Stretch)
-  also run on MuJoCo only for now.
+- **Grasps:** from above, from the side, or tilted between the two, the fingers closing level
+  (no grasp that rolls the hand); plain moves interpolate joints without checking for
+  collisions (pass `plan=True`). A mobile base drives only where the arm cannot reach
+  otherwise, as two idealised joints (no wheel slip).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at their datasheet force only where the maker

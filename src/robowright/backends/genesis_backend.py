@@ -116,19 +116,28 @@ def _with_mimic(path, meta) -> Path:
     half-closed chain jams against itself.
     """
     g = meta.get("gripper")
-    if not g:
+    followers = meta.get("followers", {})
+    if not g and not followers:
         return path
-    ref = g["driven"][0]
-    rc, ro = g["joints"][ref]
     tree = ET.parse(path)
     joints = {j.get("name"): j for j in tree.getroot().iter("joint")}
-    # Driven joints other than the reference keep their own servo too: MuJoCo's actuator
-    # pushes each of them, and its equality constraints keep them in step.
-    for name, (c, o) in g["joints"].items():
-        if name == ref:
-            continue
-        k = (o - c) / (ro - rc)
-        ET.SubElement(joints[urdf._safe(name)], "mimic", joint=urdf._safe(ref), multiplier=f"{k:.12g}", offset=f"{c - k * rc:.12g}")
+
+    def mimic(name, leader, k, offset):
+        ET.SubElement(joints[urdf._safe(name)], "mimic", joint=urdf._safe(leader), multiplier=f"{k:.12g}", offset=f"{offset:.12g}")
+
+    # A telescope's other joints follow the arm joint that drives them (Stretch's arm).
+    for name, (leader, offset, ratio) in followers.items():
+        mimic(name, leader, ratio, offset)
+    if g:
+        ref = g["driven"][0]
+        rc, ro = g["joints"][ref]
+        # Driven joints other than the reference keep their own servo too: MuJoCo's actuator
+        # pushes each of them, and its equality constraints keep them in step.
+        for name, (c, o) in g["joints"].items():
+            if name == ref:
+                continue
+            k = (o - c) / (ro - rc)
+            mimic(name, ref, k, c - k * rc)
     xml = ET.tostring(tree.getroot(), encoding="unicode")
     out = path.with_name(f"robot.genesis-{hashlib.sha1(xml.encode()).hexdigest()[:12]}.urdf")
     if not out.exists():
@@ -223,6 +232,7 @@ class GenesisBackend(Backend):
 
         jm = meta["joints"]
         self._arm = np.array([dof(j) for j in rm.arm_joints])
+        self._arm_followers = [(dof(n), rm.arm_joints.index(lead), o, r) for n, (lead, o, r) in meta.get("followers", {}).items()]
         grip = meta.get("gripper") or {"joints": {}, "driven": [], "effort": {}}
         self._fingers = {n: (dof(n), c, o) for n, (c, o) in grip["joints"].items()}
         driven = grip.get("driven") or grip.get("main", [])
@@ -392,6 +402,8 @@ class GenesisBackend(Backend):
         # Every finger joint where it sits at this opening, so the gripper starts at rest.
         for d, c, o in self._fingers.values():
             pos[d] = c + s * (o - c)
+        for d, i, offset, ratio in self._arm_followers:
+            pos[d] = offset + ratio * q[i]
         self.robot.set_dofs_position(pos, zero_velocity=True)
         self._ramp.reset()  # placed, not moved: no ramp
         self.set_ctrl(q)

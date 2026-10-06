@@ -7,6 +7,8 @@ starts passing (a model fix upstream, an engine change), prompting removal.
 Each reason is what the trace showed.
 """
 
+import functools
+
 import pytest
 
 # PyBullet once dropped cubes from every light gripper here (PiPER, ARX L5, YAM, WidowX), recorded
@@ -56,6 +58,26 @@ for robot in ("ur5e", "ur10e", "gen3", "sawyer", "xarm7"):
         "in Genesis a can held from the side creeps out of the fingers while carried, whatever the speed "
         "(MuJoCo, PyBullet and Drake hold it)"
     )
+# Hello Robot's Stretch 3 (from MuJoCo Menagerie's file): its rounded rubber fingertip pads pinch the
+# cube at a point each. In Genesis the cube rides 1.7 mm up as the jaws close and slides 6 mm along
+# the grip in the first centimetre of lift, then drops; MuJoCo holds it within 0.4 mm, as do
+# PyBullet and Drake.
+for test in (
+    "test_pick_and_place",
+    "test_grasp_is_seen_by_both_fingers",
+    "test_places_a_second_object_beside_the_first",
+    "test_no_arm_collisions_during_a_pick",
+    "test_state_restore_mid_grasp_is_exact",
+    "test_deterministic",
+    "test_arm_never_hits_anything_while_picking",
+    "test_cube_survives_a_shove_when_held",
+    "test_policy_with_randomized_cube",
+    "test_policy_with_sensor_noise_and_latency",
+):
+    KNOWN[(test, "genesis", "stretch")] = (
+        "Stretch's rounded rubber pads pinch the cube at a point each; in Genesis it slides out of them as it is lifted "
+        "(MuJoCo, PyBullet and Drake hold it)"
+    )
 KNOWN[("test_stands_on_its_own", "genesis", "spot")] = (
     "standing still, Spot creeps backward ~2 cm/s on its sphere feet in Genesis (MuJoCo: settles to 0.2 mm/s)"
 )
@@ -68,6 +90,19 @@ def pytest_collection_modifyitems(config, items):
             continue
         backend = cs.params.get("rw_backend", config.getoption("--rw-backend").split(",")[0])
         robot = cs.params.get("rw_robot", config.getoption("--rw-robot").split(",")[0])
-        reason = KNOWN.get((item.originalname, backend, robot))
+        reason = KNOWN.get((item.originalname, backend, _name(robot)))
         if reason:
             item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+
+
+@functools.cache
+def _name(robot: str) -> str:
+    """A robot's name, for one given by its model file (the registry is keyed by name)."""
+    if "/" not in robot and not robot.endswith((".xml", ".urdf", ".xacro")):
+        return robot
+    from robowright import robots
+
+    try:
+        return robots.get(robot).name
+    except Exception:
+        return robot
