@@ -16,7 +16,11 @@ import numpy as np
 
 from .errors import ExpectationError
 from .locators import ObjectHandle, Point, as_subject
-from .robot import Gripper, Robot, _jsonable
+from .robot import GRIPPER_CLOSED, Gripper, Robot, _jsonable
+
+# Holding, without contact sensing: jaws closed on nothing stop at an opening of 0.031 at most
+# (the 13 built-in arms, on MuJoCo), and on the 25 mm cube at 0.136 at least.
+_GRASPED = 0.06
 
 # Keep robowright internals out of pytest failure tracebacks (--full-trace shows them).
 __tracebackhide__ = True
@@ -190,7 +194,27 @@ class Expectation:
                 f"opening {g.opening:.2f}",
             )
 
-        return self._run("to_be_holding", check, timeout, hold, {"obj": name})
+        return self._run("to_be_holding", check if self.world.has_contacts else self._jaws_on(g, name), timeout, hold, {"obj": name})
+
+    def _jaws_on(self, g: Gripper, name: str | None):
+        """Holding, on a robot that cannot feel contacts (hardware): the jaws were told to close and
+        stopped short on something, and the object (if its pose is known) is in the hand."""
+        w = self.world
+        r = g.robot
+
+        def check():
+            told = r._target[-1] <= GRIPPER_CLOSED + 0.05
+            stopped = g.opening > _GRASPED
+            ok, where = told and stopped, ""
+            if name is not None and (w.has_ground_truth or name in w.perception):
+                o = w.scene[name]
+                d = float(np.linalg.norm(o.position - r.tcp.position))
+                reach = float(np.max(o.bounds()[1] - o.position)) + 0.03
+                ok, where = ok and d <= reach, f", {name} {d:.3f} m from the tool (within {reach:.3f} counts)"
+            told_s = "told to close" if told else f"told to open to {r._target[-1]:.2f}"
+            return ok, f"no contact sensing on {w.backend.name}: the jaws {told_s}, at opening {g.opening:.2f}{where}"
+
+        return check
 
     def to_be_open(self, min_opening: float = 0.8, **kw):
         g = self._gripper()

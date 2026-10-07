@@ -55,7 +55,10 @@ class World:
         self.object_names = [o.name for o in spec.objects]
         self.step_count = 0
         self.status = "running"
-        self.perception: dict[str, Callable] = {}
+        # Where object poses come from without ground truth: a camera, motion capture, or what the
+        # backend perceives (a ROS 2 robot's TF frames).
+        self.perception: dict[str, Callable] = dict(self.backend.perception())
+        self._perceived: dict = {}  # name -> (time, pos, quat, velocity), for perceived velocities
         self._invariants: list = []
         self._step_hooks: list[Callable] = []
         self._soft_failures: list[str] = []

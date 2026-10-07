@@ -148,8 +148,8 @@ class LeggedRobot(Robot):
         q = self.home_q.copy()
         return q + depth * 0.6 * np.sign(q) * (np.abs(q) > 0.2)
 
-    def observe(self, cameras=(), privileged: bool = False, task: str | None = None) -> dict:
-        obs = super().observe(cameras, False, task)
+    def observe(self, cameras=(), privileged: bool = False, task: str | None = None, image_size: tuple | None = None) -> dict:
+        obs = super().observe(cameras, False, task, image_size)
         b = self.world.backend
         pos, quat = b.base_pose()
         v = b.base_velocity()
@@ -157,7 +157,9 @@ class LeggedRobot(Robot):
         obs.update(base_quat=quat, base_lin_vel=v[:3], base_ang_vel=v[3:], qvel=b.qvel())
         if privileged:
             obs["base_pos"] = pos
-            obs["objects"] = {n: b.object_pose(n) for n in self.world.object_names}
+            w = self.world
+            seen = w.object_names if w.has_ground_truth else [n for n in w.object_names if n in w.perception]
+            obs["objects"] = {n: w.scene[n].pose() for n in seen}
         return obs
 
     def _set_gripper(self, a):

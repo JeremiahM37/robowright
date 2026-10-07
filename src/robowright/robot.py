@@ -43,9 +43,9 @@ def _jsonable(v):
         return v
     if hasattr(v, "__robowright__"):
         return {"$condition": v.__robowright__}
-    if hasattr(v, "to_config"):
+    if hasattr(v, "to_config") and (cfg := v.to_config()) is not None:
         cls = type(v)
-        return {"$policy": {"class": f"{cls.__module__}.{cls.__qualname__}", "kwargs": v.to_config()}}
+        return {"$policy": {"class": f"{cls.__module__}.{cls.__qualname__}", "kwargs": cfg}}
     if callable(v):
         return {"$callable": getattr(v, "__qualname__", getattr(type(v), "__qualname__", repr(v)))}
     return repr(v)
@@ -704,14 +704,19 @@ class Robot:
                 best, best_score = c, score
         return best
 
-    def observe(self, cameras=(), privileged: bool = False, task: str | None = None) -> dict:
-        """What a policy sees: joint readings, optional camera images, optional ground truth."""
+    def observe(self, cameras=(), privileged: bool = False, task: str | None = None, image_size: tuple | None = None) -> dict:
+        """What a policy sees: joint readings, optional camera images, optional object poses.
+
+        Object poses are the engine's ground truth, or on hardware what ``world.perception``
+        reports (objects it has no source for are left out)."""
         w = self.world
         obs = {"qpos": self.qpos(), "t": w.time, "task": task, "robot": self.model.name}
         if cameras:
-            obs["images"] = {c: w.faults.filter_image(w.backend.render(c, *w.settings.image_size)) for c in cameras}
+            size = tuple(image_size or w.settings.image_size)
+            obs["images"] = {c: w.faults.filter_image(w.backend.render(c, *size)) for c in cameras}
         if privileged:
-            obs["objects"] = {n: w.backend.object_pose(n) for n in w.object_names}
+            seen = w.object_names if w.has_ground_truth else [n for n in w.object_names if n in w.perception]
+            obs["objects"] = {n: w.scene[n].pose() for n in seen}
             obs["tcp"] = self.tcp.position
         return obs
 
@@ -722,8 +727,8 @@ class Robot:
         task: str | None = None,
         until=None,
         timeout: float = 20.0,
-        cameras=(),
-        privileged: bool = False,
+        cameras=None,
+        privileged: bool | None = None,
         hold: float = 0.0,
     ):
         """Run a policy (``obs -> joint targets`` or an action chunk) until ``until`` or ``timeout``.
@@ -733,8 +738,15 @@ class Robot:
         while the policy keeps running (an object carried into a bin is "inside"
         before it is let go). Returns a :class:`Rollout` summary; it does not
         raise when the condition is not met - assert on it.
+
+        ``cameras`` and ``privileged`` default to what the policy says it needs (its
+        ``cameras`` and ``privileged`` attributes, as a :class:`~robowright.learned.LearnedPolicy`
+        has), else none.
         """
         w = self.world
+        cameras = tuple(getattr(policy, "cameras", ()) if cameras is None else cameras)
+        privileged = bool(getattr(policy, "privileged", False) if privileged is None else privileged)
+        image_size = getattr(policy, "image_size", None)
         if hasattr(policy, "reset"):
             policy.reset()
         queue: list = []
@@ -750,7 +762,7 @@ class Robot:
             else:
                 since = None
             if not queue:
-                obs = self.observe(cameras, privileged, task)
+                obs = self.observe(cameras, privileged, task, image_size)
                 ti = _time.perf_counter()
                 act = np.asarray(policy(obs), float)
                 infer_ms.append((_time.perf_counter() - ti) * 1000)

@@ -24,6 +24,10 @@ steps:
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
 
+  - name: ROS 2 backend against real ROS 2 (ros2_control mock hardware, a simulated arm behind ROS 2 topics)
+    actions:
+      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py -q -n 3 -p no:cacheprovider", timeout: 900 }
+
   - name: cli reports working offscreen rendering
     actions:
       - shell: ".venv/bin/robowright info 2>&1 | grep -q 'offscreen rendering: ok'"

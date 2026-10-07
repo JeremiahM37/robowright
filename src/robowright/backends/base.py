@@ -175,6 +175,11 @@ class Backend(ABC):
         """Apply a world-frame force (N) to an object's centre (or ``"robot"``: the floating base) for the next step."""
         raise NotImplementedError(f"{self.name} cannot apply external forces")
 
+    def perception(self) -> dict:
+        """Object pose sources this backend has without ground truth (``{name: () -> (pos, quat)}``),
+        which become ``world.perception``: what hardware sees through its own sensors."""
+        return {}
+
     def render(self, camera: str, width: int, height: int) -> np.ndarray:
         raise NotImplementedError(f"{self.name} cannot render")
 
@@ -344,8 +349,9 @@ _MODULES = {
     "genesis": "genesis_backend",
     "drake": "drake_backend",
     "isaac": "isaac_backend",
+    "ros2": "ros2_backend",
 }
-_REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake", "isaac": "isaacsim"}
+_REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake", "isaac": "isaacsim", "ros2": "rclpy"}
 
 
 def available() -> list[str]:

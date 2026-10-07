@@ -48,6 +48,7 @@ class Event:
 class Recorder:
     def __init__(self, world, frame_every: int = 5, cameras=None, image_size=(320, 240)):
         self.world = world
+        self._perceived = {} if world.has_ground_truth else world.backend.perception()  # recorded each step
         self.frame_every = frame_every
         self.cameras = cameras
         self.image_size = image_size
@@ -86,6 +87,19 @@ class Recorder:
             poses = [b.object_pose(n) for n in names]
             self.obj_pos.append(np.array([p for p, _ in poses]))
             self.obj_quat.append(np.array([q for _, q in poses]))
+        elif names and self._perceived:
+            # Hardware: what the robot's own sensors saw (a ROS 2 robot's TF), so a failure's trace
+            # shows the objects where the robot thought they were. Sources a test registers itself
+            # (a detector, say) are not called every step; objects without a source stay at zero.
+            pos, quat = np.zeros((len(names), 3)), np.zeros((len(names), 4))
+            for i, n in enumerate(names):
+                if n in self._perceived:
+                    try:
+                        pos[i], quat[i] = self._perceived[n]()
+                    except Exception:  # noqa: BLE001 - not seen this step (a frame not yet published)
+                        pass
+            self.obj_pos.append(pos)
+            self.obj_quat.append(quat)
         else:
             self.obj_pos.append(np.zeros((len(names), 3)))
             self.obj_quat.append(np.zeros((len(names), 4)))

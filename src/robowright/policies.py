@@ -20,6 +20,8 @@ from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, _kinematics, home_q, release_re
 
 
 class ScriptedPickPlace:
+    privileged = True  # reads object poses: run_policy observes them for it
+
     def __init__(
         self,
         object: str = "cube",

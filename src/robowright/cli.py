@@ -71,6 +71,12 @@ def _info(args, rest):
         print(f"backend {name}: {v}")
     for ep in _entry_points(ROBOTS):
         print(f"robot plugin {ep.name}: {ep.value}")
+    from .plugins import POLICIES, project_policies
+
+    for ep in _entry_points(POLICIES):
+        print(f"policy loader {ep.name}: {ep.value}")
+    for name, (model, _) in project_policies().items():
+        print(f"project policy {name}: {model}")
     try:
         from . import launch
 
@@ -91,7 +97,14 @@ def _check(argv) -> int:
     p.add_argument("--robot", default="so101", help="robots (names, model files, 'all', 'legged'), comma-separated")
     p.add_argument("--backend", default="mujoco", help="engines, comma-separated")
     args, rest = p.parse_known_args(argv)
-    return int(pytest.main(["--pyargs", "robowright.contract", "--rw-robot", args.robot, "--rw-backend", args.backend, *rest]))
+    # A ROS 2 install's launch_testing plugins do not load under pytest 9 (they declare hook
+    # arguments pytest removed), which stops every run in a sourced ROS environment. The
+    # contract has no launch tests: leave them out.
+    from importlib.metadata import entry_points
+
+    skip = [f"-p no:{ep.name}" for ep in entry_points(group="pytest11") if ep.name in ("launch_testing", "launch_ros")]
+    skip = [a for s in skip for a in s.split(" ", 1)]
+    return int(pytest.main(["--pyargs", "robowright.contract", "--rw-robot", args.robot, "--rw-backend", args.backend, *skip, *rest]))
 
 
 def _robots(args, rest):

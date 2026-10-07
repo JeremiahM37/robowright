@@ -72,7 +72,25 @@ class ObjectHandle(Subject):
 
     @property
     def velocity(self) -> np.ndarray:
-        return self.world.backend.object_velocity(self.name)
+        """Linear then angular velocity: the engine's, or on hardware the change in perceived pose
+        since the last read at an earlier time (infinite until there are two)."""
+        w = self.world
+        if w.has_ground_truth:
+            return w.backend.object_velocity(self.name)
+        t = w.time
+        p, q = self.pose()
+        last = w._perceived.get(self.name)
+        if last is not None and t - last[0] < 1e-9:
+            return last[3]
+        if last is None:
+            v = np.full(6, np.inf)
+        else:
+            dt = t - last[0]
+            dq = q if np.dot(q, last[2]) >= 0 else -q  # the same turn, either sign
+            ang = 2 * np.arccos(np.clip(abs(float(np.dot(dq, last[2]))), 0.0, 1.0)) / dt
+            v = np.concatenate([(p - last[1]) / dt, [ang, 0.0, 0.0]])
+        w._perceived[self.name] = (t, p, q, v)
+        return v
 
     @property
     def top(self) -> float:

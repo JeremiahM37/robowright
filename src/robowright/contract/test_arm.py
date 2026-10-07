@@ -15,8 +15,17 @@ import numpy as np
 import pytest
 
 from robowright import expect
-from robowright.backends.base import CONTACTS, DETERMINISTIC, GROUND_TRUTH, RENDER, STATE
+from robowright.backends.base import CONTACTS, DETERMINISTIC, GROUND_TRUTH, RENDER, STATE, Backend
 from robowright.robot import DOWN
+
+
+def _sees(world, *objects):
+    """Skip unless the world knows where ``objects`` are: an engine's ground truth, or on
+    hardware a perception source for each (a ROS 2 robot's TF frames)."""
+    if GROUND_TRUTH not in world.backend.capabilities:
+        blind = [o for o in objects if o not in world.perception]
+        if blind:
+            pytest.skip(f"no ground truth, and no perception of {', '.join(blind)}")
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +46,8 @@ def test_reports_the_robot_joints(world):
 def test_kinematics_match_the_simulated_hand(world):
     """The simulator's hand pose agrees with robowright's kinematics for random joint angles."""
     r, b = world.robot, world.backend
+    if type(b).hand_pose is Backend.hand_pose:
+        pytest.skip("the backend does not report link poses")
     rng = np.random.default_rng(0)
     lo, hi = np.maximum(r.kin.lower, -2.5), np.minimum(r.kin.upper, 2.5)
     for _ in range(10):
@@ -90,8 +101,7 @@ def test_gripper_opens_and_closes(world):
 
 
 def test_objects_rest_on_the_floor(world):
-    if GROUND_TRUTH not in world.backend.capabilities:
-        pytest.skip("no ground truth")
+    _sees(world, "cube")
     world.wait(0.5)
     cube = world.scene["cube"]
     assert cube.position[2] == pytest.approx(0.0125, abs=0.002)
@@ -102,6 +112,7 @@ def test_objects_rest_on_the_floor(world):
 
 
 def test_grasp_is_seen_by_both_fingers(world):
+    _sees(world, "cube")
     cube = world.scene["cube"]
     world.robot.pick(cube)
     expect(world.robot.gripper).to_be_holding(cube)
@@ -109,6 +120,7 @@ def test_grasp_is_seen_by_both_fingers(world):
 
 
 def test_pick_and_place(world):
+    _sees(world, "cube", "bin")
     cube, bin_ = world.scene["cube"], world.scene["bin"]
     world.robot.pick(cube)
     world.robot.place(on=bin_)
@@ -128,6 +140,7 @@ def test_places_a_second_object_beside_the_first(rw_backend, rw_robot):
         robot=rw_robot,
     )
     with rw.launch(scene, backend=rw_backend, settings=rw.Settings(trace="off")) as w:
+        _sees(w, "cube", "cube2", "bin")
         w.robot.reset_to()
         for name in ("cube", "cube2"):
             w.robot.pick(w.scene[name])

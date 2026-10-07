@@ -26,7 +26,17 @@ and chosen with ``--rw-backend``::
     my_engine = "my_engine_robowright:MyEngineBackend"
 
 ``robowright check --backend my_engine --robot so101`` then runs the contract every engine
-meets (:mod:`robowright.contract`). See ``docs/extending.md``.
+meets (:mod:`robowright.contract`).
+
+**A loader of learned policies** (a ``robowright.policies`` entry point): a callable
+``loader(reference, device=None)`` returning a model, which ``LearnedPolicy("name:reference")``
+then runs. This is how a training framework's checkpoints plug in::
+
+    [project.entry-points."robowright.policies"]
+    my_framework = "my_framework_robowright:load"
+
+A project names its policies in ``robowright.toml`` too (``[policies.NAME]``, with the model
+and the :class:`~robowright.learned.LearnedPolicy` settings). See ``docs/extending.md``.
 """
 
 from __future__ import annotations
@@ -39,6 +49,7 @@ from pathlib import Path
 
 BACKENDS = "robowright.backends"
 ROBOTS = "robowright.robots"
+POLICIES = "robowright.policies"
 CONFIG = "robowright.toml"
 
 
@@ -169,6 +180,51 @@ def load_project_robot(name: str) -> bool:
     file, overrides = entry
     load(file, name, **overrides)
     return True
+
+
+# --- learned policies ---------------------------------------------------------------------------
+def policy_loader_names() -> list[str]:
+    """Loaders of learned policies installed as plugins."""
+    return [ep.name for ep in _entry_points(POLICIES)]
+
+
+def load_policy_model(loader: str, reference: str, device: str | None = None):
+    """The model the ``loader`` plugin loads for ``reference``."""
+    for ep in _entry_points(POLICIES):
+        if ep.name == loader:
+            try:
+                fn = ep.load()
+            except Exception as e:  # noqa: BLE001
+                raise ImportError(f"the robowright policy loader {loader!r} ({ep.value}) failed to load: {e}") from e
+            return fn(reference, device=device)
+    raise ValueError(f"no policy loader {loader!r}; installed: {', '.join(policy_loader_names()) or 'none'}")
+
+
+def project_policies(start: str | Path | None = None) -> dict[str, tuple[str, dict]]:
+    """``{name: (model, LearnedPolicy settings)}`` from the project's ``[policies.NAME]`` tables,
+    with a model file (and a ``normalize`` statistics file) relative to the settings made absolute."""
+    found = find_config(start)
+    if not found:
+        return {}
+    path, table = found
+    out = {}
+    for name, entry in (table.get("policies") or {}).items():
+        entry = {"model": entry} if isinstance(entry, str) else dict(entry)
+        if "model" not in entry:
+            raise ValueError(f'{path}: [policies.{name}] needs a model = "file, module:name or loader:reference"')
+        model = _relative(path, str(entry.pop("model")))
+        if isinstance(entry.get("normalize"), str):
+            entry["normalize"] = _relative(path, entry["normalize"])
+        out[name] = (model, {k: _tuples(v) for k, v in entry.items()})
+    return out
+
+
+def _relative(config: Path, ref: str) -> str:
+    """``ref`` made absolute against the settings file when it names a file there."""
+    p = Path(ref).expanduser()
+    if not p.is_absolute() and (config.parent / p).exists():
+        return str((config.parent / p).resolve())
+    return ref
 
 
 def add_project_robot(file: str, name: str, config: Path | None = None) -> Path:

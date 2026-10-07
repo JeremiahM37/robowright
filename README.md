@@ -37,7 +37,8 @@ itself. See [Any robot, from its model file](#any-robot-from-its-model-file).
 `python scripts/demo_video.py` records real runs (every robot, every engine, a side grasp, a
 failure) and cuts them into a one-minute 1080p demo video.
 
-> **Status: pre-alpha.** Simulation only. See [Limitations](#limitations).
+> **Status: pre-alpha.** Simulation, and robots behind ROS 2 (tested against `ros2_control`'s
+> own controllers, not yet on a physical robot). See [Limitations](#limitations).
 
 ## Why
 
@@ -381,6 +382,46 @@ rollout = robot.run_policy(my_policy, until=done, timeout=15, cameras=("front",)
 assert rollout.success
 ```
 
+### Learned policies, whatever trained them
+
+A trained model speaks its own conventions: its observation keys, image layout, joint order
+and units, gripper range, normalisation and chunk length. `LearnedPolicy` translates, so any
+checkpoint runs in `run_policy` on every robot and engine:
+
+```python
+from robowright.learned import LearnedPolicy
+
+policy = LearnedPolicy(
+    "checkpoints/pick.onnx",  # or .pt2 / TorchScript, a torch.nn.Module, any callable,
+    images=["front"],  # "module:name", or "loader:reference" from a plugin
+    units="deg",  # joints in degrees, as the dataset recorded them
+    gripper=(0, 100),  # the model's closed and open values
+    normalize="checkpoints/stats.json",
+)
+rollout = robot.run_policy(policy, task="put the cube in the bin", until=done)
+```
+
+The model can be a PyTorch module, anything with `select_action(batch)` (the convention
+LeRobot and others follow), an ONNX or `torch.export` file, or a model a framework's
+`robowright.policies` plugin loads from its own checkpoint format (`"name:reference"`).
+robowright depends on none of them. A project can name its policies in `robowright.toml`
+(`[policies.NAME]`), and a generated regression test recreates the policy by that name.
+
+[`examples/test_learned_policy.py`](examples/test_learned_policy.py) tests a real one: a small
+network trained by behaviour cloning ([`scripts/train_pick_policy.py`](scripts/train_pick_policy.py)),
+exported to ONNX, in degrees and with its gripper from 0 to 100. Measured over 20 to 40 seeds
+per engine:
+
+| trained on | MuJoCo | PyBullet | Drake | Genesis | Isaac Sim |
+|---|---|---|---|---|---|
+| MuJoCo only | 32/40 | **2/40** | | | |
+| MuJoCo and PyBullet (the example) | 31/40 | 37/40 | 17/20 | 12/20 | **8/20** |
+
+Trained on one engine's demonstrations, it failed on the other: PyBullet's servos trail their
+targets further while moving (7.5 mrad against 2.5 at the 90th percentile), and the policy had
+never seen those states. Running every test on several engines is how that shows up before a
+robot does. Isaac Sim, which it never saw, is a registered known divergence (`conftest.py`).
+
 ### Statistics instead of flakes
 
 ```python
@@ -538,6 +579,30 @@ so a spring the gripper never moves (Stretch's rubber fingertip pads, which give
 where they touch) is welded on the other engines: held by soft constraints or motors in its
 place, the pads folded under the squeeze. Each backend has to pass the same contract
 (`robowright check`, the tests in `robowright.contract`) on every robot before it ships.
+
+### Robots behind ROS 2
+
+`--rw-backend ros2` runs the same tests on any robot with a ROS 2 driver, real or simulated
+(Gazebo, Isaac Sim's ROS bridge), through the standard `ros2_control` interfaces:
+
+```toml
+# robowright.toml
+[ros2]
+arm = { controller = "forward_position_controller", interface = "position" }   # or a joint_trajectory_controller
+gripper = { controller = "gripper_controller", interface = "action" }          # GripperCommand, or with the arm
+joints = { shoulder_pan = "joint1" }      # where the driver's names differ
+objects = { cube = "cube", bin = "bin" }  # TF frames: what object assertions read
+cameras = { front = "/camera/image_raw" } # image topics: what policies see
+```
+
+Joints come from `/joint_states`, targets go to the controllers each control step on the ROS
+clock, objects come from TF, and grasps are judged from the jaws (told to close, stopped on
+something, the object in the hand), since a real gripper has no contact sensor. It claims none
+of the simulator capabilities, so the contract skips ground truth, contacts and state restore
+and runs the rest. Tested on ROS 2 Jazzy against `ros2_control`'s own controllers on mock
+hardware (forward position, joint trajectory, gripper action) and against a simulated arm
+behind the same topics, where the pick-and-place test above, the learned policy and the
+contract pass unchanged (`tests/test_ros2.py`).
 
 A test that passes on one engine and fails on another usually means the behaviour depends
 on contact details that no engine models faithfully. Those cases are kept visible, not
@@ -769,7 +834,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 - **Robot packs:** a package with a `robowright.robots` entry point ships robots by name.
 - **Engines and hardware:** a package with a `robowright.backends` entry point adds a
   `Backend` (six required methods; the rest is declared as capabilities, and the contract
-  skips what a backend does not claim). That is how a hardware backend fits.
+  skips what a backend does not claim). Robots with a ROS 2 driver need none: `ros2` is built in.
+- **Learned policies:** a package with a `robowright.policies` entry point loads a framework's
+  checkpoints for `LearnedPolicy("name:reference")`; a project names its own in `robowright.toml`.
 - **The contract ships with robowright** (`robowright.contract`), so a robot or engine from
   outside is held to the same tests as the built-in ones.
 
@@ -782,7 +849,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
                World.step()  ── one 20 ms control period ──► Recorder ──► trace.zip
                    │                                             │
                    ▼                                             ├─► viewer (HTML)
-     Backend: MuJoCo | PyBullet | Drake | Genesis | (hardware)   ├─► replay
+     Backend: MuJoCo | PyBullet | Drake | Genesis | Isaac | ROS 2  ├─► replay
        physics only: joints, servo targets, contacts,            └─► codegen
        render, state save/restore
                    ▲
@@ -804,9 +871,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 
 ## Limitations
 
-- **Simulation only:** no hardware backend yet. The backend interface is written with one
-  in mind (capabilities, perception hooks, `Settings(realtime=True)`), but nothing has run
-  on a real robot.
+- **No physical robot yet:** the ROS 2 backend has run against `ros2_control`'s own controllers
+  on mock hardware and against a simulated arm behind ROS 2 topics, on Jazzy only. Nothing has
+  yet run on a real arm, where timing, a driver's quirks and perception noise will find what
+  those could not.
 - **Grasps:** from above, from the side, or tilted between the two, the fingers closing level
   (no grasp that rolls the hand); plain moves interpolate joints without checking for
   collisions (pass `plan=True`). A mobile base drives only where the arm cannot reach
@@ -817,22 +885,18 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   publishes one (Franka Hand, xArm Gripper, PiPER; the Robotiq 2F-85's model already squeezes
   inside its 20–235 N range). The Trossen, I2RT, ARX and SO-101 grippers squeeze as modelled,
   which is 0.9–2.2 N on the slide grippers.
-- **Privileged policies:** the bundled `ScriptedPickPlace` reads ground-truth object poses.
-  Camera-based learned policies plug into the same `run_policy`, but no LeRobot adapter
-  ships yet.
+- **Example policies read object poses:** the scripted policy and the trained example both
+  take object poses as input (ground truth, or TF behind ROS 2). Camera inputs are translated
+  and tested (`tests/test_learned.py`), but no camera-trained example ships.
 
 ## Roadmap
 
-Each of these is a plugin on the extension points above, not a change to the core:
+Each of these builds on the extension points above, not on any one robot or framework:
 
-1. **Hardware, starting with the SO-101:** a LeRobot backend (joints in, targets out, real
-   time, no simulator capabilities), with object poses from a camera through
-   `world.perception`. The same test then runs in simulation and on the arm.
-2. **ROS 2 backend:** topics and actions in, the same `expect` out, so any robot with a
-   `ros2_control` driver can be tested without a simulator.
-3. **LeRobot policy adapter** (`lerobot/smolvla_*`, ACT) for `run_policy`, so learned
-   policies are tested like scripted ones.
-4. **Locomotion policies** as first-class fixtures (walk a Go2 or G1 one metre, assert it
+1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
+   from simulation as known divergences, as the engines' are.
+2. **A camera-trained example policy**, tested on every engine and behind ROS 2.
+3. **Locomotion policies** as first-class fixtures (walk a Go2 or G1 one metre, assert it
    stays upright).
 
 ## License

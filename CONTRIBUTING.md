@@ -5,6 +5,7 @@ uv venv --python 3.12 .venv && uv pip install -e ".[dev,drake]"
 pytest tests examples -n auto --dist loadgroup --rw-backend mujoco,pybullet   # the core, on the SO-101
 pytest tests/test_conformance.py tests/test_legged.py --rw-robot all,legged --rw-backend drake -n auto --dist loadgroup
 ruff check . && ruff format --check .
+scripts/ros2_env.sh create && scripts/ros2_env.sh pytest tests/test_ros2.py -n 3   # the ROS 2 backend, against real ROS 2
 python bench/run.py --quick      # framework benchmarks; regenerates BENCHMARKS.md
 python bench/matrix.py --jobs 4  # robot x engine matrix; regenerates MATRIX.md
 ```
@@ -28,6 +29,15 @@ gripper's maker publishes a grip force, set `grip_force` (newtons per jaw) and
 `grip_force_source` (the datasheet URL): the gripper is then driven at that force on every
 engine, and `test_grip_force_matches_the_datasheet` checks it. Don't estimate one from a
 servo's torque.
+
+**Changing the ROS 2 backend:** `tests/test_ros2.py` runs it against `ros2_control`'s own
+controllers on mock hardware and against a simulated arm behind the same topics
+(`tests/ros2_rig.py`); outside a ROS 2 environment those tests are skipped, so run them
+through `scripts/ros2_env.sh`.
+
+**Changing `LearnedPolicy`:** `tests/test_learned.py` drives a pick through a model with
+conventions unlike robowright's (reversed joints, degrees, a 0..100 gripper, normalised
+inputs and outputs). `scripts/train_pick_policy.py` retrains the example policy.
 
 **Adding an engine:** implement `backends/base.py`'s `Backend` (physics only) and make
 the contract (`src/robowright/contract/`, collected by `tests/test_conformance.py` and

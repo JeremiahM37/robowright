@@ -735,7 +735,8 @@ class Kinematics:
         lim = m.jnt_limited[jid].astype(bool)
         self.lower = np.where(lim, m.jnt_range[jid, 0], -2 * np.pi)
         self.upper = np.where(lim, m.jnt_range[jid, 1], 2 * np.pi)
-        self._turns = ~lim & (m.jnt_type[jid] == int(mujoco.mjtJoint.mjJNT_HINGE))  # continuous joints
+        self.revolute = m.jnt_type[jid] == int(mujoco.mjtJoint.mjJNT_HINGE)  # else prismatic (metres)
+        self._turns = ~lim & self.revolute  # continuous joints
         # A position servo cannot be told to go past its control range, even where the joint could.
         for a in range(m.nu):
             if m.actuator_trntype[a] == int(mujoco.mjtTrn.mjTRN_JOINT) and m.actuator_trnid[a, 0] in jid and m.actuator_ctrllimited[a]:
