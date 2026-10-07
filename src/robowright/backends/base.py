@@ -223,8 +223,14 @@ def engine(name: str) -> type[Backend]:
         mod = _MODULES.get(name)
         if mod:
             importlib.import_module(f"robowright.backends.{mod}")
+        else:
+            from ..plugins import load_backend
+
+            load_backend(name)  # an engine another package provides (see robowright.plugins)
     if name not in _REGISTRY:
-        known = sorted(set(_MODULES) | set(_REGISTRY))
+        from ..plugins import backend_names
+
+        known = sorted(set(_MODULES) | set(_REGISTRY) | set(backend_names()))
         raise ValueError(f"unknown backend {name!r}; known backends: {', '.join(known)} (installed: {', '.join(available()) or 'none'})")
     return _REGISTRY[name]
 
@@ -345,5 +351,8 @@ _REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "
 def available() -> list[str]:
     import importlib.util
 
+    from ..plugins import backend_names
+
     # find_spec, not import: importing genesis or drake takes seconds.
-    return [name for name, mod in _REQUIRES.items() if importlib.util.find_spec(mod) is not None]
+    built_in = [name for name, mod in _REQUIRES.items() if importlib.util.find_spec(mod) is not None]
+    return built_in + [n for n in backend_names() if n not in built_in]

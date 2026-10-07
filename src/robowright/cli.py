@@ -54,15 +54,23 @@ def _info(args, rest):
 
     print(f"robowright {__version__}")
     print(f"python {platform.python_version()}, numpy {numpy.__version__}")
+    from .plugins import BACKENDS, ROBOTS, _entry_points
+
+    plugins = {ep.name: ep.value for ep in _entry_points(BACKENDS)}
     for name in available():
         from importlib.metadata import PackageNotFoundError, version
 
+        if name not in _REQUIRES:
+            print(f"backend {name}: plugin ({plugins[name]})")
+            continue
         dist = {"genesis": "genesis-world", "drake": "drake"}.get(name, _REQUIRES[name])
         try:
             v = version(dist)
         except PackageNotFoundError:
             v = "installed"
         print(f"backend {name}: {v}")
+    for ep in _entry_points(ROBOTS):
+        print(f"robot plugin {ep.name}: {ep.value}")
     try:
         from . import launch
 
@@ -75,9 +83,22 @@ def _info(args, rest):
     return 0
 
 
+def _check(argv) -> int:
+    """Run the contract (robowright.contract) on robots and engines; other arguments go to pytest."""
+    import pytest
+
+    p = argparse.ArgumentParser(prog="robowright check", description=_check.__doc__)
+    p.add_argument("--robot", default="so101", help="robots (names, model files, 'all', 'legged'), comma-separated")
+    p.add_argument("--backend", default="mujoco", help="engines, comma-separated")
+    args, rest = p.parse_known_args(argv)
+    return int(pytest.main(["--pyargs", "robowright.contract", "--rw-robot", args.robot, "--rw-backend", args.backend, *rest]))
+
+
 def _robots(args, rest):
     from . import robots
 
+    if args.action == "add":
+        return _add(args)
     if args.inspect:
         return _inspect(args.inspect)
     rows = []
@@ -95,10 +116,41 @@ def _robots(args, rest):
     widths = [max(len(x) for x in col) for col in zip(head, *rows)]
     for r in (head, *rows):
         print("  ".join(x.ljust(w) for x, w in zip(r, widths)).rstrip())
+    from .plugins import find_config, project_robots
+
+    mine = project_robots()
+    if mine and not args.family:
+        print(f"\nthis project's robots ({find_config()[0]}), detected from their files on first use:")
+        for name, (file, overrides) in mine.items():
+            print(f"  {name}  {file}" + (f"  (+ {', '.join(overrides)})" if overrides else ""))
     return 0
 
 
-def _inspect(path) -> int:
+def _add(args) -> int:
+    """Check that robowright can drive the robot in a model file, then name it in robowright.toml."""
+    from .plugins import add_project_robot
+
+    if not args.file or not args.name:
+        print("usage: robowright robots add FILE --name NAME", file=sys.stderr)
+        return 2
+    from .plugins import project_robots
+
+    if args.name in project_robots():
+        print(f"robowright: this project already names a robot {args.name!r}", file=sys.stderr)
+        return 1
+    if _inspect(args.file, hint=False):
+        return 1
+    try:
+        target = add_project_robot(args.file, args.name)
+    except ValueError as e:
+        print(f"robowright: {e}", file=sys.stderr)
+        return 1
+    print(f"\nadded {args.name!r} to {target}; run its tests with:  pytest --rw-robot {args.name}")
+    print(f"or the contract every robot meets:  robowright check --robot {args.name}")
+    return 0
+
+
+def _inspect(path, hint: bool = True) -> int:
     """What robowright works out about the robot in a model file, and why."""
     import warnings
 
@@ -115,8 +167,10 @@ def _inspect(path) -> int:
     print(f"{path}: {m.family}, {m.n_arm} joints, named {m.name!r}")
     for note in built.notes:
         print(f"  {note}")
-    print(f"\nrun its tests with:  pytest --rw-robot {path}")
-    print("override any of the above with robowright.robots.detect.load(path, <field>=...) in a conftest.py")
+    if hint:
+        print(f"\nrun its tests with:  pytest --rw-robot {path}")
+        print(f"or give it a name:  robowright robots add {path} --name NAME")
+        print("override any of the above in robowright.toml: [robots.NAME] file = ..., <field> = ...")
     return 0
 
 
@@ -176,6 +230,10 @@ def main(argv=None) -> int:
     rb.add_argument("--family", choices=["arm", "legged"])
     rb.add_argument("--markdown", action="store_true")
     rb.add_argument("--inspect", metavar="FILE", help="show what robowright makes of the robot in a model file (MJCF or URDF), and why")
+    rb.add_argument("action", nargs="?", choices=["add"], help="add: name the robot in FILE in this project's robowright.toml")
+    rb.add_argument("file", nargs="?", help="the model file to add (MJCF, URDF or xacro)")
+    rb.add_argument("--name", help="the name to give it")
+    sub.add_parser("check", help="run the contract every robot and engine meets (robowright check --robot R --backend B)", add_help=False)
     rd = sub.add_parser("render", help="render a trace to video (mp4, or gif) from its recorded state")
     rd.add_argument("trace")
     rd.add_argument("-o", "--output", help="output file (.mp4 or .gif); default: next to the trace")
@@ -189,6 +247,8 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
         return _test(None, argv[1:])
+    if argv[:1] == ["check"]:
+        return _check(argv[1:])
     args = p.parse_args(argv)
     commands = {
         "show-trace": _show,

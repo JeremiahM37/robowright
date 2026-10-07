@@ -26,15 +26,19 @@ def get(name: str | RobotModel) -> RobotModel:
     """A robot by name, or from a model file (``path/to/robot.xml``), detected on first use."""
     if isinstance(name, RobotModel):
         return name
-    try:
+    if name in REGISTRY:
         return REGISTRY[name]
-    except KeyError:
-        pass
     if is_file(name):
         from .detect import load
 
         return load(name)
-    raise ValueError(f"unknown robot {name!r}; available: {', '.join(sorted(REGISTRY))}, or the path of a robot's MJCF file")
+    # Robots from outside robowright: the project's robowright.toml, then installed plugins.
+    from .. import plugins
+
+    if plugins.load_project_robot(name) or name in plugins.plugin_robots():
+        return REGISTRY[name]
+    known = sorted({*names(), *plugins.project_robots()})
+    raise ValueError(f"unknown robot {name!r}; available: {', '.join(known)}, or the path of a robot's model file (MJCF, URDF or xacro)")
 
 
 def load(path, name: str | None = None, **overrides) -> RobotModel:
@@ -52,7 +56,11 @@ def is_file(name: str) -> bool:
 
 
 def names(family: str | None = None) -> list[str]:
-    """The built-in robots (and any registered in code); robots loaded from a file are not listed."""
+    """The built-in robots, and those registered in code or by plugins; robots loaded from a
+    file (a path, or a project's robowright.toml) are not listed."""
+    from ..plugins import plugin_robots
+
+    plugin_robots()
     return [n for n, m in REGISTRY.items() if (family is None or m.family == family) and "file" not in m.extra]
 
 

@@ -16,6 +16,9 @@ memory allow for the engines selected (a Genesis worker peaks near 4.6 GB, a MuJ
 loadgroup` keeps each robot's tests in one worker, which reuses its scene and models instead of
 loading them per test, and starts the longest tests (the trials ones) first.
 
+Robots and engines can also live outside this repository, as plugins: see
+[docs/extending.md](docs/extending.md). What follows is for adding one to robowright itself.
+
 **Adding a robot:** register a `RobotModel` in `src/robowright/robots/__init__.py`
 (MJCF path, arm joints, hand, finger bodies, gripper actuator, base position), then run
 the contract on every engine: `pytest tests/test_conformance.py --rw-robot <name>
@@ -27,7 +30,8 @@ engine, and `test_grip_force_matches_the_datasheet` checks it. Don't estimate on
 servo's torque.
 
 **Adding an engine:** implement `backends/base.py`'s `Backend` (physics only) and make
-`tests/test_conformance.py` and `tests/test_legged.py` pass for every robot.
+the contract (`src/robowright/contract/`, collected by `tests/test_conformance.py` and
+`tests/test_legged.py`) pass for every robot.
 
 Ground rules:
 

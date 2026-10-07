@@ -39,6 +39,9 @@ from .scene import SceneSpec, default_camera, default_scene
 from .stats import TrialReport
 from .world import Settings, World, _safe
 
+# The contract ships in the package (robowright check runs it): its asserts report their values too.
+pytest.register_assert_rewrite("robowright.contract")
+
 _TRACES = pytest.StashKey[list]()
 _REPORTS = pytest.StashKey[dict]()
 

@@ -32,6 +32,8 @@ xacro: `--rw-robot path/to/arm.urdf`), with no code: robowright works out which 
 arm, which parts are the fingers, how the gripper opens and where to mount it, from the model
 itself. See [Any robot, from its model file](#any-robot-from-its-model-file).
 
+<p align="center"><img src="docs/robots_engines.gif" width="640" alt="Six arms running the same pick-and-place test, then a Franka Panda running it on MuJoCo, PyBullet, Drake, Genesis and Isaac Sim"></p>
+
 `python scripts/demo_video.py` records real runs (every robot, every engine, a side grasp, a
 failure) and cuts them into a one-minute 1080p demo video.
 
@@ -182,15 +184,20 @@ $ pytest --rw-robot "ur_description/urdf/ur.urdf.xacro?ur_type=ur5e&name=ur5e"
 COLLADA visuals are left out and concave jaws stay hulls, both with a warning, and a xacro file
 is refused with how to expand it by hand.
 
-Each decision is listed by `--inspect`. Any of them can be overridden in a `conftest.py`, and
-detection works from what is given (a model whose gripper range is a placeholder full turn,
-say, is read once `gripper_open` and `gripper_closed` say where it opens):
+Each decision is listed by `--inspect`. `robowright robots add my_arm.xml --name my_arm`
+gives the robot a name in the project's `robowright.toml`, where any decision can be
+overridden, and detection works from what is given (a model whose gripper range is a
+placeholder full turn, say, is read once `gripper_open` and `gripper_closed` say where it
+opens):
 
-```python
-from robowright import robots
-
-robots.load("my_arm.xml", grip_force=40.0, home=(0.2, 0.0, 0.12))  # then: pytest --rw-robot my_arm
+```toml
+[robots.my_arm]                      # then: pytest --rw-robot my_arm
+file = "my_arm.xml"
+grip_force = 40.0
+home = [0.2, 0.0, 0.12]
 ```
+
+In code, `robots.load("my_arm.xml", grip_force=40.0, home=(0.2, 0.0, 0.12))` does the same.
 
 **Measured:** re-detected from their bare model files, all 19 built-in robots come out as their
 hand-written entries say. On robots robowright had never seen, the arm contract and examples
@@ -530,7 +537,7 @@ calibration, joints that move together, excluded collision pairs). URDF has no j
 so a spring the gripper never moves (Stretch's rubber fingertip pads, which give a little
 where they touch) is welded on the other engines: held by soft constraints or motors in its
 place, the pads folded under the squeeze. Each backend has to pass the same contract
-(`tests/test_conformance.py`, `tests/test_legged.py`) on every robot before it ships.
+(`robowright check`, the tests in `robowright.contract`) on every robot before it ships.
 
 A test that passes on one engine and fails on another usually means the behaviour depends
 on contact details that no engine models faithfully. Those cases are kept visible, not
@@ -746,6 +753,26 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 - **Invariants:** two `expect(...).always` invariants add 14 µs to each 33 µs control step; an IK solve costs 0.35 ms.
 - **Fault curves:** the reference policy still passes 20/20 with 0.06 rad of encoder noise, 13/20 at 0.09 rad and 0/20 at 0.12 rad; with the shoulder servo's gain cut to 2% it passes 13/20, at 0.5% 3/20. Those are the curves `@pytest.mark.trials` exists to guard.
 
+## Extending robowright
+
+Robots and engines plug in from outside robowright, with no fork
+([docs/extending.md](docs/extending.md)):
+
+```bash
+robowright robots add models/my_arm.urdf --name my_arm   # names it in robowright.toml
+pytest --rw-robot my_arm                                  # every robot test, on your robot
+robowright check --robot my_arm --backend mujoco,drake    # the contract every robot meets
+```
+
+- **Your robots, with no code:** a `robowright.toml` (or `[tool.robowright]` in
+  `pyproject.toml`) names model files, and sets any field detection gets wrong.
+- **Robot packs:** a package with a `robowright.robots` entry point ships robots by name.
+- **Engines and hardware:** a package with a `robowright.backends` entry point adds a
+  `Backend` (six required methods; the rest is declared as capabilities, and the contract
+  skips what a backend does not claim). That is how a hardware backend fits.
+- **The contract ships with robowright** (`robowright.contract`), so a robot or engine from
+  outside is held to the same tests as the built-in ones.
+
 ## How it works
 
 ```
@@ -796,11 +823,16 @@ On the default robot (SO-101), AMD Ryzen AI Max+ 395 (32 threads):
 
 ## Roadmap
 
-1. LeRobot policy adapter (`lerobot/smolvla_*`, ACT) and LeRobot hardware backend for a
-   real SO-101.
-2. ROS 2 backend (topics/actions in, the same `expect` out), so existing robots can be
-   tested without a simulator.
-3. Locomotion policies as first-class fixtures (walk a Go2 or G1 one metre, assert it
+Each of these is a plugin on the extension points above, not a change to the core:
+
+1. **Hardware, starting with the SO-101:** a LeRobot backend (joints in, targets out, real
+   time, no simulator capabilities), with object poses from a camera through
+   `world.perception`. The same test then runs in simulation and on the arm.
+2. **ROS 2 backend:** topics and actions in, the same `expect` out, so any robot with a
+   `ros2_control` driver can be tested without a simulator.
+3. **LeRobot policy adapter** (`lerobot/smolvla_*`, ACT) for `run_policy`, so learned
+   policies are tested like scripted ones.
+4. **Locomotion policies** as first-class fixtures (walk a Go2 or G1 one metre, assert it
    stays upright).
 
 ## License
