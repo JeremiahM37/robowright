@@ -1,15 +1,15 @@
 """A trained model, tested like any other policy.
 
-``policies/so101_pick.onnx`` is a small network trained by behaviour cloning
+``policies/so101_pick.onnx`` is a small network trained by imitation
 (``scripts/train_pick_policy.py``). It speaks its own conventions, as any checkpoint does:
 joints in degrees, the gripper from 0 to 100, normalised inputs and outputs, 10-step action
 chunks. ``LearnedPolicy`` translates, and the test is the same as for the scripted policy.
 
-A learned policy succeeds some of the time, so the test runs it 20 times and states the rate
-it must reach. Measured, it succeeded on 31 of 40 seeds on MuJoCo and 37 of 40 on PyBullet
-(the two it was trained on), 17 of 20 on Drake, 12 of 20 on Genesis and 8 of 20 on Isaac Sim
-(a known divergence, in conftest.py). Trained on MuJoCo alone it succeeded on 2 of 40 PyBullet
-seeds: the kind of gap running every engine finds.
+A learned policy that succeeds most of the time is a flaky test, so this one runs 20 seeds and
+requires every one. It has to earn that: cloned from demonstrations it placed the cube 31 of 40
+times on MuJoCo and 8 of 20 on Isaac Sim. Trained with DAgger on four engines (see the
+script), it succeeded on 140 of 140 seeds on MuJoCo, PyBullet, Drake and Genesis, and 40 of 40
+on Isaac Sim, which it never saw.
 """
 
 from pathlib import Path
@@ -27,7 +27,7 @@ HERE = Path(__file__).parent / "policies"
 def so101_pick() -> LearnedPolicy:
     return LearnedPolicy(
         str(HERE / "so101_pick.onnx"),
-        state=("qpos", "objects.cube", "objects.cube.quat", "objects.bin"),  # what it was trained on
+        state=("qpos", "target", "objects.cube", "objects.cube.quat", "objects.bin"),  # what it was trained on
         units="deg",
         gripper=(0, 100),
         normalize=str(HERE / "so101_pick.json"),
@@ -35,7 +35,7 @@ def so101_pick() -> LearnedPolicy:
 
 
 @pytest.mark.robots("so101")  # trained on the SO-101 only
-@pytest.mark.trials(20, min_success=0.5)
+@pytest.mark.trials(20)
 def test_learned_policy_puts_the_cube_in_the_bin(world, robot, scene):
     world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
     done = condition(scene["cube"], "to_be_inside", scene["bin"])

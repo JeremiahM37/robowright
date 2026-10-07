@@ -705,12 +705,13 @@ class Robot:
         return best
 
     def observe(self, cameras=(), privileged: bool = False, task: str | None = None, image_size: tuple | None = None) -> dict:
-        """What a policy sees: joint readings, optional camera images, optional object poses.
+        """What a policy sees: joint readings, the joint targets last commanded, optional camera
+        images, optional object poses.
 
         Object poses are the engine's ground truth, or on hardware what ``world.perception``
         reports (objects it has no source for are left out)."""
         w = self.world
-        obs = {"qpos": self.qpos(), "t": w.time, "task": task, "robot": self.model.name}
+        obs = {"qpos": self.qpos(), "target": self._target.copy(), "t": w.time, "task": task, "robot": self.model.name}
         if cameras:
             size = tuple(image_size or w.settings.image_size)
             obs["images"] = {c: w.faults.filter_image(w.backend.render(c, *size)) for c in cameras}

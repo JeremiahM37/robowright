@@ -41,7 +41,9 @@ class LearnedPolicy:
     Observations, in the batch handed to the model:
 
     * ``state``: what goes into the state vector, in order. ``"qpos"`` is the joints (in the
-      model's order, units and gripper range below); ``"tcp"`` is the tool position;
+      model's order, units and gripper range below); ``"target"`` the joint targets last
+      commanded, in the same conventions (what a robot knows it sent: it tells a model where a
+      motion it started has got to while the joints read still); ``"tcp"`` is the tool position;
       ``"objects.NAME"`` is an object's position and ``"objects.NAME.quat"`` its (w, x, y, z)
       orientation (both make the policy privileged: object poses come from the engine, or on
       hardware from ``world.perception``). Passed as ``state_key``; ``None`` passes no state.
@@ -122,8 +124,8 @@ class LearnedPolicy:
         self._call = getattr(self.model, "select_action", None) or self.model
         self._bound = None
         for f in self.state:
-            if f not in ("qpos", "tcp") and not (f.startswith("objects.") and f.count(".") in (1, 2)):
-                raise ValueError(f'state feature {f!r}: use "qpos", "tcp", "objects.NAME" or "objects.NAME.quat"')
+            if f not in ("qpos", "target", "tcp") and not (f.startswith("objects.") and f.count(".") in (1, 2)):
+                raise ValueError(f'state feature {f!r}: use "qpos", "target", "tcp", "objects.NAME" or "objects.NAME.quat"')
 
     # --- what run_policy asks of a policy ---------------------------------------------------
     @property
@@ -222,8 +224,8 @@ class LearnedPolicy:
         if self.state_key is not None and self.state:
             parts = []
             for f in self.state:
-                if f == "qpos":
-                    parts.append(self.to_model(obs["qpos"]))
+                if f in ("qpos", "target"):
+                    parts.append(self.to_model(obs[f]))
                 elif f == "tcp":
                     parts.append(np.asarray(self._need(obs, "tcp"), float))
                 else:

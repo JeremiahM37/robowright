@@ -209,7 +209,8 @@ and a simulated arm behind the same topics.
 
 [`LearnedPolicy`](../src/robowright/learned.py) runs any trained model in `run_policy`. Its
 settings say how the model was trained, and it translates both ways: the observation
-(`state` features, `images` and their layout, the task) into the model's batch, and the
+(`state` features: the joint readings, the joint targets last commanded, the tool position,
+object poses; `images` and their layout; the task) into the model's batch, and the
 model's action (one, or a chunk) back into joint targets, through the model's joint order
 (`joints`), `units`, `gripper` range and `normalize` statistics.
 

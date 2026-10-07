@@ -54,6 +54,8 @@ class ScriptedPickPlace:
         self.wait = 0
         self.cmd = None
         self.goal = None
+        self.readings = []
+        self.arrived = None
 
     def _bind(self, robot: str):
         if self.robot != robot:
@@ -103,11 +105,23 @@ class ScriptedPickPlace:
             goal_p, yaw, grip, settle = plan[self.phase]
             self.goal = (np.concatenate([self._ik(goal_p, self.cmd[:n], yaw), [grip]]), goal_p, settle)
         goal, goal_p, settle = self.goal
-        tcp = self.kin.tcp(q[:n])
-        if np.allclose(self.cmd, goal) and np.linalg.norm(tcp - goal_p) < self.tolerance:
+        # Arrived when the encoders put the tool at the goal, or the mean of the readings taken
+        # while holding it (the last 20) does: noisy encoders (0.02 rad on a 1.3 m UR10e is
+        # 2.6 cm at the tool) rarely give one reading within tolerance, and it waited there
+        # until it timed out.
+        held = np.allclose(self.cmd, goal)
+        self.readings = (self.readings + [q[:n]])[-20:] if held else []
+        off = np.linalg.norm(self.kin.tcp(q[:n]) - goal_p)
+        if held and len(self.readings) > 1:
+            off = min(off, np.linalg.norm(self.kin.tcp(np.mean(self.readings, axis=0)) - goal_p))
+        # A step that only works the gripper leaves the arm where the last one saw it arrive.
+        # Checking again under noisy encoders kept the jaws squeezing, and a cube turns in the
+        # Panda's fingers in PyBullet the longer they squeeze (0.07 rad after 1.2 s, 0.5 after 1.8).
+        stays = self.arrived is not None and np.linalg.norm(goal_p - self.arrived) < 0.002
+        if held and (off < self.tolerance or stays):
             self.wait += self.chunk
             if self.wait >= settle:
-                self.phase, self.wait, self.goal = self.phase + 1, 0, None
+                self.phase, self.wait, self.goal, self.arrived = self.phase + 1, 0, None, goal_p
             return np.tile(self.cmd, (self.chunk, 1))
         # Stream a chunk that moves the command toward the goal at bounded joint and tool speeds.
         step = self.speed * 0.02

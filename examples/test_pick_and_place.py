@@ -38,7 +38,7 @@ def test_selectors(scene):
     assert [h.name for h in scene.all(kind="bin")] == ["bin"]
 
 
-@pytest.mark.trials(20, min_success=0.9)
+@pytest.mark.trials(20)
 def test_policy_with_randomized_cube(world, robot, scene):
     world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
     done = condition(scene["cube"], "to_be_inside", scene["bin"])
@@ -47,7 +47,7 @@ def test_policy_with_randomized_cube(world, robot, scene):
     expect(scene["cube"]).to_be_at_rest()
 
 
-@pytest.mark.trials(10, min_success=0.7)
+@pytest.mark.trials(20)
 def test_policy_with_sensor_noise_and_latency(world, robot, scene):
     world.faults.jitter("cube", xy_std=0.02)
     world.faults.joint_noise(std=0.02)

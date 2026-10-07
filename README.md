@@ -408,24 +408,40 @@ robowright depends on none of them. A project can name its policies in `robowrig
 (`[policies.NAME]`), and a generated regression test recreates the policy by that name.
 
 [`examples/test_learned_policy.py`](examples/test_learned_policy.py) tests a real one: a small
-network trained by behaviour cloning ([`scripts/train_pick_policy.py`](scripts/train_pick_policy.py)),
-exported to ONNX, in degrees and with its gripper from 0 to 100. Measured over 20 to 40 seeds
-per engine:
+network trained by imitation ([`scripts/train_pick_policy.py`](scripts/train_pick_policy.py)),
+exported to ONNX, in degrees and with its gripper from 0 to 100. The test requires 20/20. Each
+version was measured on 40 seeds or more per engine (the bold cells are where it fell short):
 
-| trained on | MuJoCo | PyBullet | Drake | Genesis | Isaac Sim |
+| how it was trained | MuJoCo | PyBullet | Drake | Genesis | Isaac Sim |
 |---|---|---|---|---|---|
-| MuJoCo only | 32/40 | **2/40** | | | |
-| MuJoCo and PyBullet (the example) | 31/40 | 37/40 | 17/20 | 12/20 | **8/20** |
+| cloned from MuJoCo demonstrations | 32/40 | **2/40** | | | |
+| cloned from MuJoCo and PyBullet | **31/40** | **37/40** | **17/20** | **12/20** | **8/20** |
+| DAgger, on four engines (the example) | 140/140 | 140/140 | 140/140 | 140/140 | 40/40 |
 
-Trained on one engine's demonstrations, it failed on the other: PyBullet's servos trail their
-targets further while moving (7.5 mrad against 2.5 at the 90th percentile), and the policy had
-never seen those states. Running every test on several engines is how that shows up before a
-robot does. Isaac Sim, which it never saw, is a registered known divergence (`conftest.py`).
+Running every engine is what found each problem:
+
+- **A sim-to-sim gap.** Trained on one engine's demonstrations, it failed on the other:
+  PyBullet's servos trail their targets further while moving (7.5 mrad against 2.5 at the 90th
+  percentile), and the policy had never seen those states.
+- **A wait the policy could not see.** The demonstrator paused for a fixed time after closing
+  and after opening the gripper. To a policy that sees no clock, "wait" and "go" were the same
+  state; it averaged them and stalled holding the cube. The demonstrator now closes slowly, and
+  the policy reads the targets it last commanded (the `"target"` state feature), so how far a
+  close has got is something it can see.
+- **Drift with no way back.** A cloned policy drifts into states its demonstrator never
+  visited. DAgger runs the policy and has the demonstrator label every state the policy
+  reaches, and the policy trains on those labels too. That only worked once the demonstrator
+  decided from what it sees rather than from a remembered step of its plan. A policy cuts
+  corners: it heads straight down to the cube without stopping above it. A demonstrator still
+  waiting at the waypoint it skipped told it to go back up, from the very spot where it had
+  shown closing the gripper, and the retrained policy did neither.
+
+Isaac Sim was never in its training data and it succeeds there every time too.
 
 ### Statistics instead of flakes
 
 ```python
-@pytest.mark.trials(20, min_success=0.9)
+@pytest.mark.trials(20)  # 20 seeds, every one must pass; min_success=0.9 would accept 18
 def test_policy_with_randomized_cube(world, robot, scene):
     world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
     ...
@@ -433,13 +449,22 @@ def test_policy_with_randomized_cube(world, robot, scene):
 
 ```
 ================================ robowright trials =================================
-PASS examples/test_pick_and_place.py::test_policy_with_randomized_cube[mujoco]: 18/18 passed (100%, 95% CI 82%-100%); required rate >= 90% of 20, settled after 18
+PASS examples/test_pick_and_place.py::test_policy_with_randomized_cube[mujoco]: 20/20 passed (100%, 95% CI 84%-100%); required rate >= 100%
 ```
 
 Each trial gets its own seed. A failing trial keeps its own trace, and its seed is printed,
 so you can rerun exactly that one. Trials stop once the rest cannot change the verdict
-(18 passes of 20 already meet 90%; 3 failures already miss it), so the verdict is always the
-one all 20 would give. `--rw-all-trials` runs every one, for a rate measured on all of them.
+(with `min_success=0.9`, 18 passes of 20 already meet it and 3 failures already miss it), so
+the verdict is always the one all 20 would give. `--rw-all-trials` runs every one, for a rate
+measured on all of them.
+
+The examples require every trial, on every robot and engine. When they accepted less, each
+seed that failed had a cause worth finding. Under encoder noise the scripted policy waited
+over the bin until it timed out: 0.02 rad on a 1.3 m UR10e is 2.6 cm at the tool, and one
+reading rarely lands within its 1.2 cm tolerance, so it now averages the readings taken while
+it holds still. On the Panda in PyBullet the cube turned in the fingers while they squeezed
+(0.5 rad after 1.8 s) and slipped out: re-checking the arm's position under noise was keeping
+the jaws closed on it longer.
 
 ### Faults
 

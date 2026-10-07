@@ -78,13 +78,6 @@ for test in (
         "Stretch's rounded rubber pads pinch the cube at a point each; in Genesis it slides out of them as it is lifted "
         "(MuJoCo, PyBullet and Drake hold it)"
     )
-# The example learned policy (examples/test_learned_policy.py) was trained on MuJoCo and PyBullet
-# demonstrations only. Trained on MuJoCo alone it had failed on PyBullet (2/40), whose servos trail
-# their targets further; Isaac Sim is the engine it is furthest from.
-KNOWN[("test_learned_policy_puts_the_cube_in_the_bin", "isaac", "so101")] = (
-    "the example policy was trained on MuJoCo and PyBullet demonstrations only; on Isaac Sim it succeeds "
-    "8/20 (MuJoCo 31/40, PyBullet 37/40, Drake 17/20, Genesis 12/20)"
-)
 KNOWN[("test_stands_on_its_own", "genesis", "spot")] = (
     "standing still, Spot creeps backward ~2 cm/s on its sphere feet in Genesis (MuJoCo: settles to 0.2 mm/s)"
 )

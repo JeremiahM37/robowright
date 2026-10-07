@@ -67,6 +67,21 @@ def test_the_translation_round_trips():
     assert np.allclose(policy.to_robot(a), q)
 
 
+def test_the_targets_last_commanded_are_state_too(quiet_world):
+    """``"target"`` is what the robot was last told, in the model's conventions like ``"qpos"``:
+    while the jaws rest on a cube the readings stand still, and the command shows how far a
+    close has got."""
+    w = quiet_world()
+    seen = []
+    policy = LearnedPolicy(lambda b: seen.append(b["observation.state"][0]) or np.zeros(6), state=("qpos", "target"), units="deg")
+    goal = np.array([0.2, -0.3, 0.4, 0.5, -0.1, 0.35])
+    w.robot.run_policy(lambda obs: goal, timeout=0.1)  # the last command, still being reached
+    w.robot.run_policy(policy, timeout=0.02)
+    qpos, target = np.split(seen[0], 2)
+    assert np.allclose(target, [*np.degrees(goal[:5]), goal[5]])
+    assert not np.allclose(qpos, target, atol=0.5)  # the joints have not got there in 0.1 s
+
+
 def test_a_torch_module_gets_tensors_images_and_the_task(quiet_world):
     torch = pytest.importorskip("torch")
     seen = {}
