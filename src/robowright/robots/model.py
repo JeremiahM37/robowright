@@ -281,6 +281,11 @@ def fix_gripper(s: mujoco.MjSpec, actuator: str | None, servo: tuple | None, mir
         s.delete(s.actuator(act))
         e = s.add_equality(type=mujoco.mjtEq.mjEQ_JOINT, name1=joint, name2=leader)
         e.data[:5] = [offset[0] if offset else 0.0, ratio, 0.0, 0.0, 0.0]
+        # Nearly rigid, as the linkage it stands for. MuJoCo's default softness scales with the
+        # mass it moves, and on fingers this light it barely held: the Jaco's first finger swept
+        # the cube away ahead of the other two, and told to stop half open they rang (0.48-0.52).
+        e.solimp[:3] = [0.99, 0.999, 0.001]
+        e.solref[:] = [2.0 * s.option.timestep, 1.0]
     if mirrors and actuator is not None:
         # One motor now closes every finger: it gets their stiffness and force together, or each
         # finger would squeeze with a fraction of what its own motor gave it (half, for two).

@@ -51,11 +51,13 @@ _NEEDED = np.array(
 )
 _AROUND = np.array([(x, y, z) for x in (0.12, 0.3) for y in (-0.12, 0.18) for z in (0.03, 0.1)])
 _HOME_HEIGHTS = (0.2, 0.15, 0.12, 0.1, 0.08)
-# Where the default scenes put objects (the cube, the bin, a second cube), with 5 mm to spare:
-# no part of the robot's base may stand on them.
+# Where the default scenes put objects (the cube, a second cube, the bin): no part of the robot's
+# base may stand on them, or within 4 cm of a cube, where an open gripper comes down beside it
+# (the e.DO's controller box, its face 5 mm from the cube, took the fingers coming down past it).
+_GRIP_ROOM = 0.04
 _OBJECTS = (
-    ((0.2025, -0.0775), (0.2375, -0.0425)),
-    ((0.1425, -0.1175), (0.1775, -0.0825)),
+    ((0.2075 - _GRIP_ROOM, -0.0725 - _GRIP_ROOM), (0.2325 + _GRIP_ROOM, -0.0475 + _GRIP_ROOM)),
+    ((0.1475 - _GRIP_ROOM, -0.1125 - _GRIP_ROOM), (0.1725 + _GRIP_ROOM, -0.0875 + _GRIP_ROOM)),
     ((0.145, 0.065), (0.255, 0.175)),
 )
 

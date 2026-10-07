@@ -441,6 +441,8 @@ class Robot:
 
     def _ik(self, p, seed, approach, yaw, rest=None, level=False):
         q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw, rest, level)
+        if err < 1e-3:
+            q = unfold(self.model.name, self.kin, q, p, seed, self.home_q, approach, yaw, rest, level)
         if err > 5e-3:
             raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} (closest {err * 1000:.1f} mm)")
         return q, err
@@ -828,6 +830,21 @@ def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None,
     return q, err
 
 
+def unfold(name: str, kin: Kinematics, q, p, seed, home, approach=DOWN, yaw=None, rest=None, level=False):
+    """``q``, or if it passes the hand into the arm or its base (the e.DO's gripper into its column,
+    reaching beside it), the IK solution nearest ``seed`` that does not, if one does."""
+    if not _folded(name, q) or _folded(name, home):  # folded at home too: the model's own overlap
+        return q
+    yaws = [None] if yaw is None else [yaw] if level else [yaw + k * np.pi / 2 for k in (0, 1, -1, 2)]
+    clear = []
+    for s in _far_seeds(kin, 16):
+        for y in yaws:
+            c, e = kin.ik(p, s, approach, y, rest=home if rest is None else rest, level=level)
+            if e < 1e-3 and (y is None or _yaw_error(kin, c, y) < np.radians(2)) and not _folded(name, c):
+                clear.append(c)
+    return min(clear, key=lambda c: float(np.abs(c - np.asarray(seed, float)).sum())) if clear else q
+
+
 def _far_seeds(kin: Kinematics, n: int = 4) -> list[np.ndarray]:
     """IK starting poses away from the arm's own: mid-range and ``n`` fixed random ones (with
     the default, the same as robots.detect places the arm with, so what placement reached, a
@@ -845,6 +862,43 @@ def _yaw_error(kin: Kinematics, q, yaw: float) -> float:
     return abs((np.arctan2(g[1], g[0]) - yaw + np.pi / 2) % np.pi - np.pi / 2)
 
 
+def _folded(name: str, q, depth: float = 0.0) -> bool:
+    """Whether the arm at ``q`` passes ``depth`` into itself: a link into another, or the hand into
+    the arm (the hand's own parts touching are its make, not a fold)."""
+    from . import robots
+
+    m = robots.get(name)
+    mm = _self_model(name)
+    d = mujoco.MjData(mm)
+    for j, v in zip(m.arm_joints, q):
+        d.qpos[mm.joint(j).qposadr[0]] = v
+    mujoco.mj_kinematics(mm, d)
+    mujoco.mj_collision(mm, d)
+    hand = _hand_bodies(mm, m.hand)
+    for c in d.contact[: d.ncon]:
+        b1, b2 = mm.geom_bodyid[c.geom1], mm.geom_bodyid[c.geom2]
+        if c.dist < -depth and not (b1 in hand and b2 in hand) and 0 not in (b1, b2):
+            return True
+    return False
+
+
+@functools.cache
+def _self_model(name: str):
+    from . import robots
+
+    return robots.get(name).robot_spec().compile()
+
+
+def _hand_bodies(mm, hand: str | None) -> set[int]:
+    if hand is None:
+        return set()
+    out = {mm.body(hand).id}
+    for b in range(out.copy().pop() + 1, mm.nbody):
+        if mm.body_parentid[b] in out:
+            out.add(b)
+    return out
+
+
 @functools.cache
 def home_q(name: str) -> np.ndarray:
     from . import robots
@@ -855,18 +909,28 @@ def home_q(name: str) -> np.ndarray:
     if seed is None:
         seed = np.clip(np.zeros(m.n_arm), kin.lower, kin.upper)
     q, err = kin.ik(m.home, seed, DOWN, yaw=0.0, rest=seed)
-    if err > 1e-3:
-        # IK is local: a model's own pose can sit in a basin that does not reach home. Try from
-        # mid-range and a few fixed random poses (as robots.detect does when it places the arm).
+    if err > 1e-3 or _folded(name, q):
+        # IK is local: a model's own pose can sit in a basin that does not reach home, or reaches it
+        # folded into itself (the e.DO's gripper 1 cm inside its forearm, its wrist servo pushing
+        # at its limit). Try from mid-range and a few fixed random poses (as robots.detect does
+        # when it places the arm), for the first that reaches home clear of itself.
+        first = (q, err) if err <= 1e-3 else None
         rng = np.random.default_rng(0)
         lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
+        seeds = [seed, (lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]
+        found = False
         for y in (0.0, None):  # None: an arm with no wrist roll grips at the angle it reaches with
-            for s in [seed, (lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]:
+            for s in seeds:
                 q, err = kin.ik(m.home, s, DOWN, yaw=y, rest=seed)
                 if err <= 1e-3:
-                    break
-            if err <= 1e-3:
+                    first = first or (q, err)
+                    if not _folded(name, q):
+                        found = True
+                        break
+            if found:
                 break
+        if not found and first is not None:
+            q, err = first  # folded everywhere it reaches home: as it was
     if err > 1e-3:
         raise UnreachableError(f"{name}: home pose {m.home} unreachable (closest {err * 1000:.1f} mm)")
     q.setflags(write=False)

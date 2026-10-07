@@ -460,8 +460,11 @@ class IsaacBackend(Backend):
             return name in welded and name not in parent
 
         static = [p for p, label in self._label.items() if label == "floor" or label in {o.name for o in spec.objects if o.static}]
+        # And never the bodies a model excludes from the world: a driven base's wheels, kept off the
+        # floor (Stretch's casters dragged on it and stalled the base's turn 0.02 rad short).
+        off_world = {b for pair in meta["excluded_pairs"] if "world" in pair for b in pair if b != "world"}
         for name, p in self._links.items():
-            if on_base(name):
+            if on_base(name) or name.split("__j")[0] in off_world:
                 rel = UsdPhysics.FilteredPairsAPI.Apply(stage.GetPrimAtPath(p)).CreateFilteredPairsRel()
                 for q in static:
                     rel.AddTarget(Sdf.Path(q))
@@ -531,12 +534,18 @@ class IsaacBackend(Backend):
 
     def _mimic(self, name: str, ref: str, k: float, offset: float) -> None:
         """Make joint ``name`` a hard PhysX mimic of joint ``ref``: q = offset + k * q_ref (SI units)."""
-        from pxr import PhysxSchema, Sdf
+        from pxr import PhysxSchema, Sdf, UsdPhysics
 
         unit = {True: 180.0 / np.pi, False: 1.0}
         u_ref = unit[self.meta["joints"][ref]["type"] == "hinge"]
         u = unit[self.meta["joints"][name]["type"] == "hinge"]
         prim = self._joints[urdf._safe(name)]
+        # The importer rewrites a mimic joint's limits (Stretch's fingers, nested under the slide they
+        # follow, came out at 0.015 rad of their 1.2): put back the model's.
+        lo, hi = self.meta["joints"][name]["range"]
+        api = UsdPhysics.RevoluteJoint(prim) if u != 1.0 else UsdPhysics.PrismaticJoint(prim)
+        api.GetLowerLimitAttr().Set(float(u * lo))
+        api.GetUpperLimitAttr().Set(float(u * hi))
         insts = [i for i in ("rotX", "rotY", "rotZ") if prim.HasAPI(PhysxSchema.PhysxMimicJointAPI, i)] or ["rotX"]
         for inst in insts:
             mj = PhysxSchema.PhysxMimicJointAPI.Apply(prim, inst)

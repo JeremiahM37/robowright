@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import robots
-from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, _kinematics, home_q, release_reach, solve_ik, top_grasp
+from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, _kinematics, home_q, release_reach, solve_ik, top_grasp, unfold
 
 
 class ScriptedPickPlace:
@@ -61,7 +61,8 @@ class ScriptedPickPlace:
             self.der = robots.get(robot).derived
 
     def _ik(self, p, seed, yaw):
-        return solve_ik(self.kin, p, seed, self.home, yaw=yaw)[0]
+        q, err = solve_ik(self.kin, p, seed, self.home, yaw=yaw)
+        return unfold(self.robot, self.kin, q, p, seed, self.home, yaw=yaw) if err < 1e-3 else q
 
     def _plan(self, objs):
         op, oq = objs[self.object]

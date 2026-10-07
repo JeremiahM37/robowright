@@ -276,14 +276,16 @@ def test_stretch_drives_its_base_to_reach(monkeypatch):
     assert dict(m.stiffen) == {"lift": pytest.approx(3.75)}  # 1.5 N of friction against 400 N/m: 4 mm, now 1
 
 
-@pytest.mark.parametrize("backend", ["mujoco", "pybullet", "drake", "genesis"])
+@pytest.mark.parametrize("backend", ["mujoco", "pybullet", "drake", "genesis", "isaac"])
 def test_stretch_picks_and_places_on_every_engine(monkeypatch, backend):
     """The telescope's four joints move as one on every engine (MuJoCo's equality constraints are a
     motor per segment, a coupler or a mimic joint elsewhere), and its swinging jaws open only as far as
     the cube needs, so they close on it rather than above it."""
     monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
     path = str(robots.menagerie.path("hello_robot_stretch_3/stretch.xml"))
-    pytest.importorskip({"mujoco": "mujoco", "pybullet": "pybullet", "drake": "pydrake", "genesis": "genesis"}[backend])
+    pytest.importorskip(
+        {"mujoco": "mujoco", "pybullet": "pybullet", "drake": "pydrake", "genesis": "genesis", "isaac": "isaacsim"}[backend]
+    )
     with rw.launch(scene=default_scene(path), backend=backend, settings=rw.Settings(trace="off")) as w:
         r = w.robot
         r.arm.move_to((0.25, -0.02, 0.08))
@@ -310,3 +312,44 @@ def test_stretch_exports_its_telescope_and_rigid_pads(monkeypatch):
     assert not any(n.startswith("rubber") for n in g["joints"])  # springy pads welded: URDF has no springs
     assert all(f > 0 for f in g["effort"].values())
     assert 'name="rubber_left_x"' not in path.read_text()
+
+
+def _described(rel: str) -> str:
+    """A robot from the robot_descriptions cache, or a skip if it is not downloaded."""
+    from pathlib import Path
+
+    path = Path.home() / ".cache" / "robot_descriptions" / rel
+    if not path.exists():
+        pytest.skip(f"{rel} not downloaded")
+    return str(path)
+
+
+def test_the_home_pose_keeps_the_hand_out_of_the_arm():
+    """The e.DO's first home solution folded its gripper 1 cm into its forearm, the wrist servo
+    pushing at its limit; home is now the first solution clear of the arm, and it holds."""
+    from robowright.robot import _folded
+
+    path = _described("edo_sim/robots/edo_sim.urdf")
+    with rw.launch(scene=default_scene(path), settings=rw.Settings(trace="off")) as w:
+        r = w.robot
+        assert not _folded(r.model.name, r.home_q)
+        r.reset_to()
+        w.wait(1.0)
+        assert np.max(np.abs(r.true_qpos()[: r.n_arm] - r.home_q)) < 0.005
+
+
+def test_fingers_that_follow_another_settle_where_they_are_told():
+    """The Jaco's fingers each have a motor; robowright closes them as one, the others following
+    the first through equality constraints. Soft (MuJoCo's default), those let them ring, told
+    to stop half open (0.48 to 0.52), and lag the first finger enough for it to sweep the cube off."""
+    path = _described("kinova-ros/kinova_description/urdf/j2n6s300_standalone.xacro")
+    with rw.launch(scene=default_scene(path), settings=rw.Settings(trace="off")) as w:
+        g = w.robot.gripper
+        g.close()
+        g.open(0.5)
+        w.wait(0.5)
+        samples = []
+        for _ in range(20):
+            w.wait(0.02)
+            samples.append(g.opening)
+        assert np.ptp(samples) < 0.005 and abs(np.mean(samples) - 0.5) < 0.01
