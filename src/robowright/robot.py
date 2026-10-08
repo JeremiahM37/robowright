@@ -602,6 +602,19 @@ class Robot:
         self.gripper.open.__wrapped__(self.gripper, opening)
         self._grip_open = opening
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, 0.05], yaw=yaw, timeout=timeout)
+        face = fixed_jaw_face(self.model.name)
+        if face is not None and isinstance(o, ObjectHandle) and o.spec.kind != "bin":
+            # A jaw fixed to the hand comes straight down: if the object would reach under it, aim
+            # so the jaw clears its side by 3 mm. The SO-101's face is 12.7 mm from its TCP, which
+            # fits a 25 mm cube; it landed on top of a 30 mm can and knocked it over. (Objects that
+            # fit are not moved over: centred between the jaws, a cube was dragged across the bin
+            # by the swinging jaw as it let go; against the fixed jaw it stays put.)
+            overlap = width / 2 - abs(face)
+            if overlap > 0:
+                need = overlap + 0.003
+                g = self.kin.fk(self._target[: self.n_arm])[:3, :3] @ self.model.derived.grip_axis
+                grasp[:2] += (np.sign(face) * g * need)[:2]
+                self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, 0.05], yaw=yaw, linear=True, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, grasp, yaw=yaw, linear=True, timeout=timeout)
         self.gripper.close.__wrapped__(self.gripper)
         self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, lift], yaw=yaw, linear=True, timeout=timeout)
@@ -1070,6 +1083,44 @@ def _hand_bodies(mm, hand: str | None) -> set[int]:
         if mm.body_parentid[b] in out:
             out.add(b)
     return out
+
+
+@functools.cache
+def fixed_jaw_face(name: str) -> float | None:
+    """For a hand with one jaw fixed to it (the SO-101's): how far that jaw's inner face stands from
+    the TCP along the grip axis near the fingertips, signed by the side it is on (+ along
+    ``grip_axis``), from the model's own geometry with the gripper open. None for a gripper whose
+    fingers both move."""
+    from . import robots
+    from .robots.model import _collision_geoms, _surface, body_labels
+
+    model = robots.get(name)
+    if not model.has_gripper or model.hand not in model.left_finger + model.right_finger:
+        return None
+    world = mujoco.MjSpec()
+    model.add_to(world)
+    m = world.compile()
+    d = mujoco.MjData(m)
+    for j, v in zip(model.arm_joints, home_q(name)):
+        d.qpos[m.joint(PREFIX + j).qposadr[0]] = v
+    for j, (_, opened) in model.derived.gripper_joints.items():
+        d.qpos[m.joint(PREFIX + j).qposadr[0]] = opened
+    mujoco.mj_kinematics(m, d)
+    side = "left_finger" if model.hand in model.left_finger else "right_finger"
+    bodies = {b for b, lab in body_labels(m, model, PREFIX).items() if lab == side}
+    hand = m.body(PREFIX + model.hand).id
+    R = d.xmat[hand].reshape(3, 3)
+    der = model.derived
+    tcp, g, axis = d.xpos[hand] + R @ der.tcp_offset, R @ der.grip_axis, R @ der.tool_axis
+    pts = np.vstack([_surface(m, d, k) for k in _collision_geoms(m, bodies)])
+    near = pts[(pts - tcp) @ axis > -0.03]  # the last 3 cm of the jaw
+    if not len(near):
+        return None
+    along = (near - tcp) @ g
+    sign = 1.0 if np.median(along) > 0 else -1.0
+    inner = sign * along
+    inner = inner[inner > 0]
+    return float(sign * inner.min()) if len(inner) else None
 
 
 @functools.cache

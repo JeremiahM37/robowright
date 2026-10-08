@@ -217,7 +217,6 @@ def test_viewer_draws_frames_from_the_recorded_state(tmp_path):
 
 
 def test_viewer_without_gl_keeps_the_telemetry(tmp_path, monkeypatch):
-    from robowright import render
     from robowright.viewer import build_html
 
     path, _ = _run(tmp_path, faults=False)
@@ -225,7 +224,11 @@ def test_viewer_without_gl_keeps_the_telemetry(tmp_path, monkeypatch):
     def broken(*a, **k):
         raise RuntimeError("no EGL")
 
-    monkeypatch.setattr(render, "jpeg_frames", broken)
+    # The module the viewer's own import gets (sys.modules): a pytester run earlier in the same
+    # process can leave the package attribute robowright.render pointing at a stale copy.
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("robowright.render"), "jpeg_frames", broken)
     with pytest.warns(UserWarning, match="without camera frames"):
         html = build_html(path)
     assert "data:image/jpeg" not in html and '"qpos"' in html
