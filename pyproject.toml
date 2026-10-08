@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "robowright"
 version = "0.1.0.dev0"
-description = "Playwright-style testing for robots: one test, 19 robots, four physics engines. Auto-waiting actions, expect() assertions, traces, replay and codegen."
+description = "Playwright-style testing for robots: one test, 19 robots, five physics engines. Auto-waiting actions, expect() assertions, traces, replay and codegen."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "src/robowright/assets/so101/LICENSE-so101"]
