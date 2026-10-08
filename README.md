@@ -213,11 +213,10 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 
 | From MJCF (MuJoCo Menagerie robots that aren't built in) | Result |
 |---|---|
-| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100 | all 21 pass |
+| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
 | PAL TIAGo and TIAGo Dual (base held) | all 21 pass |
-| Koch low-cost arm | 20 of 21: under 0.02 rad of joint noise it drops the cube on 3 seeds of 20: its V-shaped moving jaw meets the cube on its top edge and holds it there only just |
 | Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
-| Unitree Z1 | gripper works; pick fails: at the lowest height it can go, its moving jaw meets a 25 mm cube on its top edge, pressing down at 20 degrees, and tips it over |
+| Unitree Z1 | gripper works; pick fails: its moving jaw swings from a pivot 9 cm up, so its pad is still tilted 18 degrees when it reaches a 25 mm cube and meets it on its top edge, shoving it 3 cm aside. No opening, tool offset or approach direction (32 tried, level to straight down) avoids it |
 | Lite 6, narrow gripper | 12 mm gap: every test that picks the 25 mm cube is skipped, saying so; the rest pass |
 | Google Robot | 20 of 21: all of robowright's own moves and the randomized-cube policy pass (an integral term holds its gravity-sagged soft servos to their targets); under joint noise and delay one seed of 20 runs out of time, its 1 s wrist servo still closing in |
 | TidyBot (arm on a mobile base modelled as slides) | all 21 pass |
@@ -234,8 +233,7 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 
 | From xacro (ROS 2 description packages, with their arguments) | Result |
 |---|---|
-| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv MICO-Core, Flexiv Rizon 4 | all 21 pass |
-| Kinova Jaco 2 (three fingers) | 20 of 21: on 1 seed of 20 a cube jittered towards the bin leaves a fully open finger resting on the bin's rim, and the fingers, closing as one, cannot close |
+| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv MICO-Core, Flexiv Rizon 4, Kinova Jaco 2 (three fingers) | all 21 pass |
 
 On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 210/210 on
 Drake and 210/210 on Genesis. The misses are the OpenMANIPULATOR-X's grasp (PyBullet). The OpenMANIPULATOR-X has no wrist roll, so its jaws close at the

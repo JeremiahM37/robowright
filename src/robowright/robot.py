@@ -1106,13 +1106,24 @@ def top_grasp(der, centre: float, top: float, bottom: float, width: float) -> tu
     # opening on the way, they need only stay off the table (the Gen3 lite's dip 3 mm, above it).
     full = max(centre, lowest, float(reach[meets:].max()))
     if full - reach[meets] <= deep:
-        return 1.0, full
+        return _no_wider(f, gap, meets, width), full
     for i in range(len(f) - 1, meets, -1):
         if gap[i] < width + 0.015:  # 7.5 mm to spare on each side, no narrower
             break
         if height(i) - reach[meets] <= deep:
             return float(f[i]), height(i)
     return 1.0, full
+
+
+def _no_wider(f, gap, meets: int, width: float) -> float:
+    """Fully open, or for a hand that opens far wider than any gripper needs to, only to a 10 cm
+    gap (and the object's width and 5 cm more): the Jaco's curling fingers span 21 cm open, and
+    beside a bin one came down on its rim, holding the hand open."""
+    want = max(0.10, width + 0.05)
+    grows = gap[meets:] >= want
+    if not grows.any() or gap[-1] < want + 0.02:
+        return 1.0
+    return float(f[meets + int(np.argmax(grows))])
 
 
 def release_reach(der, opening: float) -> float:

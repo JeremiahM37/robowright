@@ -56,6 +56,7 @@ class ScriptedPickPlace:
         self.cmd = None
         self.goal = None
         self.readings = []
+        self.grips = []
         self.arrived = None
 
     def _bind(self, robot: str):
@@ -101,6 +102,15 @@ class ScriptedPickPlace:
         n = len(q) - 1
         if self.cmd is None:
             self.cmd = q.copy()
+        if 3 <= self.phase <= 5:
+            # Carrying it: if it is 4 cm below the tool (measured and commanded alike), it slipped
+            # out on the lift; go back for it. The Koch arm's V jaw, closing 5 mm off centre on one
+            # seed of 20, lifted without it and carried nothing to the bin. (Below, not away: a
+            # soft arm such as the Google Robot's trails its commands sideways by centimetres.)
+            o = np.asarray(obs["objects"][self.object][0], float)
+            below = min(self.kin.tcp(q[:n])[2], self.kin.tcp(self.cmd[:n])[2]) - o[2]
+            if below > 0.04:
+                self.phase, self.wait, self.goal, self.arrived = 0, 0, None, None
         plan = self._plan(obs["objects"])
         if self.phase >= len(plan):
             return np.tile(self.cmd, (self.chunk, 1))
@@ -116,6 +126,7 @@ class ScriptedPickPlace:
         # until it timed out.
         held = np.allclose(self.cmd, goal)
         self.readings = (self.readings + [q[:n]])[-20:] if held else []
+        self.grips = (self.grips + [q[n]])[-2:] if held else []
         off = np.linalg.norm(self.kin.tcp(q[:n]) - goal_p)
         if held and len(self.readings) > 1:
             off = min(off, np.linalg.norm(self.kin.tcp(np.mean(self.readings, axis=0)) - goal_p))
@@ -123,9 +134,13 @@ class ScriptedPickPlace:
         # Checking again under noisy encoders kept the jaws squeezing, and a cube turns in the
         # Panda's fingers in PyBullet the longer they squeeze (0.07 rad after 1.2 s, 0.5 after 1.8).
         stays = self.arrived is not None and np.linalg.norm(goal_p - self.arrived) < 0.002
+        # And a step that works the gripper is done when the jaws have stopped, not when they were
+        # told to: the Koch arm's slow jaws were still at 0.40 when it lifted, closing on air.
+        # (Two readings apart agree within 0.05, or a second has passed: noise must not stall it.)
+        jaws = not stays or (len(self.grips) == 2 and abs(self.grips[1] - self.grips[0]) < 0.05) or self.wait >= 50
         if held and (off < self.tolerance or stays):
             self.wait += self.chunk
-            if self.wait >= settle:
+            if self.wait >= settle and jaws:
                 self.phase, self.wait, self.goal, self.arrived = self.phase + 1, 0, None, goal_p
             return np.tile(self.cmd, (self.chunk, 1))
         # Stream a chunk that moves the command toward the goal at bounded joint and tool speeds.
