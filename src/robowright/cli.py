@@ -1,4 +1,4 @@
-"""Command line: ``robowright test | show-trace | replay | codegen | robots | info``."""
+"""Command line: ``robowright init | test | show-trace | replay | codegen | render | crosscheck | robots | check | info | mcp``."""
 
 from __future__ import annotations
 
@@ -347,6 +347,10 @@ def _mcp(args, rest) -> int:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="robowright", description="Playwright-style testing for robots.")
     sub = p.add_subparsers(dest="cmd", required=True)
+    i = sub.add_parser("init", help="set up a project: an example test, settings, CI and the MCP server for AI agents")
+    i.add_argument("dir", nargs="?", default=".")
+    i.add_argument("--robot", default="so101", help="the robots tests run on (default so101)")
+    i.add_argument("--backend", default="mujoco", help="the engines tests run on (default mujoco)")
     sub.add_parser("test", help="run tests (all arguments are passed to pytest)", add_help=False)
     s = sub.add_parser("show-trace", help="open a trace in the HTML viewer")
     s.add_argument("trace")
@@ -381,10 +385,6 @@ def main(argv=None) -> int:
     cc.add_argument("trace")
     cc.add_argument("--backend", required=True)
     sub.add_parser("mcp", help="run the MCP server (stdio) that lets an AI agent drive a simulated robot")
-    i = sub.add_parser("init", help="set up a project: an example test, settings, CI and the MCP server for AI agents")
-    i.add_argument("dir", nargs="?", default=".")
-    i.add_argument("--robot", default="so101", help="the robots tests run on (default so101)")
-    i.add_argument("--backend", default="mujoco", help="the engines tests run on (default mujoco)")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
         return _test(None, argv[1:])
