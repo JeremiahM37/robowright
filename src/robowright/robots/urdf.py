@@ -26,7 +26,7 @@ import numpy as np
 from .model import RobotModel, closing_speeds, joint_followers
 
 BASE = "robowright_base"
-VERSION = 26  # bump when the output format changes, to invalidate caches
+VERSION = 27  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
@@ -251,6 +251,11 @@ def _write(model: RobotModel, out: Path) -> None:
         der = model.derived
         effort, driven = _grip_effort(m, model)
         per_driver = _moving_fingers(m, model) / len(driven)
+        if not _drives_a_finger(m, model, driven):
+            # A driver behind a linkage (the xArm's knuckle) moves both fingers in MuJoCo for the
+            # force it was measured at. Doubled, on Genesis it never reached its cap: it closed
+            # on until the linkage's mimic coupling gave way, and the cube slid out of the pads.
+            per_driver = 1.0
         kept = [n for n in der.gripper_joints if m.joint(n).id not in rigid]
         effort = {n: effort[n] for n in kept}
         meta["gripper"] = {
@@ -385,6 +390,15 @@ def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
             f = own[driven[0]] * abs(od - cd) / abs(of - cf) if abs(of - cf) > 1e-6 else 0.0
         out[name] = min(f if f > 1e-6 else max(peers), cap(name))
     return out, driven
+
+
+def _drives_a_finger(m, model: RobotModel, driven) -> bool:
+    """Whether the gripper's driven joints move finger bodies directly (a slide or a jaw), rather
+    than a linkage the fingers hang from."""
+    from .model import body_labels
+
+    labels = body_labels(m, model)
+    return any(labels.get(int(m.jnt_bodyid[m.joint(n).id]), "") in ("left_finger", "right_finger") for n in driven)
 
 
 def _moving_fingers(m, model: RobotModel) -> int:

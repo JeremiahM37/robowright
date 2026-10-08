@@ -20,17 +20,12 @@ _SLIDE = {"arx_l5": "0.9 N", "yam": "1.9 N", "wx250s": "2.2 N"}
 
 KNOWN: dict[tuple[str, str, str], str] = {}
 # A 1.5 N shove for 0.1 s against grippers modelled at a few newtons. MuJoCo lets the cube go;
-# PyBullet's stiffer contacts hold it, except for the weakest grip.
-for robot, force in _SLIDE.items():
+# PyBullet's stiffer contacts hold it, except for the weakest grip. The WidowX (2.2 N) and the
+# ViperX hold it on MuJoCo since the gripper closes at 0.7 s a stroke, not 0.35.
+for robot in ("arx_l5", "yam"):
     KNOWN[("test_cube_survives_a_shove_when_held", "mujoco", robot)] = (
-        f"MuJoCo Menagerie's model of this gripper squeezes {force}; a 1.5 N shove knocks the cube out"
+        f"MuJoCo Menagerie's model of this gripper squeezes {_SLIDE[robot]}; a 1.5 N shove knocks the cube out"
     )
-# The ViperX's modelled grip chatters on the cube (0 to 1.9 N, step to step), so whether a 1.5 N
-# shove knocks it out depends on the chatter's phase when it lands: it lets go from 1.25-1.55 N.
-KNOWN[("test_cube_survives_a_shove_when_held", "mujoco", "vx300s")] = (
-    "MuJoCo Menagerie's ViperX grip chatters between 0 and 1.9 N on the cube; a 1.5 N shove knocks it out "
-    "(it lets go from 1.25-1.55 N, depending on the chatter's phase)"
-)
 # Drake holds the 1.9 N YAM grip through the shove; the rest go, as in MuJoCo.
 for robot, force in {**{r: _SLIDE[r] for r in ("arx_l5", "wx250s")}, "vx300s": "5.4 N"}.items():
     KNOWN[("test_cube_survives_a_shove_when_held", "drake", robot)] = (
@@ -52,8 +47,10 @@ KNOWN[("test_grip_force_matches_the_datasheet", "pybullet", "xarm7")] = (
 )
 # A 10 cm can held 2.5 cm under its top from the side: in Genesis it creeps out of the fingers
 # while carried (the gripper closing as it slips, opening 0.35 -> 0.06), even carried level in a
-# straight line at 0.05 m/s; MuJoCo, PyBullet and Drake hold it. Panda and ViperX keep it.
-for robot in ("ur5e", "ur10e", "gen3", "sawyer", "xarm7"):
+# straight line at 0.05 m/s; MuJoCo, PyBullet and Drake hold it. Panda and ViperX keep it. The
+# Robotiq 2F-85 arms (UR5e, UR10e, Gen3, Sawyer) hold it since the gripper linkages' mimic couplings
+# are held rigid on Genesis, as on MuJoCo.
+for robot in ("xarm7",):
     KNOWN[("test_picks_a_tall_can_from_the_side", "genesis", robot)] = (
         "in Genesis a can held from the side creeps out of the fingers while carried, whatever the speed "
         "(MuJoCo, PyBullet and Drake hold it)"

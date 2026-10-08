@@ -285,6 +285,11 @@ class GenesisBackend(Backend):
             robot.set_dofs_kp(kp, self._driven)
             robot.set_dofs_kv(kv, self._driven)
             robot.set_dofs_force_range(-cap, cap, self._driven)
+        # The mimic couplings hold the linkage rigid, as robowright holds MuJoCo's (solimp .99/.999,
+        # the shortest time constant): at Genesis's default (.9/.95, 10 ms) the xArm 6's knuckle
+        # closed on past where its pads had stopped, the linkage gave, and a shove took the cube.
+        for eq in robot.equalities:
+            eq.set_sol_params([2 * self._dt, 1.0, 0.99, 0.999, 0.001, 0.5, 2.0])
 
         # Contact friction per link, as the MuJoCo model sets it per geom.
         friction = {}

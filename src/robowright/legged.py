@@ -91,6 +91,9 @@ class LeggedRobot(Robot):
     def base(self) -> Base:
         return self._base
 
+    def _servo_target(self) -> np.ndarray:
+        return self._target.copy()  # joints that stand on the ground get their targets as given
+
     @property
     def home_q(self) -> np.ndarray:
         return self._home_q

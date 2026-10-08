@@ -204,7 +204,7 @@ A model's servos are taken as they are, soft or stiff. robowright times each of 
 the servos can follow it (a soft servo lags by its inertia over its stiffness times the move's
 acceleration), on MuJoCo leads them along it by their damping lag (kv/kp, as a trajectory
 controller does), and asks a joint that stops short under load for the difference (an integral
-term). A test that asks a robot to pick up something wider than its gripper opens is skipped on
+term; in simulation only: a robot behind ROS 2 has its own controllers). A test that asks a robot to pick up something wider than its gripper opens is skipped on
 that robot, saying so, rather than failed.
 
 **Measured:** re-detected from their bare model files, all 19 built-in robots come out as their
@@ -219,7 +219,7 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
 | Unitree Z1 | gripper works; pick fails: at the lowest height it can go, its moving jaw meets a 25 mm cube on its top edge, pressing down at 20 degrees, and tips it over |
 | Lite 6, narrow gripper | 12 mm gap: every test that picks the 25 mm cube is skipped, saying so; the rest pass |
-| Google Robot | 19 of 21. robowright's own moves pass (timed to its soft servos, and settled with an integral term), but the scripted policy waits 12 s for gravity-sagged servos to bring the tool within its 1.2 cm tolerance |
+| Google Robot | 20 of 21: all of robowright's own moves and the randomized-cube policy pass (an integral term holds its gravity-sagged soft servos to their targets); under joint noise and delay one seed of 20 runs out of time, its 1 s wrist servo still closing in |
 | TidyBot (arm on a mobile base modelled as slides) | all 21 pass |
 | Trossen AI | every motor capped at ±1 rad in the model; refused: no mounting reaches the task area |
 | Hello Robot Stretch 2 | refused: its standard gripper has no wrist pitch, so it cannot point down for a top-down grasp |
@@ -238,13 +238,15 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | Kinova Jaco 2 (three fingers) | 20 of 21: on 1 seed of 20 a cube jittered towards the bin leaves a fully open finger resting on the bin's rim, and the fingers, closing as one, cannot close |
 
 On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 210/210 on
-Drake and 208/210 on Genesis. The misses are the OpenMANIPULATOR-X's grasp (PyBullet) and the
-xArm 6 placing (Genesis). The OpenMANIPULATOR-X has no wrist roll, so its jaws close at the
+Drake and 210/210 on Genesis. The misses are the OpenMANIPULATOR-X's grasp (PyBullet). The OpenMANIPULATOR-X has no wrist roll, so its jaws close at the
 angle its base turns to, 27 degrees off the cube's faces, and pinch two of its edges: MuJoCo
 holds that pinch (until a shove), PyBullet squeezes the cube out upwards. No mounting avoids it:
 in line with the cube, the arm cannot reach the bin pointing down. The xArm 6's linkage gripper,
-driven through one joint, squeezes twice as hard on Genesis as on MuJoCo (19 N against 10) and
-wedges the cube down its tilted pads; at half the force it passes. Its force calibration is open. Among the
+driven through one joint, once failed on Genesis: given twice its force, the knuckle closed on past
+where its pads had stopped until the linkage's mimic coupling gave way, and the cube slid out. A
+driver behind a linkage now gets the force it was measured at, Genesis holds the couplings rigid
+(as robowright holds MuJoCo's), and grippers close at 0.7 s a stroke (faster, its pads met the
+cube hard enough to pop it out upwards). Among the
 Menagerie arms, SO-100, Koch, FR3 and FR3 v2 pass on PyBullet and Drake. Genesis passes
 SO-100, FR3 and FR3 v2; the Koch's jaws close through the cube there, touching nothing.
 
@@ -334,7 +336,8 @@ On the built-in arms, a 10 cm can picked from the side and set in a bin works on
 (Panda, UR5e, UR10e, xArm 7, Gen3, ViperX, Sawyer) on MuJoCo, PyBullet, Drake and Isaac Sim; the iiwa,
 PiPER, SO-101, YAM and ARX cannot hold the hand level beside it from where they are mounted,
 and the WidowX's gripper opens 4 mm wider than the can. On Genesis the can creeps out of the
-fingers mid-carry on 5 of the 7 (a recorded divergence).
+xArm 7's fingers mid-carry (a recorded divergence); the Robotiq-gripped arms hold it since
+Genesis holds the gripper linkages' couplings rigid.
 
 A grasp can come in at any angle between level and straight down, the fingers closing level:
 `approach=(1, 0, -1)` comes in at 45 degrees. It plans and checks its moves as a side grasp

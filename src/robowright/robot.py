@@ -111,6 +111,7 @@ class Arm:
     def move_joints(self, q, speed: float | None = None, timeout: float | None = None):
         """Move the arm joints to ``q`` (radians) and wait until settled."""
         r = self.robot
+        r._release()
         goal = np.asarray(q, float)
         start = r._target[: r.n_arm].copy()
         speed = speed or self.world.settings.max_joint_speed
@@ -145,6 +146,7 @@ class Arm:
         path that keeps the arm (and anything held) off the table and the objects.
         """
         r = self.robot
+        r._release()
         p = as_subject(self.world, target).position
         q_now = r._target[: r.n_arm].copy()
         if not linear:
@@ -181,6 +183,7 @@ class Arm:
     def follow(self, path, timeout: float | None = None):
         """Move the arm along joint-space waypoints ``path`` (from robot.planner), smoothly."""
         r = self.robot
+        r._release()
         path = [r._target[: r.n_arm].copy(), *(np.asarray(q, float) for q in path)]
         seg = np.array([np.max(np.abs(b - a)) for a, b in zip(path, path[1:])])
         if seg.sum() < 1e-9:
@@ -243,7 +246,11 @@ class Gripper(Subject):
     def _go(self, opening, timeout, stall_ok=False):
         r = self.robot
         start = r._target[-1]
-        duration = max(abs(opening - start) * 0.35, self.world.dt)
+        # Closing takes 0.7 s for a full stroke: at twice the pace the xArm 6's linkage pads met a
+        # cube hard enough on Genesis to pop it out upwards, and the WidowX's and ViperX's weak
+        # grips settled looser. Opening keeps 0.35 s: slower, the SO-101's swinging jaw dragged a
+        # released cube across the bin on Isaac Sim.
+        duration = max(abs(opening - start) * (0.7 if opening < start else 0.35), self.world.dt)
         r._stream(lambda s: r._set_gripper(start + (opening - start) * _minjerk(s)), duration)
         timeout = timeout or self.world.settings.action_timeout
 
@@ -284,6 +291,10 @@ class Robot:
         b = world.backend
         self._target = b.qpos().copy()
         self._target[-1] = GRIPPER_OPEN
+        self._held = None  # the arm targets last given, while they hold still (see _servo_target)
+        self._still = 0
+        self._policy = False  # a policy is driving the arm (run_policy)
+        self._bias = np.zeros(self.n_arm)
         self._home_q = None
         self._planner = None
         # After a side pick: (approach, yaw, how high above a surface the TCP sets the object down:
@@ -342,6 +353,7 @@ class Robot:
         q = np.concatenate([self.home_q if q_arm is None else np.asarray(q_arm, float), [gripper]])
         self.world.backend.set_joint_positions(q)
         self._target = q.copy()
+        self._held, self._bias, self._still = None, np.zeros(self.n_arm), 0  # placed, not driven there
         if self.world.trace:
             args = {"q": [float(x) for x in q]}
             if q_arm is None and gripper == GRIPPER_OPEN:
@@ -354,6 +366,34 @@ class Robot:
 
     def _set_gripper(self, a):
         self._target[-1] = a
+
+    def _servo_target(self) -> np.ndarray:
+        """The targets the servos are given this step: the commanded ones, plus an integral term.
+
+        While a policy holds the arm's targets still and a joint has stopped more than 0.02 rad
+        short, the difference is asked for, a tenth each step, up to 0.15 rad: what a
+        controller's integral term does. A stiff servo stops well inside that and never sees
+        it; Menagerie's Google Robot's rested 0.05-0.14 rad short under gravity and joint
+        friction, and its scripted policy never saw the tool arrive. (robowright's own moves
+        have their own, in ``_settle``: integrating through them as well moved the arm about
+        while its jaws closed on a can.)"""
+        n = self.n_arm
+        target = self._target.copy()
+        held = self._held is not None and np.array_equal(self._held, target[:n])
+        self._held = target[:n].copy()
+        self._still = self._still + 1 if held else 0
+        if not held:
+            self._bias *= 0.9  # moving again: let it go over half a second, not as a jump
+        elif self._integrates and self._policy and self._still * self.world.dt >= 0.1:  # past a command's own transient (and any delay)
+            b = self.world.backend
+            unit = self._joint_units
+            off = (target[:n] - b.qpos()[:n]) / unit
+            stalled = np.abs(b.qvel()[:n]) / unit < 0.05
+            grow = stalled & (np.abs(off) > 0.02)
+            if grow.any():
+                self._bias[grow] = np.clip(self._bias[grow] + 0.1 * off[grow] * unit[grow], -0.15 * unit[grow], 0.15 * unit[grow])
+        target[:n] += self._bias
+        return target
 
     def _servo_time(self, path, lag: float = 0.02) -> float:
         """The shortest a smooth (minimum-jerk) move along joint ``path`` may take for the arm's
@@ -391,6 +431,22 @@ class Robot:
                     kp[hit[0]] = -m.actuator_biasprm[a, 1]
         return kp
 
+    @functools.cached_property
+    def _integrates(self) -> bool:
+        """Whether robowright adds an integral term to the servos' targets: in simulation, where
+        the servos are a model's bare PD. A robot driven through ROS 2 has its own controllers,
+        and readings arrive in their own time: one not yet updated looks like a joint stopped
+        short, and asking for the difference overshot (8.9 mm, under load)."""
+        from .backends.base import DETERMINISTIC
+
+        return DETERMINISTIC in self.world.backend.capabilities
+
+    def _release(self):
+        """Start a move from where the servos were being asked to hold (the integral term folded
+        into the targets), so it ends at its goal with nothing carried over."""
+        self._target[: self.n_arm] += self._bias
+        self._bias = np.zeros(self.n_arm)
+
     def _stream(self, at, duration):
         n = max(1, int(round(duration / self.world.dt)))
         b = self.world.backend
@@ -423,12 +479,11 @@ class Robot:
             speed = np.max(np.abs(w.backend.qvel()[:n]) / unit)
             if err < tol / 4 or err < tol and speed < 0.08:
                 return True
-            if speed < 0.02:
+            if speed < 0.02 and self._integrates:
                 # Stopped short under a load its servo cannot hold the goal against (gravity on
                 # Menagerie's Google Robot's soft wrist rests it 0.033 rad down): ask for the
-                # difference, as a controller's integral term does, up to 0.15 rad.
-                ask = self._target[:n] - goal + 0.1 * off * unit
-                self._target[:n] = goal + np.clip(ask, -0.15 * unit, 0.15 * unit)
+                # difference, as a controller's integral term does (see _servo_target).
+                self._bias = np.clip(self._bias + 0.1 * off * unit, -0.15 * unit, 0.15 * unit)
             return False
 
         if not w.run_until(settled, timeout, hold=0.06):
@@ -823,26 +878,30 @@ class Robot:
         t0, wall0, steps, infer_ms = w.time, _time.perf_counter(), 0, []
         met = False
         since = None
-        while w.time - t0 < timeout - 1e-9:
-            if until is not None and until():
-                since = w.time if since is None else since
-                if w.time - since >= hold - 1e-9:
-                    met = True
-                    break
+        self._policy = True
+        try:
+            while w.time - t0 < timeout - 1e-9:
+                if until is not None and until():
+                    since = w.time if since is None else since
+                    if w.time - since >= hold - 1e-9:
+                        met = True
+                        break
+                else:
+                    since = None
+                if not queue:
+                    obs = self.observe(cameras, privileged, task, image_size)
+                    ti = _time.perf_counter()
+                    act = np.asarray(policy(obs), float)
+                    infer_ms.append((_time.perf_counter() - ti) * 1000)
+                    queue = list(act) if act.ndim == 2 else [act]
+                a = queue.pop(0)
+                self._target[: len(a)] = a
+                w.step()
+                steps += 1
             else:
-                since = None
-            if not queue:
-                obs = self.observe(cameras, privileged, task, image_size)
-                ti = _time.perf_counter()
-                act = np.asarray(policy(obs), float)
-                infer_ms.append((_time.perf_counter() - ti) * 1000)
-                queue = list(act) if act.ndim == 2 else [act]
-            a = queue.pop(0)
-            self._target[: len(a)] = a
-            w.step()
-            steps += 1
-        else:
-            met = bool(until()) if until is not None else True
+                met = bool(until()) if until is not None else True
+        finally:
+            self._policy = False
         return Rollout(met, steps, w.time - t0, _time.perf_counter() - wall0, infer_ms)
 
 

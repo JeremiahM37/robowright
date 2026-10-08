@@ -24,10 +24,10 @@ def test_an_outcome_both_engines_share(tmp_path):
 
 
 def test_an_outcome_that_depends_on_the_engine(tmp_path):
-    """A shove on the WidowX's 2.2 N grip: MuJoCo lets the cube go, PyBullet's stiffer contacts keep it."""
+    """A shove on the ARX L5's 0.9 N grip: MuJoCo lets the cube go, PyBullet's stiffer contacts keep it."""
     pytest.importorskip("pybullet")
     s = rw.Settings(trace="on", trace_dir=str(tmp_path))
-    with rw.launch(robot="wx250s", name="wx", settings=s) as w:
+    with rw.launch(robot="arx_l5", name="arx", settings=s) as w:
         w.robot.reset_to()
         w.robot.pick(w.scene["cube"])
         w.faults.push("cube", force=(0.0, 1.5, 0.0), duration=0.1)

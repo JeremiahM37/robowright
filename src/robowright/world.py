@@ -108,7 +108,7 @@ class World:
         """Advance ``n`` control periods with the robot's current targets."""
         self._begin()
         for _ in range(n):
-            target = self.robot._target.copy()
+            target = self.robot._servo_target()
             applied = self.faults.filter_ctrl(target)
             self.backend.set_ctrl(applied)
             forces = self.faults.forces_for_step(self.step_count)
