@@ -1187,6 +1187,12 @@ def top_grasp(der, centre: float, top: float, bottom: float, width: float) -> tu
 
     # Fully open, the tips keep the clearance where they start and finish; passing through a lower
     # opening on the way, they need only stay off the table (the Gen3 lite's dip 3 mm, above it).
+    # They finish on the object, not shut: the Unitree Z1's swinging jaw reaches 1.4 mm further
+    # down shut than at a 25 mm cube, and held off the table shut, its pads (which end 4 mm past
+    # the TCP) covered only the cube's top half, and the cube was squeezed out from under them.
+    # Never higher than shut, though: the Gen3 lite's tips reach 3 mm further down at the cube
+    # than shut, and raised by that, it held the cube too high to survive a shove.
+    lowest = min(der.finger_reach, max(reach[-1], reach[meets])) + TABLE_CLEARANCE
     full = max(centre, lowest, float(reach[meets:].max()))
     if full - reach[meets] <= deep:
         return _no_wider(f, gap, meets, width), full

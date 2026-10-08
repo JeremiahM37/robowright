@@ -77,47 +77,21 @@ for test in (
     )
 # Robots read from model files outside the catalogue (pytest --rw-robot path), where their geometry
 # rules a test out. Measured, not assumed:
-# Menagerie's Unitree Z1: its moving jaw swings from a pivot 9 cm above its pad, so the pad is still
-# tilted 18 degrees when it reaches a 25 mm cube; its upper end meets the cube's top edge and pushes
-# it, while the fixed jaw's pad covers only 11-39 mm above the table, so the cube is shoved 3 cm
-# under it. No opening (0.25-1), tool offset (+-3 cm) or approach (32 directions) holds it.
+# Menagerie's Unitree Z1 picks the cube, but cannot carry it. Its moving jaw swings from a pivot 9 cm
+# above its pad, so at a 25 mm cube the jaws stand 13 degrees apart, closer at the top: the squeeze
+# pushes the cube down with ~9 N that friction must hold for as long as it is carried (its weight is
+# 0.3 N). MuJoCo's friction creeps under a sustained load, 0.5-1.5 mm/s whatever the contact
+# stiffness, noslip iterations (to 100) or impratio (to 100), and the cube slides off the pads'
+# lower edge on the way to the bin. The scripted policy regrasps a slipping object: it carries the
+# cube 20/20 under sensor noise, but not from every randomized start.
 for test in (
     "test_pick_and_place",
-    "test_grasp_is_seen_by_both_fingers",
     "test_places_a_second_object_beside_the_first",
-    "test_no_arm_collisions_during_a_pick",
-    "test_state_restore_mid_grasp_is_exact",
-    "test_deterministic",
-    "test_arm_never_hits_anything_while_picking",
-    "test_cube_survives_a_shove_when_held",
-    "test_picks_a_tall_can_from_the_side",
     "test_policy_with_randomized_cube",
-    "test_policy_with_sensor_noise_and_latency",
 ):
     KNOWN[(test, "mujoco", "z1_gripper")] = (
-        "the Z1's swinging jaw is still tilted 18 degrees at a 25 mm cube and meets it on its top edge, "
-        "shoving it under the fixed jaw's pad: it cannot pinch the cube"
-    )
-# OpenMANIPULATOR-X: no wrist roll, so its jaws close along the line from its base, 27 degrees off the
-# cube's faces (no mounting both squares them and reaches the bin pointing down). Across its edges
-# the cube is 33.6 mm; the jaws squeeze it 6 mm sideways until a corner is left between the tips,
-# a 1.5 N hold even at the servo's full 10 N. MuJoCo keeps that until a shove; PyBullet loses it.
-KNOWN[("test_cube_survives_a_shove_when_held", "mujoco", "open_manipulator_x")] = (
-    "with no wrist roll its jaws pinch the cube's edges 27 degrees off its faces, a 1.5 N hold that a 1.5 N shove breaks"
-)
-for test in (
-    "test_pick_and_place",
-    "test_grasp_is_seen_by_both_fingers",
-    "test_places_a_second_object_beside_the_first",
-    "test_no_arm_collisions_during_a_pick",
-    "test_deterministic",
-    "test_arm_never_hits_anything_while_picking",
-    "test_cube_survives_a_shove_when_held",
-    "test_policy_with_randomized_cube",
-    "test_policy_with_sensor_noise_and_latency",
-):
-    KNOWN[(test, "pybullet", "open_manipulator_x")] = (
-        "with no wrist roll its jaws pinch the cube's edges 27 degrees off its faces, and PyBullet squeezes it out"
+        "the Z1's swinging jaw meets a 25 mm cube 13 degrees off its fixed jaw and wedges it downward; "
+        "under that load the cube creeps out of the grip before it reaches the bin"
     )
 KNOWN[("test_stands_on_its_own", "genesis", "spot")] = (
     "standing still, Spot creeps backward ~2 cm/s on its sphere feet in Genesis (MuJoCo: settles to 0.2 mm/s)"

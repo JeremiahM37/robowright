@@ -31,6 +31,7 @@ POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error correc
 GRAVITY = 9.81
 ARMATURE_FLOOR = 2e-3  # kg m^2, see __init__
 GEAR_FORCE = 1000.0  # N or N m: a finger linkage's gear constraint is effectively rigid
+GEAR_ERP = 0.8  # fraction of a gear constraint's position drift corrected per step
 
 
 @register("pybullet")
@@ -130,8 +131,13 @@ class PybulletBackend(Backend):
                 gear = p.createConstraint(
                     self.robot, self._ref, self.robot, j, p.JOINT_GEAR, [1, 0, 0], [0, 0, 0], [0, 0, 0], physicsClientId=c
                 )
-                # Bullet holds ratio * q_ref + q = target.
-                p.changeConstraint(gear, gearRatio=-k, relativePositionTarget=lc - k * rc, maxForce=GEAR_FORCE, physicsClientId=c)
+                # Bullet holds ratio * q_ref + q = target. Without an erp it holds only the
+                # velocities equal and never corrects drift: squeezing the OpenManipulator-X's
+                # cube, the jaws parted 17 mm (one at its stop, its twin pushed open) and every
+                # pick lifted without the cube; at 0.8 they stay within 3 mm and squeeze 20 N.
+                p.changeConstraint(
+                    gear, gearRatio=-k, relativePositionTarget=lc - k * rc, maxForce=GEAR_FORCE, erp=GEAR_ERP, physicsClientId=c
+                )
             self._main = joints[urdf._safe(g["main"])]
             self._main_q = g["joints"][g["main"]]
         self._arm_force = np.array([meta["joints"][n]["effort"] for n in rm.arm_joints])

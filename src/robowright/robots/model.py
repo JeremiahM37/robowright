@@ -144,6 +144,9 @@ class RobotModel:
         _exclude_resting_contacts(s)
         if calibrated and self.grip_force is not None and self.has_gripper:
             _limit_grip(s, self)
+        elif calibrated and self.has_gripper:
+            _stiff_fingers(s, self, slides_only=True)
+            _cap_grip(s, self)
         for k in list(s.keys):  # a compile after an actuator changes brings deleted keyframes back, unnamed
             s.delete(k)
         return s
@@ -526,15 +529,95 @@ def _free_gripper(s: mujoco.MjSpec, model: RobotModel) -> None:
     for j in s.joints:
         if j.name not in arm and j.type in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
             j.frictionloss = 0.0
-    # A finger the actuator moves only through an equality is coupled mechanically, so make
-    # that as stiff as the timestep allows: soft (MuJoCo's default), it lets the driven finger
-    # run ahead under full force while the other lags, and the object is pushed off-centre (the
-    # PiPER's 40 N held only 15 N that way). Fingers the actuator drives itself (the Panda's
-    # tendon) are left alone: a stiff equality on top over-constrains them and they lock.
+    _stiff_fingers(s, model)
+
+
+def _stiff_fingers(s: mujoco.MjSpec, model: RobotModel, slides_only: bool = False) -> None:
+    """A finger the actuator moves only through an equality is coupled mechanically, so make
+    that as stiff as the timestep allows: soft (MuJoCo's default), it lets the driven finger
+    run ahead under full force while the other lags, and the object is pushed off-centre (the
+    PiPER's 40 N held only 15 N that way; the OpenManipulator-X's jaws parted 13 mm, the driven
+    one on its stop, and held 1.5 N). Fingers the actuator drives itself (the Panda's tendon)
+    are left alone: a stiff equality on top over-constrains them and they lock.
+
+    ``slides_only``: only sliding fingers, for a gripper not calibrated to a datasheet force. A
+    swinging linkage stiffened this way without that calibration (the xArm 6's six joints) let a
+    tall can slip from a side grasp."""
     driven = _actuated_joints(model)
+    slide = mujoco.mjtJoint.mjJNT_SLIDE
     for e in s.equalities:
+        if e.type != mujoco.mjtEq.mjEQ_JOINT or (slides_only and not all(s.joint(n).type == slide for n in (e.name1, e.name2) if n)):
+            continue
         if e.type == mujoco.mjtEq.mjEQ_JOINT and not {e.name1, e.name2} <= driven:
             e.solref = [min(e.solref[0], 2.5 * s.option.timestep), 1.0]
+
+
+JAW_SOLREF = 0.01  # s: the time constant of the hand's contacts, half MuJoCo's default
+
+
+def _firm_jaws(s: mujoco.MjSpec, model: RobotModel) -> None:
+    """Give the hand's geoms contacts twice as stiff as MuJoCo's default.
+
+    With the default 20 ms a held cube sinks millimetres into the jaws and can roll in them: the
+    Unitree Z1's swinging jaw meets a 25 mm cube 13 degrees off its fixed jaw, and the cube
+    turned in the grip as the arm lifted and dropped out under the pads, though friction held
+    it four times over. At 10 ms it holds; the cube's own contacts are left as they were.
+    Only for a gripper modelled with the arm's motor (see :func:`_cap_grip`): hands modelled for
+    themselves keep their contacts (firmed, the Google Robot's lost a tall can from the side).
+    """
+
+    def walk(b):
+        for g in b.geoms:
+            if g.solref[0] > JAW_SOLREF:  # (a negative time constant is a stiffness given directly)
+                g.solref = [JAW_SOLREF, g.solref[1]]
+        for c in b.bodies:
+            walk(c)
+
+    walk(s.body(model.hand))
+
+
+PAD_FORCE_CEILING = 60.0  # N at the jaws: twice what real parallel grippers squeeze with
+_PAD_LEVER: dict[str, float] = {}
+
+
+def _cap_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
+    """Cap a motor that turns one jaw directly at what presses that jaw with ``PAD_FORCE_CEILING``,
+    for a robot with no datasheet grip force whose gripper motor has the arm motors' force.
+
+    Some models give the gripper's motor the arm's defaults: Menagerie's Unitree Z1 drives its
+    jaw with the arm joints' 30 N m, 350 N at the pad. MuJoCo's soft contacts sink a 30 g cube
+    5 mm into each jaw under that, and as the arm lifts, the swinging jaw (its pivot 9 cm above
+    its pad, so it sweeps down as it closes) squeezes the cube out underneath the fixed one:
+    every pick failed. At 30-60 N it holds. The other engines already cap every file robot's
+    squeeze at ``urdf.MAX_PAD_FORCE``; this leaves headroom above that.
+    """
+    a = s.actuator(model.gripper_actuator)
+    if a.trntype != mujoco.mjtTrn.mjTRN_JOINT or abs(a.gear[0]) < 1e-9:
+        return
+    # Only a motor that is the arm's own: models that give the gripper a force of its own (the Low
+    # Cost Robot Arm's 5 N m, the Google Robot's 60 N m) are left as they are, and lost their grip
+    # capped (11 of the Low Cost Robot Arm's tests).
+    arm = {tuple(np.round(x.forcerange, 6)) for x in s.actuators if x.trntype == mujoco.mjtTrn.mjTRN_JOINT and x.target in model.arm_joints}
+    if tuple(np.round(a.forcerange, 6)) not in arm:
+        return
+    if model.name not in _PAD_LEVER:
+        m = model.robot_spec(calibrated=False).compile()
+        d = mujoco.MjData(m)
+        reset_data(m, d)
+        j = m.joint(a.target).id
+        lever = 1.0
+        if m.jnt_type[j] == _HINGE:
+            mujoco.mj_kinematics(m, d)
+            hand = m.body(model.hand).id
+            r = d.xpos[hand] + d.xmat[hand].reshape(3, 3) @ model.derived.tcp_offset - d.xanchor[j]
+            lever = max(float(np.linalg.norm(r - (r @ d.xaxis[j]) * d.xaxis[j])), 0.01)
+        _PAD_LEVER[model.name] = lever
+    limit = PAD_FORCE_CEILING * _PAD_LEVER[model.name] / abs(a.gear[0])
+    if a.forcelimited != mujoco.mjtLimited.mjLIMITED_FALSE and 0 < max(abs(a.forcerange[0]), abs(a.forcerange[1])) <= limit:
+        return
+    a.forcerange = [-limit, limit]
+    a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    _firm_jaws(s, model)
 
 
 def _limit_grip(s: mujoco.MjSpec, model: RobotModel) -> None:

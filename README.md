@@ -289,7 +289,7 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
 | PAL TIAGo and TIAGo Dual (base held) | all 21 pass |
 | Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
-| Unitree Z1 | 10 of 21, and the 11 that pick the cube are registered limits (strict xfails, `conftest.py`): its moving jaw swings from a pivot 9 cm up, so its pad is still tilted 18 degrees when it reaches a 25 mm cube and meets it on its top edge, shoving it under the fixed jaw's pad (which starts 11 mm above the table). No opening, tool offset or approach direction (32 tried, level to straight down) avoids it |
+| Unitree Z1 | 17 of 21; the 3 that carry the cube to the bin (and 1 example) are registered limits (strict xfails, `conftest.py`): its moving jaw swings from a pivot 9 cm up, so at a 25 mm cube the jaws stand 13 degrees apart, closer at the top, and wedge the cube downward with ~9 N. It picks, lifts and survives a shove, but MuJoCo's friction creeps under that load (0.5-1.5 mm/s, whatever the contact stiffness, noslip or impratio) and the cube slides off the pads on the way to the bin |
 | Lite 6, narrow gripper | 12 mm gap: every test that picks the 25 mm cube is skipped, saying so; the rest pass |
 | Google Robot | all 21 pass: its servos are soft (time constants to 1 s) and sag under gravity and joint friction; robowright times its moves to them and adds an integral term, as a controller would |
 | TidyBot (arm on a mobile base modelled as slides) | all 21 pass |
@@ -301,18 +301,17 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 |---|---|
 | Franka Panda (two URDFs), KUKA LBR iiwa (three), AgileX PiPER, SO-100, Unitree Z1, I2RT YAM, UFACTORY xArm 6 with gripper, Comau e.DO (every joint unlimited, no effort given) | all 21 pass |
 | SO-101, Fanuc M-710iC | all 21 pass |
-| OpenMANIPULATOR-X | 20 of 21; the shove is a registered limit: it has no wrist roll, so its jaws pinch the cube's edges (see below) |
+| OpenMANIPULATOR-X | all 21 pass |
 | OpenMANIPULATOR-X follower (OMX-F) | refused until given `gripper_open` and `gripper_closed`: its gripper range is a placeholder full turn |
 
 | From xacro (ROS 2 description packages, with their arguments) | Result |
 |---|---|
 | UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv MICO-Core, Flexiv Rizon 4, Kinova Jaco 2 (three fingers) | all 21 pass |
 
-On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 210/210 on
-Drake and 210/210 on Genesis. The misses are the OpenMANIPULATOR-X's grasp (PyBullet). The OpenMANIPULATOR-X has no wrist roll, so its jaws close at the
-angle its base turns to, 27 degrees off the cube's faces, and pinch two of its edges: MuJoCo
-holds that pinch (until a shove), PyBullet squeezes the cube out upwards. No mounting avoids it:
-in line with the cube, the arm cannot reach the bin pointing down. The xArm 6's linkage gripper,
+On the other engines, the URDF arms pass the arm contract 182/182 on PyBullet, 210/210 on
+Drake and 210/210 on Genesis. The OpenMANIPULATOR-X used to miss on PyBullet: the gear constraint
+tying its two sliding jaws corrected no drift, so squeezing a cube they parted 17 mm and lifted
+without it. It now corrects 80% a step, and the jaws squeeze 20 N. The xArm 6's linkage gripper,
 driven through one joint, once failed on Genesis: given twice its force, the knuckle closed on past
 where its pads had stopped until the linkage's mimic coupling gave way, and the cube slid out. A
 driver behind a linkage now gets the force it was measured at, Genesis holds the couplings rigid
