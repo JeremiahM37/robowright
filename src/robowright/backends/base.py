@@ -227,7 +227,13 @@ def engine(name: str) -> type[Backend]:
 
         mod = _MODULES.get(name)
         if mod:
-            importlib.import_module(f"robowright.backends.{mod}")
+            try:
+                importlib.import_module(f"robowright.backends.{mod}")
+            except ModuleNotFoundError as e:
+                hint = _INSTALL.get(name)
+                if hint and e.name == _REQUIRES.get(name):
+                    raise ModuleNotFoundError(f"the {name!r} engine is not installed: {hint}", name=e.name) from e
+                raise
         else:
             from ..plugins import load_backend
 
@@ -352,6 +358,14 @@ _MODULES = {
     "ros2": "ros2_backend",
 }
 _REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake", "isaac": "isaacsim", "ros2": "rclpy"}
+
+
+_INSTALL = {
+    "pybullet": 'pip install "robowright[pybullet]"',
+    "genesis": 'install PyTorch first (https://pytorch.org), then pip install "robowright[genesis]"',
+    "drake": 'pip install "robowright[drake]" (needs Python 3.12 or newer)',
+    "isaac": "Isaac Sim is not a pip extra; see the Install section of the README",
+}
 
 
 def available() -> list[str]:

@@ -1,8 +1,75 @@
-# robowright
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img src="docs/logo-light.svg" alt="robowright" width="460">
+  </picture>
+</p>
 
-**Playwright-style testing for robots.** Write a robot test once, with actions that wait until they're actually done and assertions that retry until the physical world catches up. Run it on **19 robots** (13 arms, 6 legged) across **five physics engines**, and get a trace you can scrub through, a bit-for-bit replay and a generated regression test for every failure.
+<h3 align="center">Playwright-style testing for robots.<br>Write the test once. Run it on 19 robots and 5 physics engines.</h3>
 
-<p align="center"><img src="docs/demo.gif" width="480" alt="SO-101 arm picking up a red cube and placing it in a blue bin"></p>
+<p align="center">
+  <a href="https://github.com/JeremiahM37/robowright/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JeremiahM37/robowright/ci.yml?branch=main&label=CI"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-3776ab">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-green"></a>
+  <img alt="19 robots" src="https://img.shields.io/badge/robots-19-00b4d8">
+  <img alt="5 engines" src="https://img.shields.io/badge/engines-5-00d9a3">
+</p>
+
+<p align="center">
+  <a href="#quickstart-60-seconds">Quickstart</a> &middot;
+  <a href="#which-engine">Engines</a> &middot;
+  <a href="#robots">Robots</a> &middot;
+  <a href="#a-tour">Tour</a> &middot;
+  <a href="#traces-replay-codegen">Traces</a> &middot;
+  <a href="#troubleshooting">Troubleshooting</a> &middot;
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+<p align="center"><img src="docs/demo.gif" width="560" alt="SO-101 arm picking up a red cube and placing it in a blue bin"></p>
+
+Actions wait until they are actually done. Assertions retry until the physical world catches
+up. Every failure leaves a **trace** you can scrub through, a bit-for-bit **replay** and a
+generated **regression test**. Pre-alpha: simulation, and robots behind ROS 2 (see
+[Limitations](#limitations)).
+
+## Quickstart (60 seconds)
+
+You need [uv](https://docs.astral.sh/uv/) (or plain `pip`) and Python 3.10+. No GPU and no model
+download: the default robot (SO-101) and engine (MuJoCo) ship with the package.
+
+```bash
+uv venv && source .venv/bin/activate
+uv pip install "robowright @ git+https://github.com/JeremiahM37/robowright"   # or: pip install "git+https://github.com/JeremiahM37/robowright"
+robowright info                                    # sanity check: versions, engines, offscreen rendering
+```
+
+Write a test (this is the whole file):
+
+```bash
+cat > test_pick.py <<'EOF'
+from robowright import expect
+
+
+def test_pick_and_place(robot, scene):
+    cube, bin = scene["cube"], scene["bin"]
+    robot.pick(cube)
+    expect(robot.gripper).to_be_holding(cube)
+    robot.place(on=bin)
+    expect(cube).to_be_inside(bin)
+EOF
+pytest test_pick.py --rw-trace on          # runs on the SO-101 in MuJoCo: about a second
+robowright show-trace robowright-traces/*.zip --no-open -o trace.html   # open trace.html in a browser
+```
+
+A passing test only keeps a trace with `--rw-trace on`; by default a trace is kept when a test
+fails. Next, the same file on other robots and engines, with no code changes:
+
+```bash
+pytest test_pick.py --rw-robot panda,ur5e,xarm7     # models download on first use (30-40 MB each)
+pip install "robowright[pybullet] @ git+https://github.com/JeremiahM37/robowright"
+pytest test_pick.py --rw-backend mujoco,pybullet
+robowright replay robowright-traces/*.zip            # re-simulate: "bit-identical"
+```
 
 ```python
 from robowright import expect
@@ -37,8 +104,6 @@ itself. See [Any robot, from its model file](#any-robot-from-its-model-file).
 `python scripts/demo_video.py` records real runs (every robot, every engine, a side grasp, a
 failure) and cuts them into a one-minute 1080p demo video.
 
-> **Status: pre-alpha.** Simulation, and robots behind ROS 2 (tested against `ros2_control`'s
-> own controllers, not yet on a physical robot). See [Limitations](#limitations).
 
 ## Why
 
@@ -284,29 +349,49 @@ list because neither can stand on joint servos alone, without a balance controll
 ## Install
 
 ```bash
-git clone https://github.com/JeremiahM37/robowright && cd robowright
-pip install -e ".[dev]"          # MuJoCo is required; PyBullet, xdist and ruff come with [dev]
-pip install -e ".[drake]"        # optional: Drake (Python 3.12+)
-pip install -e ".[genesis]"      # optional: Genesis (install a CPU or CUDA torch first)
-pip install -e ".[mcp]"          # optional: the MCP server for AI agents
-pip install -e ".[urdf]"         # optional: mesh tools for reading URDFs (COLLADA, concave jaws)
-robowright info                  # versions, backends, and whether offscreen rendering works
-robowright robots                # the robots you can test on
-pytest examples
+pip install "git+https://github.com/JeremiahM37/robowright"      # core: MuJoCo, the SO-101, pytest plugin, trace viewer
 ```
 
+To work on robowright itself: `git clone https://github.com/JeremiahM37/robowright && cd robowright && pip install -e ".[dev]"`
+(MuJoCo, PyBullet, xdist, ruff and the test tools).
+
+### Which engine?
+
+| Engine | Install | Python | Notes |
+|---|---|---|---|
+| **MuJoCo** (default) | included | 3.10+ | Fastest; draws the trace views. Start here. |
+| **PyBullet** | `pip install "robowright[pybullet]"` | 3.10+ | Light, CPU only. A good second engine for cross-checks. |
+| **Drake** | `pip install "robowright[drake]"` | **3.12+** | Different contact model; catches engine-specific passes. |
+| **Genesis** | install [PyTorch](https://pytorch.org) first, then `pip install "robowright[genesis]"` | 3.10+ | Heavy (torch); CPU or CUDA. |
+| **Isaac Sim** | not a pip extra, see below | 3.11 | NVIDIA GPU only. |
+
+(When installing from git, write the extra as `"robowright[pybullet] @ git+https://github.com/JeremiahM37/robowright"`.)
+Other extras: `[mcp]` (let an AI agent drive a simulated robot), `[urdf]` (mesh tools for
+reading URDFs: COLLADA, concave jaws, xacro), `[video]` (`robowright render` to mp4), `[onnx]` (ONNX policies).
+
 Robot models other than the SO-101 are downloaded from MuJoCo Menagerie the first time a
-test uses them, into `~/.cache/robowright`. It's a sparse checkout of just the robots you
-run: 30–40 MB each, mostly meshes.
+test uses them, into `~/.cache/robowright` (or `$XDG_CACHE_HOME/robowright`): a sparse
+checkout of just the robots you run, 30-40 MB each. This needs `git` and network access once.
 
-On a headless Linux machine robowright renders through EGL. Without a working GL, tests
-still run and traces are still recorded; the viewer just has no camera view.
-
-**Isaac Sim** (NVIDIA GPU machines only) isn't a pip extra: install Isaac Sim 5.x
+**Isaac Sim** (NVIDIA GPU machines only): install Isaac Sim 5.x
 (`pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com`
 into a Python 3.11 environment), set `OMNI_KIT_ACCEPT_EULA=YES`, then install robowright
 into the same environment and use `--rw-backend isaac`. Its URDF importer needs
 `libxml2.so.2` (on Arch-based systems, the `libxml2-legacy` package).
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `the 'pybullet' engine is not installed: pip install "robowright[pybullet]"` | The engine's extra is missing. Install the extra named in the message; `robowright info` lists the engines you have. |
+| `[pybullet]` takes a minute and runs a compiler | PyBullet has no wheel for the newest Python, so pip builds it from source (needs a C++ compiler). Use Python 3.12 or 3.13: `uv venv --python 3.12`. |
+| Drake is unavailable | Drake wheels need Python 3.12+. Create the venv with `uv venv --python 3.12`. |
+| `offscreen rendering: unavailable` in `robowright info` | Tests still pass and traces still record; the viewer just has no camera picture. On headless Linux install Mesa EGL (`sudo apt install libegl1 libgl1 libgles2 libosmesa6`) and set `MUJOCO_GL=egl`. |
+| `show-trace` does nothing on a server | It opens a browser. Use `--no-open -o trace.html` and open the file. |
+| A robot model fails to download | It needs `git` and network on first use. Make sure `~/.cache/robowright` is writable, delete the half-finished robot folder and re-run. |
+| No trace after a passing test | Traces are kept on failure by default. Add `--rw-trace on`. |
+| Genesis import errors | Install a working `torch` (CPU or CUDA) before the `[genesis]` extra. |
+| `externally-managed-environment` from pip | Use a venv: `uv venv && source .venv/bin/activate`. |
 
 ## A tour
 
