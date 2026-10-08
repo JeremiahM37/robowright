@@ -40,6 +40,7 @@ class Settings:
     trace_cameras: list | None = None
     image_size: tuple = (320, 240)
     realtime: bool = False  # pace stepping to wall clock (hardware-style)
+    headed: bool = False  # show the run in the engine's own window as it happens, at real-time pace
 
 
 class World:
@@ -58,6 +59,12 @@ class World:
         # Where object poses come from without ground truth: a camera, motion capture, or what the
         # backend perceives (a ROS 2 robot's TF frames).
         self.perception: dict[str, Callable] = dict(self.backend.perception())
+        if self.settings.headed:
+            try:
+                self.backend.open_viewer()
+            except Exception:
+                backends.release(self.backend)
+                raise
         self._perceived: dict = {}  # name -> (time, pos, quat, velocity), for perceived velocities
         self._invariants: list = []
         self._step_hooks: list[Callable] = []
@@ -114,11 +121,13 @@ class World:
             forces = self.faults.forces_for_step(self.step_count)
             for name, f in forces.items():
                 self.backend.apply_force(name, f)
-            if self.settings.realtime:
+            if self.settings.realtime or self.settings.headed:
                 import time as _t
 
                 _t.sleep(self.dt)
             self.backend.step()
+            if self.settings.headed:
+                self.backend.sync_viewer()
             self.step_count += 1
             if self.trace:
                 self.trace.record_step(self.step_count, self.backend.ctrl(), forces)
@@ -197,6 +206,8 @@ class World:
         if self.trace and (self.settings.trace == "on" or (self.settings.trace == "retain-on-failure" and failed)):
             path = trace_path or Path(self.settings.trace_dir) / f"{_safe(self.name)}.zip"
             saved = self.trace_path = self.trace.save(path)
+        if self.settings.headed:
+            self.backend.close_viewer()
         backends.release(self.backend)
         if self._soft_failures:
             failures, self._soft_failures = self._soft_failures, []

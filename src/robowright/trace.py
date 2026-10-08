@@ -228,6 +228,24 @@ def _version():
     return __version__
 
 
+def _call(e: dict) -> str:
+    """An event as the call that made it: ``robot.pick(cube)``, ``expect(cube).to_be_inside(bin)``."""
+
+    def val(v):
+        if isinstance(v, dict) and "$ref" in v:
+            return v["$ref"]
+        if isinstance(v, (list, tuple)):
+            return "[" + ", ".join(f"{x:.3g}" if isinstance(x, float) else str(x) for x in v) + "]"
+        return f"{v:.3g}" if isinstance(v, float) else repr(v)
+
+    args = dict(e.get("args") or {})
+    if e["type"] == "expect":
+        kw = {k: v for k, v in (args.get("kwargs") or {}).items() if v is not None}
+        inner = ", ".join(f"{k}={val(v)}" for k, v in kw.items())
+        return f"{e['name'].replace('expect(', 'expect(' + ('not ' if args.get('negate') else ''), 1)}({inner})"
+    return f"{e['name']}(" + ", ".join(f"{k}={val(v)}" for k, v in args.items()) + ")"
+
+
 class Trace:
     """A loaded trace archive."""
 
@@ -261,3 +279,39 @@ class Trace:
 
     def __len__(self):
         return len(self.arrays["t"])
+
+    def summary(self, events: int = 40) -> str:
+        """The trace as text, for a log, a terminal or an AI agent: what ran, what failed and why,
+        and the state of the robot and the objects at the moment it failed (or at the end)."""
+        m, a = self.meta, self.arrays
+        failed = [e for e in self.events if e["status"] == "failed"]
+        at = min(failed[0]["step"], len(self) - 1) if failed else len(self) - 1
+        lines = [
+            f"{m.get('name') or self.path.name}: {'FAILED' if self.failed else m.get('status', 'passed').upper()}",
+            f"  {(m.get('scene') or {}).get('robot', 'robot')} on {m['backend']}, seed {m['seed']}, {m['steps']} steps"
+            f" ({float(a['t'][-1]):.2f} s simulated)",
+        ]
+        if m.get("faults"):
+            lines.append("  faults: " + "; ".join(m["faults"]))
+        lines.append("timeline:")
+        shown = [e for e in self.events if e["type"] != "edit" or e["name"] != "reset_to"]
+        for e in shown[:events]:
+            span = f"{e['t']:6.2f}s" if e.get("end_t") in (None, e["t"]) else f"{e['t']:6.2f}-{e['end_t']:.2f}s"
+            mark = {"ok": "  ", "failed": "✗ ", "running": "… "}.get(e["status"], "  ")
+            lines.append(f"  {mark}{span}  {_call(e)}" + (f"\n        {e['detail']}" if e.get("detail") else ""))
+        if len(shown) > events:
+            lines.append(f"  ... {len(shown) - events} more")
+        lines.append(f"{'at the failure' if failed else 'at the end'} (t={float(a['t'][at]):.2f} s, step {at}):")
+        names = m.get("joint_names", [])
+        q = a["qpos"][at]
+        lines.append("  joints: " + ", ".join(f"{n}={v:.3f}" for n, v in zip(names, q)))
+        for i, name in enumerate(m.get("object_names", [])):
+            p, quat = a["obj_pos"][at][i], a["obj_quat"][at][i]
+            yaw = float(np.degrees(2 * np.arctan2(quat[3], quat[0])))
+            lines.append(f"  {name}: at ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f}), yaw {yaw:.0f} deg")
+        if self.contacts and at < len(self.contacts):
+            pairs = {}
+            for x, y, f in self.contacts[at]:
+                pairs[(x, y)] = pairs.get((x, y), 0.0) + f
+            lines.append("  contacts: " + (", ".join(f"{x}-{y} {f:.2f} N" for (x, y), f in sorted(pairs.items())) or "none"))
+        return "\n".join(lines)

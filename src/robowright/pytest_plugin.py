@@ -12,6 +12,9 @@ Options::
     --rw-trace-dir DIR
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
+    --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
+    --rw-report report.html          an HTML report of the run, each failure with its trace
+    --rw-headed                      watch each test in MuJoCo's window as it runs, at real-time pace
     -n auto                          (pytest-xdist) as many workers as the cores and memory allow
 
 Markers::
@@ -59,6 +62,13 @@ def pytest_addoption(parser):
         "--rw-all-trials",
         action="store_true",
         help="run all n trials of a trials test; by default it stops once the rest cannot change the verdict",
+    )
+    g.addoption("--rw-headed", action="store_true", help="watch each test in the engine's window, at real-time pace (MuJoCo)")
+    g.addoption("--rw-report", metavar="PATH", help="write an HTML report of the run: every test, and each failure with its trace")
+    g.addoption(
+        "--rw-trace-text",
+        action="store_true",
+        help="print each failing trace as text at the end: what ran, what failed, the state then (for CI logs and AI agents)",
     )
 
 
@@ -188,7 +198,8 @@ def _scene_for(item, request) -> SceneSpec:
 
 
 def _settings(config) -> Settings:
-    return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"))
+    headed = config.getoption("--rw-headed")
+    return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"), headed=headed)
 
 
 def _plain(nodeid: str) -> str:
@@ -330,10 +341,14 @@ class _Summary:
     """
 
     def __init__(self):
+        from .report import Run
+
         self.trials: list = []
         self.traces: list = []
+        self.run = Run()
 
     def pytest_runtest_logreport(self, report):
+        self.run.add(report)
         # Runs on the xdist controller too, so traces from workers are listed.
         for k, v in report.user_properties:
             if k == "robowright_trace" and report.failed:
@@ -342,6 +357,10 @@ class _Summary:
                 self.trials.append((_plain(report.nodeid), v, report.outcome))
 
     def pytest_terminal_summary(self, terminalreporter):
+        out = terminalreporter.config.getoption("--rw-report")
+        if out and self.run.tests:
+            terminalreporter.section("robowright report")
+            terminalreporter.line(str(self.run.write(out)))
         if self.trials:
             terminalreporter.section("robowright trials")
             for nodeid, summary, outcome in self.trials:
@@ -350,3 +369,12 @@ class _Summary:
             terminalreporter.section("robowright traces")
             for nodeid, path in dict.fromkeys(self.traces):
                 terminalreporter.line(f"{nodeid}\n    robowright show-trace {path}")
+            if terminalreporter.config.getoption("--rw-trace-text"):
+                from .trace import Trace
+
+                for _nodeid, path in dict.fromkeys(self.traces):
+                    try:
+                        text = Trace(path).summary()
+                    except Exception as e:  # noqa: BLE001 - a summary never hides the run's own result
+                        text = f"(could not read {path}: {e})"
+                    terminalreporter.line("\n" + text)

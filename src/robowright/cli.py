@@ -14,7 +14,130 @@ def _test(args, rest):
     return pytest.main(rest)
 
 
+_INIT_TEST = '''"""Robot tests, written like Playwright tests: actions wait until they are done, and
+``expect`` retries until the world catches up (in simulated time).
+
+    pytest                                   # run them (robot and engine: pytest.ini)
+    pytest --rw-robot panda,ur5e             # on other robots too
+    robowright show-trace robowright-traces/<test>.zip   # every failure leaves a trace
+"""
+
+import pytest
+
+from robowright import condition, expect
+from robowright.policies import ScriptedPickPlace
+
+
+def test_pick_and_place(robot, scene):
+    cube, bin = scene["cube"], scene["bin"]
+    robot.pick(cube)
+    expect(robot.gripper).to_be_holding(cube)
+    robot.place(on=bin)
+    expect(cube).to_be_inside(bin)
+    expect(cube).to_be_at_rest()
+
+
+@pytest.mark.trials(20)  # 20 seeds; every one must pass (min_success=0.9 would accept 18)
+def test_a_policy_with_the_cube_moved(world, robot, scene):
+    world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
+    done = condition(scene["cube"], "to_be_inside", scene["bin"])
+    rollout = robot.run_policy(ScriptedPickPlace(), until=done, hold=1.0, timeout=15)
+    assert rollout.success, rollout
+'''
+
+_INIT_TOML = """# robowright settings for this project.
+#
+# Your own robot, from its model file (MJCF, URDF or xacro), by name in --rw-robot:
+#   robowright robots --inspect path/to/arm.urdf     # what robowright makes of it
+#   robowright robots add path/to/arm.urdf --name my_arm
+# [robots.my_arm]
+# file = "models/my_arm.urdf"
+#
+# A trained policy, by name in LearnedPolicy("pick_v2"):
+# [policies.pick_v2]
+# model = "checkpoints/pick_v2.onnx"
+# state = ["qpos", "objects.cube"]
+#
+# A robot behind ROS 2 (pytest --rw-backend ros2):
+# [ros2]
+# joint_states = "/joint_states"
+"""
+
+_INIT_PYTEST = """[pytest]
+testpaths = tests
+# The robots and engines every test runs on (each is a separate test, like Playwright's projects).
+addopts = --rw-robot {robot} --rw-backend {backend}
+"""
+
+_INIT_CI = """name: robot tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # robowright is not on PyPI yet: install it from its repository until it is, e.g.
+      #   pip install "robowright @ git+https://github.com/JeremiahM37/robowright" pytest-xdist
+      - run: pip install robowright pytest-xdist
+      # Traces record state, not pictures: no GPU or display is needed to test. --rw-trace-text
+      # prints each failure's trace in the log; the traces themselves are kept as an artifact.
+      - run: pytest -n auto --rw-trace-text
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: robowright-traces
+          path: robowright-traces/
+"""
+
+_INIT_MCP = """{
+  "mcpServers": {
+    "robowright": {"command": "robowright", "args": ["mcp"]}
+  }
+}
+"""
+
+
+def _init(args, rest):
+    """Set up a project the way ``npm init playwright`` does: an example test, settings, CI, and
+    the MCP server registered for AI coding agents. Files that exist are left alone."""
+    root = Path(args.dir)
+    files = {
+        root / "tests" / "test_robot.py": _INIT_TEST,
+        root / "robowright.toml": _INIT_TOML,
+        root / "pytest.ini": _INIT_PYTEST.format(robot=args.robot, backend=args.backend),
+        root / ".github" / "workflows" / "robowright.yml": _INIT_CI,
+        root / ".mcp.json": _INIT_MCP,
+    }
+    for path, text in files.items():
+        if path.exists():
+            print(f"kept     {path} (exists)")
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        print(f"wrote    {path}")
+    ignore = root / ".gitignore"
+    lines = ignore.read_text().splitlines() if ignore.exists() else []
+    if "robowright-traces/" not in lines:
+        ignore.write_text("\n".join([*lines, "robowright-traces/"]) + "\n")
+        print(f"updated  {ignore}")
+    print(
+        "\nnext:\n"
+        "  pytest                            run the tests\n"
+        "  robowright show-trace <trace>     look into a failure (--text for a plain summary)\n"
+        "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)"
+    )
+    return 0
+
+
 def _show(args, rest):
+    if args.text:
+        from .trace import Trace
+
+        print(Trace(args.trace).summary())
+        return 0
     from .viewer import write_html
 
     out = write_html(args.trace, args.out)
@@ -229,6 +352,7 @@ def main(argv=None) -> int:
     s.add_argument("trace")
     s.add_argument("-o", "--out")
     s.add_argument("--no-open", action="store_true", help="write the HTML but do not open a browser")
+    s.add_argument("--text", action="store_true", help="print what ran, what failed and the state at the failure, as text")
     r = sub.add_parser("replay", help="re-simulate a trace and report divergence")
     r.add_argument("trace")
     r.add_argument("--backend")
@@ -257,6 +381,10 @@ def main(argv=None) -> int:
     cc.add_argument("trace")
     cc.add_argument("--backend", required=True)
     sub.add_parser("mcp", help="run the MCP server (stdio) that lets an AI agent drive a simulated robot")
+    i = sub.add_parser("init", help="set up a project: an example test, settings, CI and the MCP server for AI agents")
+    i.add_argument("dir", nargs="?", default=".")
+    i.add_argument("--robot", default="so101", help="the robots tests run on (default so101)")
+    i.add_argument("--backend", default="mujoco", help="the engines tests run on (default mujoco)")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
         return _test(None, argv[1:])
@@ -272,6 +400,7 @@ def main(argv=None) -> int:
         "info": _info,
         "robots": _robots,
         "mcp": _mcp,
+        "init": _init,
     }
     return commands[args.cmd](args, [])
 

@@ -192,6 +192,18 @@ class Backend(ABC):
     def close(self) -> None:
         pass
 
+    # Watching a run (pytest --rw-headed). Engines with a window of their own implement these.
+    def open_viewer(self) -> None:
+        from ..errors import CapabilityError
+
+        raise CapabilityError(f"{self.name} has no live viewer: run headed with --rw-backend mujoco, or open the trace afterwards")
+
+    def sync_viewer(self) -> None:
+        pass
+
+    def close_viewer(self) -> None:
+        pass
+
     def _snapshot_built(self) -> None:
         """Remember the as-built state, for :meth:`_reuse`."""
         if STATE in self.capabilities:

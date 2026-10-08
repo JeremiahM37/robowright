@@ -370,10 +370,11 @@ class Robot:
     def _servo_target(self) -> np.ndarray:
         """The targets the servos are given this step: the commanded ones, plus an integral term.
 
-        While a policy holds the arm's targets still and a joint has stopped more than 0.02 rad
+        While a policy holds the arm's targets still and a joint has stopped more than 0.01 rad
         short, the difference is asked for, a tenth each step, up to 0.15 rad: what a
         controller's integral term does. A stiff servo stops well inside that and never sees
-        it; Menagerie's Google Robot's rested 0.05-0.14 rad short under gravity and joint
+        it (at 0.02, several of the Google Robot's joints each stopped just inside it, together
+        1.2 cm off at the tool, and it crept in for seconds); Menagerie's Google Robot's rested 0.05-0.14 rad short under gravity and joint
         friction, and its scripted policy never saw the tool arrive. (robowright's own moves
         have their own, in ``_settle``: integrating through them as well moved the arm about
         while its jaws closed on a can.)"""
@@ -389,7 +390,7 @@ class Robot:
             unit = self._joint_units
             off = (target[:n] - b.qpos()[:n]) / unit
             stalled = np.abs(b.qvel()[:n]) / unit < 0.05
-            grow = stalled & (np.abs(off) > 0.02)
+            grow = stalled & (np.abs(off) > 0.01)
             if grow.any():
                 self._bias[grow] = np.clip(self._bias[grow] + 0.1 * off[grow] * unit[grow], -0.15 * unit[grow], 0.15 * unit[grow])
         target[:n] += self._bias
@@ -441,6 +442,18 @@ class Robot:
 
         return DETERMINISTIC in self.world.backend.capabilities
 
+    def _blocked(self) -> str:
+        """What the robot is pressing against, for an error that says why it stopped short."""
+        w = self.world
+        if not w.has_contacts:
+            return ""
+        touching = set()
+        for c in w.backend.contacts():
+            for me, other in ((c.a, c.b), (c.b, c.a)):
+                if me.startswith("robot:") and not other.startswith("robot:") and c.force > 0.05:
+                    touching.add(f"{me[6:]} on {other}")
+        return f" (pressing: {', '.join(sorted(touching))})" if touching else ""
+
     def _release(self):
         """Start a move from where the servos were being asked to hold (the integral term folded
         into the targets), so it ends at its goal with nothing carried over."""
@@ -490,7 +503,8 @@ class Robot:
             err = np.abs(self.true_qpos()[:n] - goal)
             j = self.joint_names[int(np.argmax(err))]
             what = "arm" if self.model.family == "arm" else "robot"
-            raise ActionTimeoutError(f"{what} did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target")
+            why = self._blocked()
+            raise ActionTimeoutError(f"{what} did not settle within {timeout}s; worst joint {j} is {err.max():.3f} rad off target{why}")
 
     @functools.cached_property
     def _joint_units(self) -> np.ndarray:
@@ -698,7 +712,7 @@ class Robot:
         """
         t = as_subject(self.world, on)
         p = t.position.copy()
-        top = t.top if isinstance(t, ObjectHandle) else p[2]
+        top = t.top if isinstance(t, ObjectHandle) else self._surface_under(p)
         if self._held_from is not None:
             return self._place_from_side(t, p, top, height, timeout)
         if yaw is None:
@@ -740,6 +754,24 @@ class Robot:
         self.gripper.open.__wrapped__(self.gripper, opening)
         self._grip_open = 1.0
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
+
+    def _surface_under(self, p) -> float:
+        """The height to set something down at point ``p``: its own, or the top of any object it
+        lies over (a point in a bin is set down from above the rim, as ``place(on=bin)`` is:
+        carried at the point's own height, a cube caught on the rim and the arm stalled)."""
+        w = self.world
+        top = float(p[2])
+        if not w.has_ground_truth:
+            return top
+        held = self.gripper.holding() if w.has_contacts else None
+        for name in w.object_names:
+            if name == held:
+                continue
+            o = w.scene[name]
+            lo, hi = o.bounds()
+            if lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1] and hi[2] > top:
+                top = float(hi[2])
+        return top
 
     def _place_from_side(self, t, p, top, height, timeout):
         """Set down what a side grasp holds: planned to above the spot, down, let go, back out."""

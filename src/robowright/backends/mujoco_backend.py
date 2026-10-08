@@ -321,6 +321,41 @@ class MujocoBackend(Backend):
         b = self._base if name == "robot" else self._body[name]
         self.data.xfrc_applied[b, :3] += force
 
+    def open_viewer(self):
+        import os
+        import sys
+
+        import mujoco.viewer
+
+        from ..errors import CapabilityError
+
+        # MuJoCo's viewer ends the process when GLFW cannot start: check first, and say why.
+        if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            raise CapabilityError("headed runs need a display (no DISPLAY or WAYLAND_DISPLAY): run without --rw-headed and open the trace")
+        import glfw
+
+        if not glfw.init():
+            raise CapabilityError("headed runs need a display GLFW can open: run without --rw-headed and open the trace")
+        try:
+            self._viewer = mujoco.viewer.launch_passive(self.model, self.data, show_left_ui=False, show_right_ui=False)
+            with self._viewer.lock():  # framed on the task area and the arm, free to orbit
+                cam = self._viewer.cam
+                cam.lookat[:] = (0.15, 0.03, 0.08)
+                cam.distance, cam.azimuth, cam.elevation = 0.9, 150.0, -25.0
+        except Exception as e:  # say what to do instead of a GLFW traceback
+            raise CapabilityError(f"cannot open MuJoCo's viewer ({type(e).__name__}: {e}): headed runs need a display") from e
+
+    def sync_viewer(self):
+        v = getattr(self, "_viewer", None)
+        if v is not None and v.is_running():
+            v.sync()
+
+    def close_viewer(self):
+        v = getattr(self, "_viewer", None)
+        if v is not None:
+            v.close()
+            self._viewer = None
+
     def render(self, camera, width, height):
         r = self._renderers.get((width, height))
         if r is None:

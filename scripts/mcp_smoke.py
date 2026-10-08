@@ -33,7 +33,22 @@ async def main(out: Path):
         shot = (await c.call_tool("robot_screenshot", {"camera": "top", "width": 320, "height": 240})).content[0]
         assert shot.mime_type == "image/png" and base64.b64decode(shot.data)[:4] == b"\x89PNG"
         await c.call_tool("robot_generate_test", {"test_name": "test_from_mcp", "path": str(out / "test_from_mcp.py")})
+        trace = text(await c.call_tool("robot_save_trace", {"path": str(out / "session.zip")})).strip()
+        read = text(await c.call_tool("robot_read_trace", {"path": trace}))
+        assert "robot.pick" in read and "cube: at" in read, read
         await c.call_tool("robot_close", {})
+        # The agent loop: run the tests, read why one failed.
+        ok = text(await c.call_tool("robot_run_tests", {"target": str(out / "test_from_mcp.py"), "cwd": str(out)}))
+        assert ok.startswith("exit code 0"), ok
+        (out / "test_wrong.py").write_text(
+            "from robowright import expect\n\n"
+            "def test_wrong_spot(robot, scene):\n"
+            "    robot.pick(scene['cube'])\n"
+            "    robot.place(on=(0.25, -0.1, 0.0))\n"
+            "    expect(scene['cube']).to_be_inside(scene['bin'], timeout=0.5)\n"
+        )
+        bad = text(await c.call_tool("robot_run_tests", {"target": str(out / "test_wrong.py"), "cwd": str(out)}))
+        assert bad.startswith("exit code 1") and "expect(cube).to_be_inside" in bad and "at the failure" in bad, bad
     test = str(out / "test_from_mcp.py")
     run = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", test], capture_output=True, text=True)
     print(run.stdout.strip().splitlines()[-1])

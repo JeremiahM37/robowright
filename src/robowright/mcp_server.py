@@ -32,7 +32,9 @@ robot_stand, robot_crouch, robot_move_joints. Disturb the world with robot_push,
 robot_move_object and robot_fault. Check outcomes with robot_expect. Look with
 robot_screenshot (cameras: front, top, side). A failed action reports why and
 leaves the session running. robot_generate_test turns the session into a pytest
-test that reproduces it exactly; robot_crosscheck re-runs it on another engine. Positions are metres in the world frame, z up."""
+test that reproduces it exactly; robot_crosscheck re-runs it on another engine.
+robot_run_tests runs a project's tests and returns each failure with its trace as
+text; robot_read_trace reads any trace that way. Positions are metres in the world frame, z up."""
 
 
 def build_server(session: Session | None = None):
@@ -194,6 +196,44 @@ def build_server(session: Session | None = None):
     async def robot_save_trace(path: str | None = None) -> str:
         """Save the session's trace (for `robowright show-trace` / `replay`) and return its path."""
         return await run(s.save_trace, path)
+
+    @tool
+    async def robot_read_trace(path: str) -> str:
+        """A trace (.zip, from a failed test or robot_save_trace) as text: what ran, which expectation
+        or action failed and why, and the robot's joints, every object's pose and the contacts at
+        the moment it failed. Read this before changing a test or the code under test."""
+        from .trace import Trace
+
+        return await run(lambda: Trace(path).summary())
+
+    @tool
+    async def robot_run_tests(
+        target: str = "", robot: str | None = None, backend: str | None = None, select: str | None = None, cwd: str | None = None
+    ) -> str:
+        """Run robot tests with pytest and report the result: the pass/fail summary, each failure's
+        message, and each failing test's trace as text (as robot_read_trace gives it).
+
+        target: test file, directory or node id (default: the project's tests). robot: e.g. 'panda'
+        or 'panda,ur5e' or a model file. backend: e.g. 'mujoco' or 'mujoco,pybullet'. select: a
+        pytest -k expression. cwd: the project directory (default: the server's). Runs in its own
+        process; the session's world is untouched."""
+        import sys
+
+        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rw-trace-text", "-rfE"]
+        cmd += [target] if target else []
+        cmd += ["--rw-robot", robot] if robot else []
+        cmd += ["--rw-backend", backend] if backend else []
+        cmd += ["-k", select] if select else []
+        proc = await asyncio.create_subprocess_exec(*cmd, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=1800)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return "the tests did not finish within 30 minutes"
+        text = out.decode(errors="replace")
+        if len(text) > 20000:  # keep the end: the summary, the failures and their traces
+            text = "...\n" + text[-20000:]
+        return f"exit code {proc.returncode} ({'passed' if proc.returncode == 0 else 'failed'})\n{text}"
 
     @tool
     async def robot_close() -> str:

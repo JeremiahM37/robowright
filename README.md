@@ -71,6 +71,10 @@ pytest test_pick.py --rw-backend mujoco,pybullet
 robowright replay robowright-traces/*.zip            # re-simulate: "bit-identical"
 ```
 
+For a whole project, `robowright init` writes an example test, `pytest.ini`, `robowright.toml`, a
+GitHub Actions workflow and `.mcp.json` (so AI coding agents get the robot tools), and
+`pytest --rw-report report.html` gives the run as one HTML page.
+
 ```python
 from robowright import expect
 
@@ -126,6 +130,10 @@ evidence to debug it. robowright brings that workflow to robots:
 | trace viewer | every failure leaves a `.zip` trace with joints, object poses, contacts and the action timeline, viewable as HTML with camera views drawn from it |
 | codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test |
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
+| `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
+| HTML reporter | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer |
+| `--headed` | `pytest --rw-headed`: watch each test in MuJoCo's window, at real-time pace |
+| Playwright MCP, test agents | `robowright mcp`: an agent drives a robot, saves a test, runs the suite and reads each failure's trace |
 
 On top of that, it adds things robots need and web pages don't:
 
@@ -281,9 +289,9 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
 | PAL TIAGo and TIAGo Dual (base held) | all 21 pass |
 | Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
-| Unitree Z1 | gripper works; pick fails: its moving jaw swings from a pivot 9 cm up, so its pad is still tilted 18 degrees when it reaches a 25 mm cube and meets it on its top edge, shoving it 3 cm aside. No opening, tool offset or approach direction (32 tried, level to straight down) avoids it |
+| Unitree Z1 | 10 of 21, and the 11 that pick the cube are registered limits (strict xfails, `conftest.py`): its moving jaw swings from a pivot 9 cm up, so its pad is still tilted 18 degrees when it reaches a 25 mm cube and meets it on its top edge, shoving it under the fixed jaw's pad (which starts 11 mm above the table). No opening, tool offset or approach direction (32 tried, level to straight down) avoids it |
 | Lite 6, narrow gripper | 12 mm gap: every test that picks the 25 mm cube is skipped, saying so; the rest pass |
-| Google Robot | 20 of 21: all of robowright's own moves and the randomized-cube policy pass (an integral term holds its gravity-sagged soft servos to their targets); under joint noise and delay one seed of 20 runs out of time, its 1 s wrist servo still closing in |
+| Google Robot | all 21 pass: its servos are soft (time constants to 1 s) and sag under gravity and joint friction; robowright times its moves to them and adds an integral term, as a controller would |
 | TidyBot (arm on a mobile base modelled as slides) | all 21 pass |
 | Trossen AI | every motor capped at ±1 rad in the model; refused: no mounting reaches the task area |
 | Hello Robot Stretch 2 | refused: its standard gripper has no wrist pitch, so it cannot point down for a top-down grasp |
@@ -293,7 +301,7 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 |---|---|
 | Franka Panda (two URDFs), KUKA LBR iiwa (three), AgileX PiPER, SO-100, Unitree Z1, I2RT YAM, UFACTORY xArm 6 with gripper, Comau e.DO (every joint unlimited, no effort given) | all 21 pass |
 | SO-101, Fanuc M-710iC | all 21 pass |
-| OpenMANIPULATOR-X | 20 of 21: the cube slips under a shove (it has no wrist roll, so its jaws pinch the cube's edges; see below) |
+| OpenMANIPULATOR-X | 20 of 21; the shove is a registered limit: it has no wrist roll, so its jaws pinch the cube's edges (see below) |
 | OpenMANIPULATOR-X follower (OMX-F) | refused until given `gripper_open` and `gripper_closed`: its gripper range is a placeholder full turn |
 
 | From xacro (ROS 2 description packages, with their arguments) | Result |
@@ -348,6 +356,8 @@ list because neither can stand on joint servos alone, without a balance controll
 
 ## Install
 
+robowright isn't on PyPI yet. From source:
+
 ```bash
 pip install "git+https://github.com/JeremiahM37/robowright"      # core: MuJoCo, the SO-101, pytest plugin, trace viewer
 ```
@@ -368,6 +378,14 @@ To work on robowright itself: `git clone https://github.com/JeremiahM37/robowrig
 (When installing from git, write the extra as `"robowright[pybullet] @ git+https://github.com/JeremiahM37/robowright"`.)
 Other extras: `[mcp]` (let an AI agent drive a simulated robot), `[urdf]` (mesh tools for
 reading URDFs: COLLADA, concave jaws, xacro), `[video]` (`robowright render` to mp4), `[onnx]` (ONNX policies).
+
+Then, in your own project:
+
+```bash
+robowright init                  # an example test, pytest.ini, robowright.toml, a GitHub Actions
+                                 # workflow, and .mcp.json so AI coding agents get the robot tools
+pytest                           # run it
+```
 
 Robot models other than the SO-101 are downloaded from MuJoCo Menagerie the first time a
 test uses them, into `~/.cache/robowright` (or `$XDG_CACHE_HOME/robowright`): a sparse
@@ -586,6 +604,29 @@ tests/test_bin.py::test_cube_lands_in_bin[mujoco]
 
 <p align="center"><img src="docs/viewer.png" alt="robowright trace viewer showing the action list, camera frame, timeline and joint plots of a failing test"></p>
 
+`pytest --rw-trace-text` (or `robowright show-trace --text trace.zip`) prints a trace as
+text, for a CI log or an AI agent:
+
+```
+tests/test_tidy.py::test_cube_goes_in_the_bin[mujoco]: FAILED
+  so101 on mujoco, seed 0, 197 steps (3.94 s simulated)
+timeline:
+      0.00-2.04s  robot.pick(obj=cube)
+      2.04-3.44s  robot.place(on=[0.25, -0.1, 0])
+  ✗   3.94s  expect(cube).to_be_inside(container=bin, margin=0, timeout=0.5)
+        cube at (0.250, -0.100, 0.012); bin spans (0.150, 0.070, 0.000)..(0.250, 0.170, 0.040)
+at the failure (t=3.94 s, step 197):
+  joints: shoulder_pan=0.452, shoulder_lift=0.340, elbow_flex=-0.203, wrist_flex=1.434, wrist_roll=0.502, gripper=1.000
+  cube: at (0.250, -0.100, 0.012), yaw 0 deg
+  bin: at (0.200, 0.120, 0.000), yaw 0 deg
+  contacts: floor-cube 0.29 N
+```
+
+`pytest --rw-report report.html` writes one page for the whole run, Playwright's HTML
+report: every test with its outcome and time, trials with their rates, and each failure
+with its message, its trace as text and a link to it in the viewer. `pytest --rw-headed`
+shows each test in MuJoCo's own window as it runs, at real-time pace.
+
 The viewer is one self-contained HTML file, so you can attach it to a CI run or an issue.
 It has an action list, a scrubbable camera view, a timeline, joint plots (measured against
 commanded), and per-step joints, objects and contacts.
@@ -654,7 +695,18 @@ as a pytest test that reproduces it bit for bit:
 
 Given only these tools and the task "put a cube and a cylinder in the bin with a Panda,
 verify it, save a test", a headless Claude agent built the scene, did it on the first
-try, checked a screenshot and saved a test that passes. A session costs what MuJoCo
+try, checked a screenshot and saved a test that passes.
+
+An agent can also work on a project's tests the way Playwright's test agents do.
+`robot_run_tests` runs them and returns each failure with its trace as text: what ran,
+which expectation failed and why, and where the robot and every object were at that
+moment. `robot_read_trace` reads any trace the same way. Given a project with a test that
+set the cube down beside the bin, and told only "make it pass without weakening the
+assertion", a headless Claude agent ran it, read that the cube was 17 cm from the bin,
+changed `place(on=(0.25, -0.1, 0))` to `place(on=scene["bin"])` and confirmed it passed:
+10 turns, $0.13. (Its first try, a point in the middle of the bin, found a robowright bug:
+a point inside a bin was carried at table height and caught on the rim. Points now clear
+whatever they lie over.) A session costs what MuJoCo
 costs: about 1 second of wall time for a launch, pick, place, check and screenshot.
 
 ### Cross-check on another engine
@@ -663,13 +715,13 @@ A run that passes on one engine may only pass because of that engine's contact m
 `crosscheck` makes a trace's calls again on another engine, from the same scene and seed,
 and compares the verdict and where each object ended up:
 
-Here a WidowX holds a cube, a 1.5 N shove hits it, and the test expects it still held. Its
-2.2 N grip lets go in MuJoCo; PyBullet's stiffer contacts keep it:
+Here an ARX L5 holds a cube, a 1.5 N shove hits it, and the test expects it still held. Its
+0.9 N grip lets go in MuJoCo; PyBullet's stiffer contacts keep it:
 
 ```console
-$ robowright crosscheck widowx_shove.zip --backend pybullet
+$ robowright crosscheck arx_shove.zip --backend pybullet
 pybullet: passes; on mujoco it failed
-  cube ends 111.0 mm from where it did on mujoco
+  cube ends 115.3 mm from where it did on mujoco
 VERDICTS DIFFER: the outcome depends on the engine
 ```
 
