@@ -24,3 +24,9 @@ class UnreachableError(RobowrightError):
 
 class GraspError(RobowrightError):
     """``pick`` lifted without the object in both jaws."""
+
+
+class TooWideError(GraspError):
+    """The object is wider than the gripper opens: the robot cannot do what the test asks. Run
+    under pytest, the test is skipped on that robot, saying so (Lite6's narrow gripper opens
+    12 mm; the default cube is 25 mm)."""

@@ -136,6 +136,19 @@ class MujocoBackend(Backend):
         self._followers = joint_followers(m, [m.joint(n).id for n in arm])
         self._kp = m.actuator_gainprm[self._act, 0].copy()
         self._bias = m.actuator_biasprm[self._act, 1].copy()
+        # A position servo following a moving target trails it by (kv + joint damping) / kp
+        # seconds of its motion. On robowright's own smooth moves (``feedforward``, set while the
+        # robot streams one) the targets lead it by as much, as a trajectory controller does:
+        # Menagerie's Rizon4 (0.2 s) otherwise ran 0.47 rad behind a planned path and swept a
+        # can it had been planned around. A policy's own targets are not led: chunks that start
+        # and stop at once overshot with it, and the ARX L5 and iiwa dropped cubes.
+        self.feedforward = False
+        joint_servo = (m.actuator_trntype[self._act] == mujoco.mjtTrn.mjTRN_JOINT) & (
+            m.actuator_biastype[self._act] == mujoco.mjtBias.mjBIAS_AFFINE
+        )
+        kv = np.maximum(-m.actuator_biasprm[self._act, 2], 0.0) + m.dof_damping[self._dadr]
+        self._led = np.zeros(len(self._act))  # the lead last applied
+        self._lead = np.where(joint_servo & (self._kp > 0) & (self._bias < 0), kv / np.maximum(self._kp, 1e-9), 0.0)
         if self.has_gripper:
             self._gact = m.actuator(PREFIX + rm.gripper_actuator).id
             der = rm.derived
@@ -206,6 +219,7 @@ class MujocoBackend(Backend):
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
         self._ramp.reset()  # placed, not moved: no ramp
+        self._led = np.zeros(len(self._act))
         self.data.qpos[self._qadr] = q[: self.n_arm]
         self.data.qvel[self._dadr] = 0
         if self.has_gripper:
@@ -242,11 +256,21 @@ class MujocoBackend(Backend):
     # time
     def step(self):
         m, d, ramp, n = self.model, self.data, self._ramp, self._substeps
-        if ramp.moving:
+        lead = self._lead * ramp.velocity(self.control_dt)[: self.n_arm] if ramp.moving and self.feedforward else np.zeros(self.n_arm)
+        if ramp.moving or self._led.any():
+            # The lead is ramped too: changing in a step at each control step, it shook the Z1's
+            # light wrist into an oscillation at its force limit that never died out.
+            lim = m.actuator_ctrllimited[self._act].astype(bool)
+            lo, hi = m.actuator_ctrlrange[self._act].T
             for k in range(n):
-                d.ctrl[self._acts] = ramp.at((k + 1) / n)
+                u = ramp.at((k + 1) / n) if ramp.moving else ramp.end.copy()
+                arm = u[: self.n_arm] + self._led + (k + 1) / n * (lead - self._led)
+                u[: self.n_arm] = np.where(lim, np.clip(arm, lo, hi), arm)
+                d.ctrl[self._acts] = u
                 mujoco.mj_step(m, d)
+            d.ctrl[self._acts] = ramp.end  # what was commanded, as ctrl() and a trace read it
             ramp.arrive()
+            self._led = lead
         else:
             for _ in range(n):
                 mujoco.mj_step(m, d)
@@ -308,11 +332,14 @@ class MujocoBackend(Backend):
         spec = mujoco.mjtState.mjSTATE_INTEGRATION
         st = np.empty(mujoco.mj_stateSize(self.model, spec))
         mujoco.mj_getState(self.model, self.data, st, spec)
-        return st
+        return np.concatenate([st, self._led])  # and the servos' lead, which eases out over the next step
 
     def set_state(self, state):
-        mujoco.mj_setState(self.model, self.data, np.asarray(state, float), mujoco.mjtState.mjSTATE_INTEGRATION)
+        state = np.asarray(state, float)
+        k = len(self._led)
+        mujoco.mj_setState(self.model, self.data, state[:-k], mujoco.mjtState.mjSTATE_INTEGRATION)
         mujoco.mj_forward(self.model, self.data)
+        self._led = state[-k:].copy()
         # States are taken between control steps, when the ramp has arrived: none is pending.
         self._ramp.reset()
         self._ramp.set(self.data.ctrl[self._acts])

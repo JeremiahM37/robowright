@@ -114,3 +114,26 @@ def test_c(robot, scene):
         assert len(list(pytester.path.glob(f"worker-{robot}-*"))) == 1  # one process ran all three
     traces = sorted(p.name for p in (pytester.path / "robowright-traces").iterdir())
     assert traces == ["test_g.py__test_c[mujoco-panda].zip", "test_g.py__test_c[mujoco-so101].zip"]  # no "@group"
+
+
+def test_an_object_wider_than_the_gripper_skips_the_test_on_that_robot(pytester):
+    pytester.makepyfile(
+        test_w="""
+import pytest
+from robowright import ObjectSpec, tabletop
+
+BIG = lambda: tabletop(ObjectSpec("crate", "box", (0.06, 0.06, 0.03), (0.22, -0.06, None), color="red"))
+
+@pytest.mark.scene(BIG)
+def test_pick(robot, scene):
+    robot.pick(scene["crate"])
+
+@pytest.mark.scene(BIG)
+@pytest.mark.trials(3)
+def test_pick_trials(robot, scene):
+    robot.pick(scene["crate"])
+"""
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider", "-rs")
+    r.assert_outcomes(skipped=2)
+    r.stdout.fnmatch_lines(["*crate is 120 mm across; this gripper opens * mm: too wide for this robot's gripper*"])

@@ -47,6 +47,7 @@ _NEEDED = np.array(
         (0.22, -0.06, 0.07),  # lifted
         (0.2, 0.12, 0.08),  # over the bin
         (0.2, 0.0, 0.08),  # the lowest home pose
+        (0.16, -0.10, 0.02),  # grasp a second cube, nearer the robot (test_places_a_second_object...)
     ]
 )
 _AROUND = np.array([(x, y, z) for x in (0.12, 0.3) for y in (-0.12, 0.18) for z in (0.03, 0.1)])
@@ -1081,6 +1082,32 @@ def _base_footprint(model: RobotModel) -> list[tuple[np.ndarray, bool]]:
 
 
 # ---------------------------------------------------------------------------------------------
+def _folds(model: RobotModel, rest):
+    """A test of whether arm joints ``q`` put the hand of ``model`` into its arm or its base.
+    (Links of the arm itself are not checked: built of overlapping primitives, Drake's iiwa's
+    touch as its elbow bends.) Always false for a model that overlaps itself at ``rest``."""
+    from ..robot import _hand_bodies
+
+    mm = model.robot_spec().compile()
+    d = mujoco.MjData(mm)
+    adr = [mm.joint(j).qposadr[0] for j in model.arm_joints]
+    hand = _hand_bodies(mm, model.hand)
+
+    def test(q):
+        d.qpos[adr] = q
+        mujoco.mj_kinematics(mm, d)
+        mujoco.mj_collision(mm, d)
+        for c in d.contact[: d.ncon]:
+            b1, b2 = mm.geom_bodyid[c.geom1], mm.geom_bodyid[c.geom2]
+            if c.dist < 0 and (b1 in hand) != (b2 in hand) and 0 not in (b1, b2):
+                return True
+        return False
+
+    if test(np.asarray(rest, float)):
+        return lambda q: False
+    return test
+
+
 def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotModel:
     """Mount the arm where top-down grasps reach the whole task area, and pick a home height."""
     from ..robot import DOWN
@@ -1099,14 +1126,18 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
 
     any_yaw = False  # set for an arm with no wrist roll, which grips at whatever angle it reaches with
 
+    folded = _folds(model, seed)
+
     def solve(p, turned):
-        """Joint angles reaching ``p`` top-down, or None. Grasps are square to the world (yaw 0),
-        which on a robot turned by ``turned`` is -turned in its own frame."""
+        """Joint angles reaching ``p`` top-down without the arm passing into itself or its base,
+        or None. Grasps are square to the world (yaw 0), which on a robot turned by ``turned``
+        is -turned in its own frame. (TIAGo was mounted where every way of reaching down to a
+        cube near its base put its wrist into the base.)"""
         p = np.asarray(p, float)
         for y in (-turned, None) if any_yaw else (-turned,):
             for s in seeds:
                 q, err = kin.ik(p, s, DOWN, yaw=y, rest=seed)
-                if err < 1e-3:
+                if err < 1e-3 and not folded(q):
                     return q
         return None
 

@@ -15,7 +15,7 @@ from collections import deque
 import mujoco
 import numpy as np
 
-from .errors import ActionTimeoutError, GraspError, UnreachableError
+from .errors import ActionTimeoutError, GraspError, TooWideError, UnreachableError
 from .locators import ObjectHandle, Subject, as_subject
 from .robots import PREFIX, Kinematics
 
@@ -120,7 +120,7 @@ class Arm:
         # from the straight line between its end points.
         pts = np.array([r.kin.tcp(start + (goal - start) * s) for s in np.linspace(0, 1, 17)])
         tool = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()) / self.world.settings.max_tcp_speed
-        duration = max(float(np.max(np.abs(goal - start))) / speed, tool, self.world.dt)
+        duration = max(float(np.max(np.abs(goal - start))) / speed, tool, self.world.dt, r._servo_time([start, goal]))
         r._stream(lambda s: r._set_arm(start + (goal - start) * _minjerk(s)), duration)
         r._settle(goal, timeout)
 
@@ -167,7 +167,7 @@ class Arm:
         # A short straight line can still need a big wrist turn (to a new grasp yaw);
         # bound joint speed as well, or the wrist spins fast enough to fling what it holds.
         turn = float(np.max(np.abs(qs[-1] - qs[0]))) / self.world.settings.max_joint_speed
-        duration = max(float(np.linalg.norm(p - p0)) / speed, turn, self.world.dt)
+        duration = max(float(np.linalg.norm(p - p0)) / speed, turn, self.world.dt, r._servo_time(qs))
 
         def at(s):
             x = _minjerk(s) * (len(qs) - 1)
@@ -188,7 +188,7 @@ class Arm:
         at = np.concatenate([[0.0], np.cumsum(seg)]) / seg.sum()
         fine = np.array([r.kin.tcp(_along(path, at, s)) for s in np.linspace(0, 1, 8 * len(path) + 1)])
         tool = float(np.linalg.norm(np.diff(fine, axis=0), axis=1).sum()) / self.world.settings.max_tcp_speed
-        duration = max(float(seg.sum()) / self.world.settings.max_joint_speed, tool, self.world.dt)
+        duration = max(float(seg.sum()) / self.world.settings.max_joint_speed, tool, self.world.dt, r._servo_time(path))
         r._stream(lambda s: r._set_arm(_along(path, at, _minjerk(s))), duration)
         r._settle(path[-1], timeout)
 
@@ -355,11 +355,55 @@ class Robot:
     def _set_gripper(self, a):
         self._target[-1] = a
 
+    def _servo_time(self, path, lag: float = 0.02) -> float:
+        """The shortest a smooth (minimum-jerk) move along joint ``path`` may take for the arm's
+        position servos to follow it within ``lag`` radians: accelerating a joint of inertia M
+        takes a servo of stiffness kp M * a / kp behind, and the move's peak acceleration is
+        5.77 times its travel over its duration squared. Menagerie's Rizon4 (kp 289 on a joint
+        carrying the whole arm) swung its hand 5 cm off a path planned 4 mm clear of a can."""
+        kp = self._servo_kp
+        if not kp.any():
+            return 0.0
+        path = np.asarray(path, float)
+        travel = np.abs(np.diff(path, axis=0)).sum(axis=0)
+        kin = self.kin
+        kin._set(path[0])
+        mujoco.mj_crb(kin.m, kin.d)
+        M = np.zeros((kin.m.nv, kin.m.nv))
+        mujoco.mj_fullM(kin.m, kin.d, M)
+        inertia = np.diag(M)[kin.dadr]
+        ok = kp > 0
+        return float(np.sqrt(np.max(5.77 * travel[ok] * inertia[ok] / (lag * kp[ok])))) if ok.any() else 0.0
+
+    @functools.cached_property
+    def _servo_kp(self) -> np.ndarray:
+        """Each arm joint's position-servo stiffness (0 where it has none)."""
+        kp = np.zeros(self.n_arm)
+        if getattr(self, "kin", None) is None:
+            return kp
+        m = self.kin.m
+        for a in range(m.nu):
+            servo = m.actuator_biastype[a] == int(mujoco.mjtBias.mjBIAS_AFFINE) and m.actuator_biasprm[a, 1] < 0
+            if m.actuator_trntype[a] == int(mujoco.mjtTrn.mjTRN_JOINT) and servo:
+                d = m.jnt_dofadr[m.actuator_trnid[a, 0]]
+                hit = np.flatnonzero(self.kin.dadr == d)
+                if hit.size:
+                    kp[hit[0]] = -m.actuator_biasprm[a, 1]
+        return kp
+
     def _stream(self, at, duration):
         n = max(1, int(round(duration / self.world.dt)))
-        for i in range(1, n + 1):
-            at(i / n)
-            self.world.step()
+        b = self.world.backend
+        smooth = hasattr(b, "feedforward")  # its servos are led along the move (see the MuJoCo backend)
+        if smooth:
+            b.feedforward = True
+        try:
+            for i in range(1, n + 1):
+                at(i / n)
+                self.world.step()
+        finally:
+            if smooth:
+                b.feedforward = False
 
     def _settle(self, goal, timeout, tol: float = 0.03):
         timeout = timeout or self.world.settings.action_timeout
@@ -374,8 +418,18 @@ class Robot:
             # Stopped near the goal - or held well inside the tolerance while a servo
             # dithers (a held object can sustain a small limit cycle in a stiff wrist).
             q = self.qpos()[:n]
-            err = np.max(np.abs(q - goal) / unit)
-            return err < tol / 4 or err < tol and np.max(np.abs(w.backend.qvel()[:n]) / unit) < 0.08
+            off = (goal - q) / unit
+            err = np.max(np.abs(off))
+            speed = np.max(np.abs(w.backend.qvel()[:n]) / unit)
+            if err < tol / 4 or err < tol and speed < 0.08:
+                return True
+            if speed < 0.02:
+                # Stopped short under a load its servo cannot hold the goal against (gravity on
+                # Menagerie's Google Robot's soft wrist rests it 0.033 rad down): ask for the
+                # difference, as a controller's integral term does, up to 0.15 rad.
+                ask = self._target[:n] - goal + 0.1 * off * unit
+                self._target[:n] = goal + np.clip(ask, -0.15 * unit, 0.15 * unit)
+            return False
 
         if not w.run_until(settled, timeout, hold=0.06):
             err = np.abs(self.true_qpos()[:n] - goal)
@@ -467,7 +521,7 @@ class Robot:
             width = grasp_width(o.spec)
             opens = widest_gap(self.model)
             if width > opens:
-                raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
+                raise TooWideError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across; this gripper opens {opens * 1000:.0f} mm")
         p = o.position
         yaw = getattr(o, "yaw", 0.0)
         grasp = p.copy()
@@ -504,7 +558,7 @@ class Robot:
         if isinstance(o, ObjectHandle):
             width, opens = grasp_width(o.spec), widest_gap(self.model)
             if width > opens:
-                raise GraspError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across and this gripper opens {opens * 1000:.0f} mm")
+                raise TooWideError(f"pick({o.name!r}): {o.name} is {width * 1000:.0f} mm across; this gripper opens {opens * 1000:.0f} mm")
         tilt = 0.0  # radians below horizontal
         if not isinstance(approach, str):
             d = np.asarray(approach, float)
@@ -612,6 +666,21 @@ class Robot:
             else:
                 self.arm.move_to.__wrapped__(self.arm, [here[0], here[1], above[2]], yaw=yaw, linear=True, timeout=timeout)
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, timeout=timeout)
+        # Set the object down there, not the tool: a hand with one fixed jaw holds it off
+        # centre (1.5 cm on an SO-101), which put a second cube on the rim of a bin. Measured
+        # once above the spot: on the way the wrist can turn half round (the jaws grip either
+        # way up), and the offset with it.
+        held = self.gripper.holding() if self.world.has_contacts and self.world.has_ground_truth else None
+        if held is not None:
+            off = (self.world.scene[held].position - self.tcp.position)[:2]
+            if np.linalg.norm(off) > 0.003:
+                p[:2] -= off
+                above[:2] = p[:2]
+                try:
+                    self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
+                except UnreachableError:
+                    p[:2] += off
+                    above[:2] = p[:2]
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper, opening)
         self._grip_open = 1.0

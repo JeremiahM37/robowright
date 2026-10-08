@@ -34,7 +34,7 @@ import pytest
 import robowright as rw
 
 from . import robots as _robots
-from .errors import RobowrightError
+from .errors import RobowrightError, TooWideError
 from .scene import SceneSpec, default_camera, default_scene
 from .stats import TrialReport
 from .world import Settings, World, _safe
@@ -260,6 +260,16 @@ def pytest_runtest_makereport(item, call):
             rep.user_properties.append(("robowright_trials", item._rw_trials.summary()))
 
 
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    """A test asking a robot to pick up something wider than its gripper opens is skipped on that
+    robot: the robot cannot do it, which is not a failure of the robot or of robowright."""
+    try:
+        return (yield)
+    except TooWideError as e:
+        pytest.skip(f"{e}: too wide for this robot's gripper")
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem):
     m = pyfuncitem.get_closest_marker("trials")
@@ -282,6 +292,9 @@ def pytest_pyfunc_call(pyfuncitem):
         failed, msg = False, ""
         try:
             pyfuncitem.obj(**args)
+        except TooWideError:
+            w.close(failed=False)
+            raise  # this robot cannot run the test at all (see pytest_runtest_call)
         except (AssertionError, RobowrightError) as e:
             failed, msg = True, f"{type(e).__name__}: {e}"
         path = None

@@ -16,7 +16,8 @@ from __future__ import annotations
 import numpy as np
 
 from . import robots
-from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, _kinematics, home_q, release_reach, solve_ik, top_grasp, unfold
+from .errors import TooWideError
+from .robot import GRIPPER_CLOSED, GRIPPER_OPEN, _kinematics, home_q, release_reach, solve_ik, top_grasp, unfold, widest_gap
 
 
 class ScriptedPickPlace:
@@ -59,10 +60,14 @@ class ScriptedPickPlace:
 
     def _bind(self, robot: str):
         if self.robot != robot:
+            model = robots.get(robot)
+            if model.has_gripper and widest_gap(model) < self.size[0]:
+                opens = widest_gap(model)
+                raise TooWideError(f"{self.object} is {self.size[0] * 1000:.0f} mm across; this gripper opens {opens * 1000:.0f} mm")
             self.robot = robot
             self.kin = _kinematics(robot)
             self.home = home_q(robot)
-            self.der = robots.get(robot).derived
+            self.der = model.derived
 
     def _ik(self, p, seed, yaw):
         q, err = solve_ik(self.kin, p, seed, self.home, yaw=yaw)

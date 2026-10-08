@@ -200,19 +200,26 @@ home = [0.2, 0.0, 0.12]
 
 In code, `robots.load("my_arm.xml", grip_force=40.0, home=(0.2, 0.0, 0.12))` does the same.
 
+A model's servos are taken as they are, soft or stiff. robowright times each of its own moves so
+the servos can follow it (a soft servo lags by its inertia over its stiffness times the move's
+acceleration), on MuJoCo leads them along it by their damping lag (kv/kp, as a trajectory
+controller does), and asks a joint that stops short under load for the difference (an integral
+term). A test that asks a robot to pick up something wider than its gripper opens is skipped on
+that robot, saying so, rather than failed.
+
 **Measured:** re-detected from their bare model files, all 19 built-in robots come out as their
 hand-written entries say. On robots robowright had never seen, the arm contract and examples
 (21 tests) on MuJoCo:
 
 | From MJCF (MuJoCo Menagerie robots that aren't built in) | Result |
 |---|---|
-| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
-| PAL TIAGo Dual (base held) | all 21 pass |
-| PAL TIAGo (base held) | 20 of 21: a second cube set down on the first |
+| Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100 | all 21 pass |
+| PAL TIAGo and TIAGo Dual (base held) | all 21 pass |
+| Koch low-cost arm | 20 of 21: under 0.02 rad of joint noise it drops the cube on 3 seeds of 20: its V-shaped moving jaw meets the cube on its top edge and holds it there only just |
 | Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
 | Unitree Z1 | gripper works; pick fails: at the lowest height it can go, its moving jaw meets a 25 mm cube on its top edge, pressing down at 20 degrees, and tips it over |
-| Lite 6, narrow gripper | 12 mm gap; `pick` refuses a 25 mm cube up front |
-| Google Robot | its servos can hold a joint only to 0.03–0.10 rad of a target (joint friction / stiffness); `--inspect` warns |
+| Lite 6, narrow gripper | 12 mm gap: every test that picks the 25 mm cube is skipped, saying so; the rest pass |
+| Google Robot | 19 of 21. robowright's own moves pass (timed to its soft servos, and settled with an integral term), but the scripted policy waits 12 s for gravity-sagged servos to bring the tool within its 1.2 cm tolerance |
 | TidyBot (arm on a mobile base modelled as slides) | all 21 pass |
 | Trossen AI | every motor capped at ±1 rad in the model; refused: no mounting reaches the task area |
 | Hello Robot Stretch 2 | refused: its standard gripper has no wrist pitch, so it cannot point down for a top-down grasp |
@@ -221,19 +228,23 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 | From URDF (ROS description packages, PyBullet's and Drake's models) | Result |
 |---|---|
 | Franka Panda (two URDFs), KUKA LBR iiwa (three), AgileX PiPER, SO-100, Unitree Z1, I2RT YAM, UFACTORY xArm 6 with gripper, Comau e.DO (every joint unlimited, no effort given) | all 21 pass |
-| SO-101, OpenMANIPULATOR-X, Fanuc M-710iC | 20 of 21: a second cube set down on the first (SO-101); the cube slips under a shove, on a gripper whose effort the file only gives as a placeholder (OpenMANIPULATOR-X); 0.02 rad of joint noise on a 2 m arm (M-710iC) |
+| SO-101, Fanuc M-710iC | all 21 pass |
+| OpenMANIPULATOR-X | 20 of 21: the cube slips under a shove (it has no wrist roll, so its jaws pinch the cube's edges; see below) |
 | OpenMANIPULATOR-X follower (OMX-F) | refused until given `gripper_open` and `gripper_closed`: its gripper range is a placeholder full turn |
 
 | From xacro (ROS 2 description packages, with their arguments) | Result |
 |---|---|
-| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv MICO-Core, Kinova Jaco 2 (three fingers) | all 21 pass |
-| Flexiv Rizon 4 | 20 of 21: its side grasp knocks the can over |
+| UR5e, UR10e, Franka FR3, UFACTORY xArm 6 and xArm 7, Kinova Gen3 and Gen3 lite, Flexiv MICO-Core, Flexiv Rizon 4 | all 21 pass |
+| Kinova Jaco 2 (three fingers) | 20 of 21: on 1 seed of 20 a cube jittered towards the bin leaves a fully open finger resting on the bin's rim, and the fingers, closing as one, cannot close |
 
 On the other engines, the URDF arms pass the arm contract 177/182 on PyBullet, 210/210 on
 Drake and 208/210 on Genesis. The misses are the OpenMANIPULATOR-X's grasp (PyBullet) and the
 xArm 6 placing (Genesis). The OpenMANIPULATOR-X has no wrist roll, so its jaws close at the
-angle its base turns to, 27 degrees off the cube's faces, and pinch its corners: on MuJoCo the
-squeeze turns the cube square, on PyBullet it squeezes it out. Among the
+angle its base turns to, 27 degrees off the cube's faces, and pinch two of its edges: MuJoCo
+holds that pinch (until a shove), PyBullet squeezes the cube out upwards. No mounting avoids it:
+in line with the cube, the arm cannot reach the bin pointing down. The xArm 6's linkage gripper,
+driven through one joint, squeezes twice as hard on Genesis as on MuJoCo (19 N against 10) and
+wedges the cube down its tilted pads; at half the force it passes. Its force calibration is open. Among the
 Menagerie arms, SO-100, Koch, FR3 and FR3 v2 pass on PyBullet and Drake. Genesis passes
 SO-100, FR3 and FR3 v2; the Koch's jaws close through the cube there, touching nothing.
 

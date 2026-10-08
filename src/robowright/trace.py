@@ -56,6 +56,7 @@ class Recorder:
         self.t: list[float] = []
         self.qpos: list[np.ndarray] = []
         self.ctrl: list[np.ndarray] = []
+        self.led: list[bool] = []  # whether the backend led its servos along a smooth move that step
         self.obj_pos: list[np.ndarray] = []
         self.obj_quat: list[np.ndarray] = []
         self.forces: list[np.ndarray] = []
@@ -109,6 +110,7 @@ class Recorder:
             pos, quat = b.base_pose()
             self.base.append(np.concatenate([pos, quat]))
         self.ctrl.append(b.ctrl())
+        self.led.append(False)
         self.forces.append(np.zeros((len(self.force_names), 3)))
         if w.has_contacts:
             self.contacts.append([[c.a, c.b, round(c.force, 4)] for c in b.contacts()])
@@ -138,6 +140,7 @@ class Recorder:
         self._snapshot(step)
         # ctrl stored at index i is what was applied during step i-1 -> i
         self.ctrl[-1] = applied_ctrl.copy()
+        self.led[-1] = bool(getattr(self.world.backend, "feedforward", False))
         for n, f in forces.items():
             self.forces[-1][self.force_names.index(n)] = f
 
@@ -195,6 +198,7 @@ class Recorder:
                 obj_quat=np.array(self.obj_quat),
                 forces=np.array(self.forces),
                 **({"base": np.array(self.base)} if self.base else {}),
+                **({"led": np.array(self.led)} if any(self.led) else {}),
             )
             z.writestr("steps.npz", buf.getvalue())
             if self.state0 is not None:
