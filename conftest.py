@@ -137,6 +137,15 @@ KNOWN[("test_learned_policy_puts_the_cube_in_the_bin", "drake", "so101")] = _CHA
 for test in ("test_pick_and_place", "test_places_a_second_object_beside_the_first"):
     KNOWN[(test, "drake", "so100")] = "Drake: the SO-100's jaw flings the cube 7 cm past the bin as it opens"
 
+# Outcomes that differ between builds of the same engine: the SO-101 on PyBullet keeps the cube
+# through a 1.5 N shove on some builds and loses it on others (CI's Python 3.10, 3.12 and 3.13
+# wheels have each gone either way; this machine's keeps it). It is the squeeze above, at its
+# margin: whether the shove lands while the cube is pressed into the fixed jaw's pads decides it.
+KNOWN[("test_cube_survives_a_shove_when_held", "pybullet", "so101")] = (
+    _SQUEEZED + "; whether a 1.5 N shove dislodges it varies by PyBullet build"
+)
+UNSETTLED = {("test_cube_survives_a_shove_when_held", "pybullet", "so101")}
+
 # --- adjusted mode -----------------------------------------------------------------------------
 # Genesis's friction with the elliptic cone the backend uses (see its comment for every setting
 # tried, and what each cost): the iiwa 14 picks its second cube and carries it, then drops it
@@ -177,7 +186,10 @@ def pytest_collection_modifyitems(config, items):
         robot = cs.params.get("rw_robot", config.getoption("--rw-robot").split(",")[0])
         reason = known.get((item.originalname, backend, _name(robot)))
         if reason:
-            item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+            # Strict, so a divergence that stops holding fails loudly - except where the outcome
+            # itself is known to differ between builds of an engine (UNSETTLED below).
+            loose = (item.originalname, backend, _name(robot)) in UNSETTLED
+            item.add_marker(pytest.mark.xfail(reason=reason, strict=not loose))
 
 
 @functools.cache
