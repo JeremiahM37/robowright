@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
-    <img src="docs/logo-light.svg" alt="robowright" width="460">
+    <img src="docs/logo-light.svg" alt="robowright" width="520">
   </picture>
 </p>
 
