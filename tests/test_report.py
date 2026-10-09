@@ -43,9 +43,10 @@ def test_init_sets_up_a_project_whose_tests_pass(tmp_path):
     (tmp_path / "pytest.ini").write_text((tmp_path / "pytest.ini").read_text() + "# mine\n")
     again = subprocess.run(cli, capture_output=True, text=True)
     assert "kept     " in again.stdout and (tmp_path / "pytest.ini").read_text().endswith("# mine\n")  # never overwrites
-    pytest = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-k", "pick_and_place"]
+    pytest = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
     run = subprocess.run(pytest, cwd=tmp_path, capture_output=True, text=True)
     assert run.returncode == 0, run.stdout[-2000:]
+    assert "3 passed" in run.stdout  # the controller, its 20 randomized trials, the reference controller
 
 
 def test_headed_without_a_display_says_so(monkeypatch):

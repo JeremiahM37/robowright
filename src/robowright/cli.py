@@ -14,35 +14,58 @@ def _test(args, rest):
     return pytest.main(rest)
 
 
-_INIT_TEST = '''"""Robot tests, written like Playwright tests: actions wait until they are done, and
-``expect`` retries until the world catches up (in simulated time).
+_INIT_TEST = '''"""Robot tests, written like Playwright tests: your code drives the robot, the test watches and
+asserts, and ``expect`` retries until the world catches up (in simulated time).
 
     pytest                                   # run them (robot and engine: pytest.ini)
+    pytest --rw-live                         # and watch each one live in a browser
     pytest --rw-robot panda,ur5e             # on other robots too
     robowright show-trace robowright-traces/<test>.zip   # every failure leaves a trace
+
+A pass means: this code did this task on this robot model in this engine. Which changes
+robowright made to the model, if any, is in every trace (`robowright fidelity --robot so101`).
 """
 
 import pytest
 
 from robowright import condition, expect
-from robowright.policies import ScriptedPickPlace
+
+# Your controller or policy: anything that maps an observation to joint targets (a function, a
+# class with __call__, or a trained model via robowright.learned.LearnedPolicy). Until you have
+# one, robowright's scripted reference policy stands in.
+from robowright.policies import ScriptedPickPlace as MyController  # replace with: from my_robot import MyController
 
 
-def test_pick_and_place(robot, scene):
+def test_my_controller_puts_the_cube_in_the_bin(robot, scene):
+    done = condition(scene["cube"], "to_be_inside", scene["bin"])
+    rollout = robot.run_policy(MyController(), until=done, hold=1.0, timeout=15)
+    assert rollout.success, rollout
+    expect(scene["cube"]).to_be_at_rest()
+
+
+@pytest.mark.trials(20)  # 20 seeds, each moving the cube; every one must pass (min_success=0.9 accepts 18)
+def test_my_controller_with_the_cube_moved(world, robot, scene):
+    world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
+    done = condition(scene["cube"], "to_be_inside", scene["bin"])
+    rollout = robot.run_policy(MyController(), until=done, hold=1.0, timeout=15)
+    assert rollout.success, rollout
+
+
+# Your ROS 2 stack instead (needs ROS 2): the simulation is served as a ROS 2 robot and your launch
+# file drives it unchanged; the test only watches.
+#
+# def test_my_stack_puts_the_cube_in_the_bin(scene, ros2):
+#     with ros2.run("ros2 launch my_robot pick.launch.py use_sim_time:=true"):
+#         expect(scene["cube"]).to_be_inside(scene["bin"], timeout=60)
+
+
+def test_the_reference_controller(robot, scene):
+    """robowright's own pick and place: for setting a scene up, or trying a robot model out."""
     cube, bin = scene["cube"], scene["bin"]
     robot.pick(cube)
     expect(robot.gripper).to_be_holding(cube)
     robot.place(on=bin)
     expect(cube).to_be_inside(bin)
-    expect(cube).to_be_at_rest()
-
-
-@pytest.mark.trials(20)  # 20 seeds; every one must pass (min_success=0.9 would accept 18)
-def test_a_policy_with_the_cube_moved(world, robot, scene):
-    world.faults.jitter("cube", xy_std=0.02, yaw_std=0.5)
-    done = condition(scene["cube"], "to_be_inside", scene["bin"])
-    rollout = robot.run_policy(ScriptedPickPlace(), until=done, hold=1.0, timeout=15)
-    assert rollout.success, rollout
 '''
 
 _INIT_TOML = """# robowright settings for this project.
@@ -58,9 +81,11 @@ _INIT_TOML = """# robowright settings for this project.
 # model = "checkpoints/pick_v2.onnx"
 # state = ["qpos", "objects.cube"]
 #
-# A robot behind ROS 2 (pytest --rw-backend ros2):
+# A robot behind ROS 2 (pytest --rw-backend ros2): a real arm, Gazebo, Isaac Sim. Start a real
+# arm observe-only (command = false); see docs/hardware.md.
 # [ros2]
 # joint_states = "/joint_states"
+# command = false
 """
 
 _INIT_PYTEST = """[pytest]
