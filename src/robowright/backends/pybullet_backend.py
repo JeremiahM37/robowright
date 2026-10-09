@@ -22,6 +22,7 @@ import sys
 import numpy as np
 import pybullet as p
 
+from .. import fidelity
 from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, Backend, Contact, TargetRamp, register
@@ -31,7 +32,7 @@ POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error correc
 GRAVITY = 9.81
 ARMATURE_FLOOR = 2e-3  # kg m^2, see __init__
 GEAR_FORCE = 1000.0  # N or N m: a finger linkage's gear constraint is effectively rigid
-_GRIP_SCALE: dict[str, float] = {}  # per robot: see PybulletBackend._measure_grip
+_GRIP_SCALE: dict[tuple, float] = {}  # per robot: see PybulletBackend._measure_grip
 GEAR_ERP = 0.8  # fraction of a gear constraint's position drift corrected per step
 
 
@@ -48,6 +49,20 @@ class PybulletBackend(Backend):
         path, meta = urdf.load(rm)
         self.meta = meta
         self._path = path
+        fidelity.record(
+            "interface",
+            "model translated",
+            f"exported to URDF; servos become PyBullet position motors (ERP {POSITION_GAIN:g}) at the URDF effort limits, "
+            "rigid finger couplings become gear constraints, friction set so contact pairs match MuJoCo's",
+            engine="pybullet",
+        )
+        # The motor inertia folded into each link: the model's own armature, or (adjusted) at most
+        # ARMATURE_FLOOR, which kept a policy from flinging a held object when it stopped the arm.
+        floor = ARMATURE_FLOOR if fidelity.adjusted() else np.inf
+        if np.isfinite(floor):
+            fidelity.record(
+                "adjusted", "motor inertia", f"at most {ARMATURE_FLOOR:g} kg m^2 per joint, not the model's own", engine="pybullet"
+            )
         # Physics only: camera images come from a second client (see render), so the robot loads
         # without the renderer uploading its meshes (UR10e: 0.07 s, against 0.17 s with EGL), and
         # a test that never takes a picture never pays for one.
@@ -161,23 +176,28 @@ class PybulletBackend(Backend):
             jm = meta["joints"].get(name.replace("__", "/"), meta["joints"].get(name))
             if jm is None:
                 continue
-            # PyBullet has no joint armature (the motor's reflected inertia). Its constraint-based
-            # motors need a little extra link inertia to stay stable on light links, but folding in
-            # MuJoCo's full armature makes the arm sluggish enough to fling a held object when a
-            # policy stops it. A small floor does both jobs (measured on the SO-101: 10/10 policy
-            # runs with it, 1/10 without, 6/10 with the full value).
+            # PyBullet has no joint armature (the motor's reflected inertia): see _armature for how
+            # it is carried over. (Adjusted: a small floor about every axis, which measured best on
+            # the SO-101's policy runs: 10/10 with it, 1/10 without, 6/10 with the full value.)
             info = p.getDynamicsInfo(self.robot, j, physicsClientId=c)
             damping = jm["damping"]
             if self.has_gripper and name.replace("__", "/") in meta["gripper"]["joints"]:
                 # Bullet applies joint damping explicitly; past about m/dt it locks a light finger
                 # solid (the Panda's, damped to close at the model's pace). The finger motors'
                 # velocity limit sets that pace here instead.
-                damping = min(damping, 0.5 * (info[0] + min(jm["armature"], ARMATURE_FLOOR)) / spec.dt)
+                damping = min(damping, 0.5 * (info[0] + min(jm["armature"], floor)) / spec.dt)
+            armature = min(jm["armature"], floor)
+            slide = p.getJointInfo(self.robot, j, physicsClientId=c)[2] == p.JOINT_PRISMATIC
+            if slide and not fidelity.adjusted():
+                # A slide's armature is reflected mass (kg), not inertia: added to the link's mass.
+                # Arms cancel their links' weight (below), so it adds inertia but no weight.
+                p.changeDynamics(self.robot, j, jointDamping=damping, mass=info[0] + armature, physicsClientId=c)
+                continue
             p.changeDynamics(
                 self.robot,
                 j,
                 jointDamping=damping,
-                localInertiaDiagonal=list(np.array(info[2]) + min(jm["armature"], ARMATURE_FLOOR)),
+                localInertiaDiagonal=list(np.array(info[2]) + self._armature(j, info, armature)),
                 physicsClientId=c,
             )
         # PyBullet multiplies the two bodies' friction coefficients; MuJoCo takes the larger.
@@ -212,9 +232,47 @@ class PybulletBackend(Backend):
         else:
             self.set_joint_positions(np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0))
             if self.has_gripper and rm.grip_force is not None and self._links_j:
-                if rm.name not in _GRIP_SCALE:
-                    _GRIP_SCALE[rm.name] = self._measure_grip(rm.grip_force)
-                self._finger_force = self._finger_force * _GRIP_SCALE[rm.name]
+                key = (rm.name, fidelity.mode())
+                base = self._finger_force.copy()
+                if key not in _GRIP_SCALE:
+                    # A linkage's squeeze is far from proportional to its driver's force (the
+                    # xArm's: 2.85 drives 24.6 N, 3.47 drives 35.8 N), so rescaling once overshoots
+                    # and rescaling again oscillates. Bracket the datasheet force and interpolate
+                    # (regula falsi) until within 3%.
+                    want = rm.grip_force
+                    seen: list[tuple[float, float]] = []  # (scale, squeeze)
+                    scale = 1.0
+                    for _ in range(8):
+                        self._finger_force = base * scale
+                        got = want / self._measure_grip(want)
+                        seen.append((scale, got))
+                        if abs(got - want) < 0.03 * want:
+                            break
+                        lo = max((x for x in seen if x[1] < want), default=None, key=lambda x: x[1])
+                        hi = min((x for x in seen if x[1] > want), default=None, key=lambda x: x[1])
+                        if lo and hi:
+                            scale = lo[0] + (hi[0] - lo[0]) * (want - lo[1]) / (hi[1] - lo[1])
+                        else:
+                            scale *= want / max(got, 1e-6)
+                    _GRIP_SCALE[key] = min(seen, key=lambda x: abs(x[1] - want))[0]
+                self._finger_force = base * _GRIP_SCALE[key]
+
+    def _armature(self, j: int, info, armature: float) -> np.ndarray:
+        """The motor's reflected inertia (MuJoCo's armature), as an addition to link ``j``'s
+        principal inertias. PyBullet has no armature. A rotor turns only about its joint's axis,
+        so (published) it is added about that axis: the diagonal of ``armature * a a^T`` in the
+        link's principal frame, exact when the axis is a principal one. (Adjusted, the same small amount about all
+        three, which is how robowright did it before.)"""
+        if fidelity.adjusted() or armature <= 0:
+            return np.full(3, armature)
+        # PyBullet's link frame is the link's principal (inertial) frame, and the joint axis is
+        # given in it. (Turned by the inertial orientation once more, the SO-101's wrist roll got
+        # its rotor inertia about the wrong axis and spun 2.7 rad off target.)
+        axis = np.asarray(p.getJointInfo(self.robot, j, physicsClientId=self.cid)[13], float)
+        if np.linalg.norm(axis) < 1e-9:
+            return np.zeros(3)
+        a = axis / np.linalg.norm(axis)
+        return armature * a * a
 
     def _measure_grip(self, want: float) -> float:
         """How much to scale the driven fingers' force by so the jaws press a held block with

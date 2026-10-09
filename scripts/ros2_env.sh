@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A ROS 2 Jazzy environment for robowright's ROS 2 tests, without root or a ROS install:
-# RoboStack's conda packages (rclpy, ros2_control, ros2_controllers, tf2_ros), with robowright
+# RoboStack's conda packages (rclpy, ros2_control, ros2_controllers, tf2_ros, Gazebo with
+# gz_ros2_control), with robowright
 # installed into it in development mode.
 #
 #   scripts/ros2_env.sh create                  # once (about 2 GB)
@@ -22,7 +23,7 @@ if [ "${1:-}" = "create" ]; then
     MAMBA_ROOT_PREFIX="$TOOLS/root" "$MM" create -y -p "$ENV" -c conda-forge -c robostack-jazzy \
         python=3.12 ros-jazzy-ros-base ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
         ros-jazzy-controller-manager ros-jazzy-tf2-ros-py ros-jazzy-control-msgs \
-        ros-jazzy-robot-state-publisher uv
+        ros-jazzy-robot-state-publisher ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge ros-jazzy-gz-ros2-control uv
     "$ENV/bin/uv" pip install --python "$ENV/bin/python" -e "$REPO[dev,onnx]"
     exit 0
 fi

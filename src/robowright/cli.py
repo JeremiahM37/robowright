@@ -344,6 +344,66 @@ def _mcp(args, rest) -> int:
     return 0
 
 
+def _sim(args, rest):
+    """Run a simulation on its own, in real time, for code outside robowright to drive and people to watch."""
+    import robowright as rw
+
+    from .live import LiveView, serve_forever
+    from .scene import default_scene
+
+    robot = args.robot
+    if "/" in robot or robot.endswith((".xml", ".urdf", ".xacro")):
+        from . import robots
+
+        robot = robots.load(robot).name
+    w = rw.launch(default_scene(robot), backend=args.backend, seed=args.seed, settings=rw.Settings(trace="off", fidelity=args.fidelity))
+    w.robot.reset_to()
+    print(f"{robot} on {args.backend} (fidelity {w.fidelity}), running in real time; Ctrl-C stops it")
+    bridge = view = None
+    try:
+        if args.ros2:
+            from .ros2_bridge import Ros2Bridge
+
+            bridge = Ros2Bridge(w, namespace=args.namespace, realtime=False)
+            ns = args.namespace.rstrip("/")
+            print(f"ROS 2: {ns}/joint_states, /clock, TF ({', '.join(w.object_names)} in {bridge.frame}),")
+            print(f"       {ns}/arm_controller/follow_joint_trajectory, {ns}/gripper_controller/gripper_cmd,")
+            print(f"       {ns}/forward_position_controller/commands")
+        if args.live is not None:
+            view = LiveView(w, port=args.live)
+        serve_forever(w)
+    finally:
+        if bridge is not None:
+            bridge.close()
+        if view is not None:
+            view.close()
+        w.close()
+    return 0
+
+
+def _fidelity(args, rest):
+    """What robowright changes between a robot's model file and what an engine simulates."""
+    import robowright as rw
+
+    from . import fidelity
+    from .scene import default_scene
+
+    robot = args.robot
+    if "/" in robot or robot.endswith((".xml", ".urdf", ".xacro")):
+        from . import robots
+
+        robot = robots.load(robot).name
+    w = rw.launch(default_scene(robot), backend=args.backend, settings=rw.Settings(trace="off", fidelity=args.mode))
+    try:
+        print(f"{robot} on {args.backend}, fidelity {w.fidelity}:")
+        print("  " + fidelity.summary(w.model_changes).replace("\n", "\n  "))
+        if w.fidelity == "published":
+            print("(--mode adjusted shows what robowright's own tuning adds on top)")
+    finally:
+        w.close()
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="robowright", description="Playwright-style testing for robots.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -367,6 +427,18 @@ def main(argv=None) -> int:
     c.add_argument("--name")
     c.add_argument("--full", action="store_true", help="include events after the first failure")
     sub.add_parser("info", help="versions, backends and rendering support")
+    sm = sub.add_parser("sim", help="run a simulation in real time for your code to drive (--ros2) and you to watch (--live)")
+    sm.add_argument("--robot", default="so101", help="a robot name or model file")
+    sm.add_argument("--backend", default="mujoco")
+    sm.add_argument("--seed", type=int, default=0)
+    sm.add_argument("--fidelity", choices=["published", "adjusted"], default=None)
+    sm.add_argument("--ros2", action="store_true", help="serve it as a ROS 2 robot (needs rclpy)")
+    sm.add_argument("--namespace", default="", help="ROS 2 namespace for its topics and actions")
+    sm.add_argument("--live", type=int, nargs="?", const=8765, default=None, metavar="PORT", help="watch it in a browser (port 8765)")
+    fd = sub.add_parser("fidelity", help="what robowright changes between a robot's model file and what an engine simulates")
+    fd.add_argument("--robot", default="so101", help="a robot name or model file")
+    fd.add_argument("--backend", default="mujoco")
+    fd.add_argument("--mode", choices=["published", "adjusted"], default=None, help="default: $ROBOWRIGHT_FIDELITY, else published")
     rb = sub.add_parser("robots", help="list the robots tests can run on")
     rb.add_argument("--family", choices=["arm", "legged"])
     rb.add_argument("--markdown", action="store_true")
@@ -398,6 +470,8 @@ def main(argv=None) -> int:
         "render": _render,
         "crosscheck": _crosscheck,
         "info": _info,
+        "fidelity": _fidelity,
+        "sim": _sim,
         "robots": _robots,
         "mcp": _mcp,
         "init": _init,

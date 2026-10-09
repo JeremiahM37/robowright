@@ -43,6 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import fidelity
 from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, STATE, Backend, Contact, TargetRamp, register
@@ -298,9 +299,18 @@ class IsaacBackend(Backend):
         px.CreateTimeStepsPerSecondAttr(int(round(1.0 / self._dt)))
         px.CreateEnableGPUDynamicsAttr(self._gpu)
         px.CreateBroadphaseTypeAttr("GPU" if self._gpu else "MBP")
-        # PGS, not PhysX's default TGS: under TGS the xArm7's linkage gripper winds the arm up (joints
-        # end radians off target); PGS passes every arm in the conformance suite.
-        px.CreateSolverTypeAttr("PGS")
+        # PhysX's own solver, TGS, as published. Adjusted: PGS, under which every arm passes the
+        # conformance suite (under TGS the xArm 7's linkage gripper wound its arm radians off target).
+        if fidelity.adjusted():
+            px.CreateSolverTypeAttr("PGS")
+            fidelity.record("adjusted", "solver", "PhysX's PGS solver, not its default TGS", engine="isaac")
+        fidelity.record(
+            "interface",
+            "drives",
+            "servo gains, force caps, armature and damping as joint drives; joint dry friction left out (PhysX's is stiction); "
+            "a coupled finger without a gain of its own driven critically damped",
+            engine="isaac",
+        )
         px.CreateEnableEnhancedDeterminismAttr(True)
         px.CreateEnableStabilizationAttr(False)
         UsdGeom.Xform.Define(stage, "/World")

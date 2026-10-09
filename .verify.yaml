@@ -24,9 +24,13 @@ steps:
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
 
-  - name: ROS 2 backend against real ROS 2 (ros2_control mock hardware, a simulated arm behind ROS 2 topics)
+  - name: ROS 2 both ways (robowright drives ros2_control and Gazebo; a separate ROS 2 stack drives robowright's simulation)
     actions:
-      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py -q -n 3 -p no:cacheprovider", timeout: 900 }
+      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_gazebo.py -q -n 4 -p no:cacheprovider", timeout: 1200 }
+
+  - name: fidelity - the default is the model as published, and every change is on record
+    actions:
+      - shell: ".venv/bin/robowright fidelity --robot panda --backend mujoco | grep -q 'sourced: grip force' && ! .venv/bin/robowright fidelity --robot panda | grep -q '^  adjusted'"
 
   - name: cli reports working offscreen rendering
     actions:
@@ -47,6 +51,14 @@ steps:
   - name: trace viewer DOM (desktop + Pixel 7)
     actions:
       - shell: "${VERIFY_PYTHON:-python3} scripts/check_viewer.py /tmp/robowright-verify/trace.html"
+
+  - name: live view serves a running simulation
+    actions:
+      - shell: "(timeout 120 .venv/bin/robowright sim --robot panda --live 8799 > /tmp/robowright-verify/sim.log 2>&1 &) ; sleep 8 ; curl -sf http://127.0.0.1:8799/state | grep -q panda"
+      - navigate: "http://127.0.0.1:8799/"
+      - wait: 2
+    expect:
+      vision: "a 'robowright live' page: a camera view of a white Franka Panda robot arm above a checkered floor with a red cube and a blue bin, and beside it tables of joint values and object positions; not blank, no error"
 
   - name: trace viewer renders
     actions:

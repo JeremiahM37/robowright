@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import fidelity
 from .backends import base as backends
 from .errors import CapabilityError, ExpectationError, InvariantViolation
 from .faults import Faults
@@ -41,6 +42,9 @@ class Settings:
     image_size: tuple = (320, 240)
     realtime: bool = False  # pace stepping to wall clock (hardware-style)
     headed: bool = False  # show the run in the engine's own window as it happens, at real-time pace
+    # "published" (the robot as its model file has it, plus cited specs) or "adjusted" (also
+    # robowright's own tuning); None: --rw-fidelity / $ROBOWRIGHT_FIDELITY. See robowright.fidelity.
+    fidelity: str | None = None
 
 
 class World:
@@ -52,7 +56,18 @@ class World:
         self.name = name
         self.settings = settings or Settings()
         self.rng = np.random.default_rng(seed)
-        self.backend = backends.create(backend, spec, seed=seed, **backend_kw)
+        with fidelity.using(self.settings.fidelity):
+            self.fidelity = fidelity.mode()
+            self.backend = backends.create(backend, spec, seed=seed, **backend_kw)
+        # Every change between the robot's model file and what this world simulates (see
+        # robowright.fidelity): what a passing test did and did not run.
+        self.model_changes: list = list(getattr(self.backend, "model_changes", []))
+        if self.fidelity == "adjusted" and backends.DETERMINISTIC in self.backend.capabilities:
+            self.model_changes.append(
+                fidelity.Change(
+                    "adjusted", "policy servo integral", "an integral term added under a policy's still targets (up to 0.15 rad)"
+                )
+            )
         self.object_names = [o.name for o in spec.objects]
         self.step_count = 0
         self.status = "running"
@@ -70,7 +85,8 @@ class World:
         self._step_hooks: list[Callable] = []
         self._soft_failures: list[str] = []
         self.faults = Faults(self)
-        self.robot = (LeggedRobot if self.backend.robot_model.family == "legged" else Robot)(self)
+        with fidelity.using(self.fidelity):  # its kinematics and self-collision model, built as this world was
+            self.robot = (LeggedRobot if self.backend.robot_model.family == "legged" else Robot)(self)
         self.scene = SceneLocator(self)
         self.trace: Recorder | None = None
         if self.settings.trace != "off":

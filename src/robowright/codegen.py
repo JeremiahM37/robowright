@@ -65,6 +65,8 @@ def _settings(meta: dict) -> str:
 
     default = Settings()
     changed = {k: v for k, v in meta.get("settings", {}).items() if getattr(default, k) != v}
+    if meta.get("fidelity") == "adjusted":  # rebuilt as it ran (published is the default)
+        changed["fidelity"] = "adjusted"
     return f", settings=rw.Settings({_kwargs(changed)})" if changed else ""
 
 

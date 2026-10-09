@@ -24,17 +24,27 @@ from concurrent.futures import ThreadPoolExecutor
 from .session import Session
 
 INSTRUCTIONS = """\
-Drive a simulated robot (MuJoCo by default; deterministic physics).
-Start with robot_launch, then robot_snapshot to see the world: objects are named
-(those names are the refs other tools take). Arms: robot_pick, robot_place,
-robot_move_to, robot_gripper, robot_move_joints, robot_home. Legged robots:
-robot_stand, robot_crouch, robot_move_joints. Disturb the world with robot_push,
-robot_move_object and robot_fault. Check outcomes with robot_expect. Look with
-robot_screenshot (cameras: front, top, side). A failed action reports why and
-leaves the session running. robot_generate_test turns the session into a pytest
-test that reproduces it exactly; robot_crosscheck re-runs it on another engine.
-robot_run_tests runs a project's tests and returns each failure with its trace as
-text; robot_read_trace reads any trace that way. Positions are metres in the world frame, z up."""
+Test robot software against a simulated robot (MuJoCo by default; deterministic physics),
+or a robot behind ROS 2 (robot_launch backend="ros2": Gazebo, Isaac Sim, a real arm).
+Start with robot_launch, then robot_snapshot to see the world: objects are named (those
+names are the refs other tools take).
+
+The code under test is the user's: run their controller or policy with robot_run_policy
+("package.module:name"), or serve the simulation as a ROS 2 robot with robot_serve_ros2 and
+start their stack with robot_start_process; then let time pass (robot_wait, robot_step) and
+check what happened with robot_expect. robot_set_targets sends raw joint/gripper targets.
+robot_watch gives a URL where the user can watch the world live in a browser.
+
+robowright's own reference controller sets up situations and explores: robot_pick,
+robot_place, robot_move_to, robot_gripper, robot_move_joints, robot_home (arms), robot_stand,
+robot_crouch (legged). Disturb the world with robot_push, robot_move_object and robot_fault.
+Look with robot_screenshot (cameras: front, top, side). A failed action reports why and
+leaves the session running. robot_generate_test turns the session into a pytest test;
+robot_crosscheck re-runs it on another engine. robot_run_tests runs a project's tests and
+returns each failure with its trace as text; robot_read_trace reads any trace that way.
+Positions are metres in the world frame, z up. Simulated robots are their model files as
+published plus cited specs (fidelity "published"); a pass there is evidence about that model in
+that engine, not about the real robot."""
 
 
 def build_server(session: Session | None = None):
@@ -75,18 +85,78 @@ def build_server(session: Session | None = None):
         return "\n".join(rows)
 
     @tool
-    async def robot_launch(robot: str = "so101", backend: str = "mujoco", seed: int = 0, objects: list[dict] | None = None) -> str:
-        """Start a fresh simulated world, closing any open one, and return its snapshot.
+    async def robot_launch(
+        robot: str = "so101",
+        backend: str = "mujoco",
+        seed: int = 0,
+        objects: list[dict] | None = None,
+        fidelity: str | None = None,
+        ros2: dict | None = None,
+    ) -> str:
+        """Start a fresh world, closing any open one, and return its snapshot.
 
-        robot: a name from robot_list_robots. backend: mujoco (default, fastest), pybullet,
-        drake, genesis or isaac, whichever are installed. seed: same seed and same calls
-        give the same world. objects: replace the default scene's objects, each
+        robot: a name from robot_list_robots, or a model file. backend: mujoco (default,
+        fastest), pybullet, drake, genesis or isaac, whichever are installed; or ros2 to
+        connect to a robot behind ROS 2, with ros2 its settings, e.g. {"frame": "base_link",
+        "objects": {"cube": "cube"}, "use_sim_time": true}. fidelity: "published" (default:
+        the model as its makers published it) or "adjusted" (robowright's tuning too). seed:
+        same seed and same calls give the same world. objects: replace the default scene's objects, each
         {"name", "kind": box|cylinder|sphere|bin, "size": half-extents in m (box/bin xyz,
         cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
         floor, or [x, y, z] (z is a free object's centre, a bin's base),
         "color": red|green|blue|yellow|..., "mass": kg}.
         """
-        return await run(s.launch, robot=robot, backend=backend, seed=seed, objects=objects)
+        return await run(s.launch, robot=robot, backend=backend, seed=seed, objects=objects, fidelity=fidelity, ros2=ros2)
+
+    @tool
+    async def robot_run_policy(
+        policy: str, kwargs: dict | None = None, until: dict | None = None, timeout: float = 20.0, hold: float = 0.0
+    ) -> str:
+        """Run the user's controller or policy and report whether it succeeded.
+
+        policy: "package.module:name" (a callable obs -> joint targets, or a class built with
+        kwargs), or a learned policy reference (a checkpoint path, "plugin:ref"). until: the goal,
+        {"subject": "cube", "matcher": "to_be_inside", "args": {"container": "bin"}}; without it,
+        it runs for timeout seconds. hold: seconds the goal must stay true."""
+        return await run(s.run_policy, policy, kwargs, until, timeout, hold)
+
+    @tool
+    async def robot_set_targets(joints: dict[str, float] | None = None, gripper: float | None = None) -> str:
+        """Set joint targets (radians, by name) and/or the gripper opening (0 closed, 1 open) without
+        waiting: the raw command a controller sends. Time does not pass: follow with robot_step."""
+        return await run(s.set_targets, joints, gripper)
+
+    @tool
+    async def robot_step(steps: int = 1) -> str:
+        """Advance the world this many control periods (50 per second) with the current targets."""
+        return await run(s.step, steps)
+
+    @tool
+    async def robot_serve_ros2(
+        namespace: str = "",
+        arm_controller: str = "arm_controller",
+        gripper_controller: str = "gripper_controller",
+    ) -> str:
+        """Serve the simulated world as a ROS 2 robot (/joint_states, /clock, TF for the objects,
+        FollowJointTrajectory and GripperCommand actions, forward position commands), so the user's
+        ROS 2 stack drives it. Then robot_start_process their stack, and robot_wait / robot_expect."""
+        return await run(s.serve_ros2, namespace, arm_controller, gripper_controller)
+
+    @tool
+    async def robot_start_process(command: str, cwd: str | None = None) -> str:
+        """Start the code under test as a process (e.g. "ros2 launch my_pkg pick.launch.py
+        use_sim_time:=true"). Its output is kept for robot_stop_process."""
+        return await run(s.start_process, command, cwd)
+
+    @tool
+    async def robot_stop_process() -> str:
+        """Stop the process robot_start_process started, and return the end of its output."""
+        return await run(s.stop_process)
+
+    @tool
+    async def robot_watch(port: int = 8765) -> str:
+        """A URL where the user can watch the world live in a browser while you drive it."""
+        return await run(s.watch, port)
 
     @tool
     async def robot_snapshot() -> str:

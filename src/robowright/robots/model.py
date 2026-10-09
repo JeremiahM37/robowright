@@ -26,6 +26,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from .. import fidelity
+
 PREFIX = "robot/"
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 _PRINCIPAL = np.vstack([np.eye(3), -np.eye(3)])
@@ -115,11 +117,16 @@ class RobotModel:
         s = mujoco.MjSpec.from_file(str(self.mjcf()))
         for k in list(s.keys):
             s.delete(k)
+        adjusted = fidelity.adjusted()
         if self.integrator is not None:
-            s.option.integrator = getattr(mujoco.mjtIntegrator, f"mjINT_{self.integrator.upper()}")
+            fidelity.record("adjusted", "integrator", f"{self.integrator}, not the model's own")
+            if adjusted:
+                s.option.integrator = getattr(mujoco.mjtIntegrator, f"mjINT_{self.integrator.upper()}")
         if self.grip_contacts:
-            s.option.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
-            s.option.impratio = max(float(s.option.impratio), 10.0)
+            fidelity.record("adjusted", "friction cone", "elliptic with impratio 10, not the model's own (a held object crept)")
+            if adjusted:
+                s.option.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
+                s.option.impratio = max(float(s.option.impratio), 10.0)
         if self.attach is not None:
             g = mujoco.MjSpec.from_file(str(self.attach.mjcf()))
             for k in list(g.keys):
@@ -129,22 +136,60 @@ class RobotModel:
             _copy_options(s, g)
             s.attach(g, prefix=self.attach.prefix, site=self.attach.at(s))
         if self.servo is not None:
+            fidelity.record(
+                "interface",
+                "joint servos",
+                f"torque motors driven by a joint PD loop (kp {self.servo[0]:g}, kv {self.servo[1]:g}), as the robot's firmware does",
+            )
             _motors_to_servos(s, *self.servo)
+        if self.gripper_servo is not None:
+            fidelity.record(
+                "interface",
+                "gripper servo",
+                f"the gripper's force motor driven as a position servo (kp {self.gripper_servo[0]:g}, its own force limit)",
+            )
+        if self.gripper_mirrors:
+            fidelity.record(
+                "interface",
+                "one gripper input",
+                f"{len(self.gripper_mirrors) + 1} finger motors driven as one, the others coupled to it rigidly",
+            )
         fix_gripper(s, self.gripper_actuator, self.gripper_servo, self.gripper_mirrors)
+        if self.arm_couplings:
+            fidelity.record(
+                "interface",
+                "coupled joints",
+                f"{len(self.arm_couplings)} tendon-driven joint group(s) commanded in their leader joint's position",
+            )
         couple_arm(s, self.arm_couplings)
-        for name, value in self.armature:
-            j = s.joint(name)
-            j.armature = max(float(j.armature), value)
-        for name, k in self.stiffen:
-            a = s.actuator(name)
-            a.gainprm[0] *= k
-            a.biasprm[1] *= k
-            if a.biasprm[2] < 0:  # damping for the same damping ratio
-                a.biasprm[2] *= np.sqrt(k)
+        if self.armature:
+            fidelity.record(
+                "adjusted",
+                "motor inertia",
+                "added to " + ", ".join(f"{n} ({v:g})" for n, v in self.armature) + " so force-limited servos settle",
+            )
+            if adjusted:
+                for name, value in self.armature:
+                    j = s.joint(name)
+                    j.armature = max(float(j.armature), value)
+        if self.stiffen:
+            fidelity.record(
+                "adjusted", "stiffer servos", ", ".join(f"{n} x{k:g}" for n, k in self.stiffen) + " (they stopped short on friction)"
+            )
+            if adjusted:
+                for name, k in self.stiffen:
+                    a = s.actuator(name)
+                    a.gainprm[0] *= k
+                    a.biasprm[1] *= k
+                    if a.biasprm[2] < 0:  # damping for the same damping ratio
+                        a.biasprm[2] *= np.sqrt(k)
         _exclude_resting_contacts(s)
         if calibrated and self.grip_force is not None and self.has_gripper:
+            fidelity.record(
+                "sourced", "grip force", f"{self.grip_force:g} N at the jaws", source=self.grip_force_source or "the robot's datasheet"
+            )
             _limit_grip(s, self)
-        elif calibrated and self.has_gripper:
+        elif calibrated and self.has_gripper and adjusted:
             _stiff_fingers(s, self, slides_only=True)
             _cap_grip(s, self)
         for k in list(s.keys):  # a compile after an actuator changes brings deleted keyframes back, unnamed
@@ -165,6 +210,16 @@ class RobotModel:
             return np.asarray(self.stand, float)
         q = self.keyframe_q()
         return np.zeros(self.n_arm) if q is None else q
+
+    def changes(self) -> list:
+        """What robowright changes in this robot's model file before simulating it, in the
+        fidelity mode in force (see :mod:`robowright.fidelity`)."""
+        key = (self.name, fidelity.mode(), id(self))
+        if key not in _CHANGES:
+            with fidelity.recording() as log:
+                self.robot_spec()
+            _CHANGES[key] = list(log)
+        return _CHANGES[key]
 
     @functools.cached_property
     def total_mass(self) -> float:
@@ -357,6 +412,10 @@ def _exclude_resting_contacts(s: mujoco.MjSpec) -> None:
             pairs.add((m.body(b1).name, m.body(b2).name))
     for b1, b2 in sorted(pairs):
         s.add_exclude(bodyname1=b1, bodyname2=b2)
+    if pairs:
+        fidelity.record(
+            "repair", "resting contacts excluded", ", ".join(f"{a}-{b}" for a, b in sorted(pairs)) + " overlap in the rest pose"
+        )
 
 
 def reset_data(m: mujoco.MjModel, d: mujoco.MjData) -> None:
@@ -404,16 +463,26 @@ def _settle(m, d, ctrl_index, value, max_seconds=10.0):
             break
 
 
-_CALIBRATION: dict[str, tuple[float, float]] = {}
+_CHANGES: dict[tuple, list] = {}
+_CALIBRATION: dict[tuple, tuple[float, float]] = {}
 
 
-def _squeeze(model: RobotModel, limit: float | None = None, spec: mujoco.MjSpec | None = None) -> tuple[float, float]:
+def _mkey(model: RobotModel) -> tuple:
+    """A cache key for a measurement of ``model``: the build it measures depends on the fidelity mode."""
+    return (model.name, fidelity.mode())
+
+
+def _squeeze(model: RobotModel, limit: float | None = None, spec: mujoco.MjSpec | None = None, free: bool = True) -> tuple[float, float]:
     """Close the modelled gripper on a 25 mm block held at its TCP, the actuator capped at
     ``limit``; returns (mean normal force of the two jaws on the block, actuator force).
-    ``spec``: the robot as given (a gripper already calibrated), not as modelled."""
+    ``spec``: the robot as given (a gripper already calibrated), not as modelled. ``free``: with
+    the gripper's joint friction removed (see :func:`_free_gripper`); without, the squeeze of the
+    model exactly as it is."""
     der = model.derived
-    s = spec if spec is not None else model.robot_spec(calibrated=False)
-    _free_gripper(s, model)
+    with fidelity.silent():  # a measurement copy: its changes are not the robot's
+        s = spec if spec is not None else model.robot_spec(calibrated=False)
+        if free:
+            _free_gripper(s, model)
     s.option.gravity = [0, 0, 0]
     if limit is not None:
         a = s.actuator(model.gripper_actuator)
@@ -488,30 +557,30 @@ def grip_calibration(model: RobotModel) -> tuple[float, float]:
     its own, so a datasheet's jaw force converts to an actuator force limit whatever the
     transmission: a slide, a tendon, or a sprung linkage of swinging jaws.
     """
-    if model.name not in _CALIBRATION:
+    if _mkey(model) not in _CALIBRATION:
         _, natural = _squeeze(model)
         (c1, f1), (c2, f2) = _squeeze(model, 0.45 * natural), _squeeze(model, 0.9 * natural)
         if c2 <= c1 or f2 <= f1:
             raise ValueError(f"{model.name}: the gripper's squeeze does not grow with its force; cannot calibrate")
         gain = (c2 - c1) / (f2 - f1)
-        _CALIBRATION[model.name] = (f1 - c1 / gain, gain)
-    return _CALIBRATION[model.name]
+        _CALIBRATION[_mkey(model)] = (f1 - c1 / gain, gain)
+    return _CALIBRATION[_mkey(model)]
 
 
-_LEVERAGE: dict[str, dict] = {}
+_LEVERAGE: dict[tuple, dict] = {}
 
 
 def _leverage(model: RobotModel) -> dict:
     """Joint force per newton of gripper actuator force, for each joint it moves directly."""
-    if model.name not in _LEVERAGE:
+    if _mkey(model) not in _LEVERAGE:
         m = model.robot_spec(calibrated=False).compile()
         d = mujoco.MjData(m)
         reset_data(m, d)
         act = m.actuator(model.gripper_actuator).id
         adr = d.moment_rowadr[act]
         rows = range(adr, adr + d.moment_rownnz[act])
-        _LEVERAGE[model.name] = {m.joint(m.dof_jntid[d.moment_colind[i]]).name: abs(float(d.actuator_moment[i])) for i in rows}
-    return _LEVERAGE[model.name]
+        _LEVERAGE[_mkey(model)] = {m.joint(m.dof_jntid[d.moment_colind[i]]).name: abs(float(d.actuator_moment[i])) for i in rows}
+    return _LEVERAGE[_mkey(model)]
 
 
 def _actuated_joints(model: RobotModel) -> frozenset:
@@ -531,6 +600,12 @@ def _free_gripper(s: mujoco.MjSpec, model: RobotModel) -> None:
         if j.name not in arm and j.type in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
             j.frictionloss = 0.0
     _stiff_fingers(s, model)
+    fidelity.record(
+        "interface",
+        "gripper driven at its rated force",
+        "a force-limited position servo; its joints' dry friction removed and its finger couplings made rigid, "
+        "so that the force limit is what limits the squeeze",
+    )
 
 
 def _stiff_fingers(s: mujoco.MjSpec, model: RobotModel, slides_only: bool = False) -> None:
@@ -551,6 +626,10 @@ def _stiff_fingers(s: mujoco.MjSpec, model: RobotModel, slides_only: bool = Fals
             continue
         if e.type == mujoco.mjtEq.mjEQ_JOINT and not {e.name1, e.name2} <= driven:
             e.solref = [min(e.solref[0], 2.5 * s.option.timestep), 1.0]
+            if slides_only:
+                fidelity.record(
+                    "adjusted", "rigid sliding fingers", f"the coupling {e.name1}-{e.name2} made as stiff as the timestep allows"
+                )
 
 
 JAW_SOLREF = 0.01  # s: the time constant of the hand's contacts, half MuJoCo's default
@@ -578,7 +657,7 @@ def _firm_jaws(s: mujoco.MjSpec, model: RobotModel) -> None:
 
 
 PAD_FORCE_CEILING = 60.0  # N at the jaws: twice what real parallel grippers squeeze with
-_PAD_LEVER: dict[str, float] = {}
+_PAD_LEVER: dict[tuple, float] = {}
 
 
 def _cap_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
@@ -601,7 +680,7 @@ def _cap_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
     arm = {tuple(np.round(x.forcerange, 6)) for x in s.actuators if x.trntype == mujoco.mjtTrn.mjTRN_JOINT and x.target in model.arm_joints}
     if tuple(np.round(a.forcerange, 6)) not in arm:
         return
-    if model.name not in _PAD_LEVER:
+    if _mkey(model) not in _PAD_LEVER:
         m = model.robot_spec(calibrated=False).compile()
         d = mujoco.MjData(m)
         reset_data(m, d)
@@ -612,12 +691,14 @@ def _cap_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
             hand = m.body(model.hand).id
             r = d.xpos[hand] + d.xmat[hand].reshape(3, 3) @ model.derived.tcp_offset - d.xanchor[j]
             lever = max(float(np.linalg.norm(r - (r @ d.xaxis[j]) * d.xaxis[j])), 0.01)
-        _PAD_LEVER[model.name] = lever
-    limit = PAD_FORCE_CEILING * _PAD_LEVER[model.name] / abs(a.gear[0])
+        _PAD_LEVER[_mkey(model)] = lever
+    limit = PAD_FORCE_CEILING * _PAD_LEVER[_mkey(model)] / abs(a.gear[0])
     if a.forcelimited != mujoco.mjtLimited.mjLIMITED_FALSE and 0 < max(abs(a.forcerange[0]), abs(a.forcerange[1])) <= limit:
         return
     a.forcerange = [-limit, limit]
     a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    fidelity.record("adjusted", "gripper force capped", f"at {PAD_FORCE_CEILING:g} N at the jaws (the model's motor had the arm's force)")
+    fidelity.record("adjusted", "firmer jaw contacts", f"the hand's contact time constant {JAW_SOLREF * 1000:g} ms, half MuJoCo's default")
     _firm_jaws(s, model)
 
 

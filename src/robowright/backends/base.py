@@ -87,6 +87,8 @@ class Backend(ABC):
     the joints individually.
     """
 
+    model_changes: list = []  # how this differs from the robot's model file (set by create; see robowright.fidelity)
+
     name: str = "base"
     capabilities: frozenset = frozenset()
     # Whether a closed world's backend may be kept and restored for the next world with the same
@@ -265,8 +267,10 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     Drake: 0.3-0.4 s against 0.5 s), and restoring a state takes a tenth of a millisecond.
     ``ROBOWRIGHT_REUSE=0`` builds every world afresh.
     """
+    from .. import fidelity
+
     cls = engine(name)
-    key = (name, repr(spec), repr(sorted(kw.items()))) if cls.reusable and _keep() else None
+    key = (name, fidelity.mode(), repr(spec), repr(sorted(kw.items()))) if cls.reusable and _keep() else None
     b = _KEPT.pop(key, None) if key else None
     if b is not None:
         try:
@@ -279,7 +283,28 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
         for k in [k for k in _KEPT if k[0] == name]:
             _KEPT.pop(k).close()
     _reclaim()
-    b = cls(spec, seed=seed, **kw)
+    with fidelity.recording() as log:
+        b = cls(spec, seed=seed, **kw)
+        if GROUND_TRUTH in b.capabilities:  # a simulator (a robot behind ROS 2 is what it is)
+            if spec.robot_model.family == "arm":
+                fidelity.record(
+                    "interface",
+                    "gravity compensated",
+                    "the arm's links carry no weight, as industrial arm controllers cancel it; hobby-servo arms "
+                    "(the SO-101, Koch) do not do this, so their tests are kinder than the real arm",
+                    engine=name,
+                )
+            if name in ("drake", "genesis", "isaac"):  # (PyBullet says how it translates, itself)
+                fidelity.record(
+                    "interface",
+                    "model translated",
+                    "the MuJoCo model exported to URDF (geometry, inertias, joint limits, servo gains and force limits), "
+                    "finger couplings as the engine's mimic joints or couplers",
+                    engine=name,
+                )
+    # What a simulator ran differs from the model file by these; a robot behind ROS 2 (real, or
+    # another simulator) runs as it is, and robowright changes nothing in it.
+    b.model_changes = list(dict.fromkeys([*spec.robot_model.changes(), *log])) if GROUND_TRUTH in b.capabilities else []
     start = b.robot_model.start
     if start is not None and not b.robot_model.floating:
         # An arm whose zero pose is not a place to start (a URDF's arm folded into the table).

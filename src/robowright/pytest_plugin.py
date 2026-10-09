@@ -14,6 +14,8 @@ Options::
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
     --rw-report report.html          an HTML report of the run, each failure with its trace
+    --rw-fidelity published|adjusted robots as their model files have them (default), or with robowright's tuning
+    --rw-live [PORT]                 watch each test live in a browser (http://127.0.0.1:8765)
     --rw-headed                      watch each test in MuJoCo's window as it runs, at real-time pace
     -n auto                          (pytest-xdist) as many workers as the cores and memory allow
 
@@ -36,6 +38,7 @@ from pathlib import Path
 import pytest
 
 import robowright as rw
+from robowright import fidelity
 
 from . import robots as _robots
 from .errors import RobowrightError, TooWideError
@@ -48,6 +51,7 @@ pytest.register_assert_rewrite("robowright.contract")
 
 _TRACES = pytest.StashKey[list]()
 _REPORTS = pytest.StashKey[dict]()
+_LIVE = pytest.StashKey[object]()
 
 
 def pytest_addoption(parser):
@@ -64,6 +68,22 @@ def pytest_addoption(parser):
         action="store_true",
         help="run all n trials of a trials test; by default it stops once the rest cannot change the verdict",
     )
+    g.addoption(
+        "--rw-fidelity",
+        choices=["published", "adjusted"],
+        default=None,
+        help="published (default): robots as their model files have them, plus cited specs; adjusted: also robowright's "
+        "own tuning (stiffer contacts, capped grippers, ...), which passes more tests on physics nobody measured",
+    )
+    g.addoption(
+        "--rw-live",
+        nargs="?",
+        type=int,
+        const=8765,
+        default=None,
+        metavar="PORT",
+        help="watch each test live in a browser at http://127.0.0.1:PORT (8765; xdist workers count up), at real-time pace",
+    )
     g.addoption("--rw-headed", action="store_true", help="watch each test in the engine's window, at real-time pace (MuJoCo)")
     g.addoption("--rw-report", metavar="PATH", help="write an HTML report of the run: every test, and each failure with its trace")
     g.addoption(
@@ -74,6 +94,9 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    mode = config.getoption("--rw-fidelity", None)
+    if mode:
+        os.environ[fidelity.ENV] = mode  # this process, and the xdist workers it starts
     config.addinivalue_line("markers", "scene(spec): scene spec or zero-arg factory for this test")
     config.addinivalue_line("markers", "seed(n): seed for this test")
     config.addinivalue_line("markers", "backends(*names): only run on these backends")
@@ -204,6 +227,8 @@ def _scene_for(item, request) -> SceneSpec:
 
 def _settings(config) -> Settings:
     headed = config.getoption("--rw-headed")
+    if config.getoption("--rw-live", None) is not None:  # watchable: at real-time pace
+        return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"), headed=headed, realtime=True)
     return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"), headed=headed)
 
 
@@ -219,7 +244,24 @@ def _trace_path(config, nodeid: str) -> Path:
 def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> World:
     w = World(_scene_for(item, request), backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=_settings(item.config))
     rw._current.set(w)
+    view = _live(item.config)
+    if view is not None:
+        view.watch(w)
     return w
+
+
+def _live(config):
+    """This process's live view (--rw-live), started on first use: one port per xdist worker."""
+    port = config.getoption("--rw-live", None)
+    if port is None:
+        return None
+    if _LIVE not in config.stash:
+        from .live import LiveView
+
+        worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0").removeprefix("gw")
+        config.stash[_LIVE] = LiveView(port=port + int(worker) if port else 0)
+        config.add_cleanup(config.stash[_LIVE].close)
+    return config.stash[_LIVE]
 
 
 def _seed(item) -> int:
@@ -246,6 +288,24 @@ def world(request, rw_backend, rw_robot):
     path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid))
     if path and failed:
         item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))
+
+
+@pytest.fixture
+def ros2(world):
+    """This test's world served as a ROS 2 robot, for a ROS 2 stack (yours) to drive while the test
+    watches: ``with ros2.run("ros2 launch ..."): expect(...)``. See robowright.ros2_bridge."""
+    pytest.importorskip("rclpy", reason="the ros2 fixture needs a ROS 2 environment (rclpy)")
+    from .ros2_bridge import Ros2Bridge
+
+    bridge = Ros2Bridge(world)
+    yield bridge
+    bridge.close()
+
+
+@pytest.fixture
+def rw_live(request):
+    """The live view (``--rw-live``), or None: ``rw_live.url`` is where to watch."""
+    return _live(request.config)
 
 
 @pytest.fixture

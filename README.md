@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<h3 align="center">Playwright-style testing for robots.<br>Write the test once. Run it on 19 robots and 5 physics engines.</h3>
+<h3 align="center">Playwright-style testing for robot software.<br>Your controller, policy or ROS 2 stack drives the robot. robowright watches, asserts and keeps the evidence.</h3>
 
 <p align="center">
   <a href="https://github.com/JeremiahM37/robowright/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JeremiahM37/robowright/ci.yml?branch=main&label=CI"></a>
@@ -27,10 +27,11 @@
 
 <p align="center"><img src="docs/demo.gif" width="560" alt="SO-101 arm picking up a red cube and placing it in a blue bin"></p>
 
-Actions wait until they are actually done. Assertions retry until the physical world catches
-up. Every failure leaves a **trace** you can scrub through, a bit-for-bit **replay** and a
-generated **regression test**. Pre-alpha: simulation, and robots behind ROS 2 (see
-[Limitations](#limitations)).
+In Playwright, your web app is what is under test and the browser is real. robowright works the
+same way for robots: **your code drives the robot**, in a physics engine, in Gazebo or on the real
+arm over ROS 2, and the test **only observes and asserts**. Assertions retry until the physical
+world catches up; every failure leaves a **trace** you can scrub through, a bit-for-bit
+**replay** and a generated **regression test**. Pre-alpha (see [Limitations](#limitations)).
 
 ## Quickstart (60 seconds)
 
@@ -43,70 +44,117 @@ uv pip install "robowright @ git+https://github.com/JeremiahM37/robowright"   # 
 robowright info                                    # sanity check: versions, engines, offscreen rendering
 ```
 
-Write a test (this is the whole file):
+### Test your controller or policy
 
-```bash
-cat > test_pick.py <<'EOF'
-from robowright import expect
+A policy is anything that maps an observation to joint targets: a function, a class, or a
+trained model (`LearnedPolicy` loads ONNX, TorchScript, LeRobot and other checkpoints). The test
+hands the robot to it and judges the outcome:
+
+```python
+# test_my_controller.py
+from robowright import condition, expect
+from robowright.policies import ScriptedPickPlace as MyController  # stand-in: import yours
 
 
-def test_pick_and_place(robot, scene):
-    cube, bin = scene["cube"], scene["bin"]
-    robot.pick(cube)
-    expect(robot.gripper).to_be_holding(cube)
-    robot.place(on=bin)
-    expect(cube).to_be_inside(bin)
-EOF
-pytest test_pick.py --rw-trace on          # runs on the SO-101 in MuJoCo: about a second
-robowright show-trace robowright-traces/*.zip --no-open -o trace.html   # open trace.html in a browser
+def test_my_controller_puts_the_cube_in_the_bin(robot, scene):
+    done = condition(scene["cube"], "to_be_inside", scene["bin"])
+    rollout = robot.run_policy(MyController(), until=done, hold=1.0, timeout=15)
+    assert rollout.success, rollout
+    expect(scene["cube"]).to_be_at_rest()
 ```
 
-A passing test only keeps a trace with `--rw-trace on`; by default a trace is kept when a test
-fails. Next, the same file on other robots and engines, with no code changes:
-
 ```bash
-pytest test_pick.py --rw-robot panda,ur5e,xarm7     # models download on first use (30-40 MB each)
-pip install "robowright[pybullet] @ git+https://github.com/JeremiahM37/robowright"
-pytest test_pick.py --rw-backend mujoco,pybullet
-robowright replay robowright-traces/*.zip            # re-simulate: "bit-identical"
+pytest test_my_controller.py --rw-trace on       # the SO-101 in MuJoCo: about a second
+pytest test_my_controller.py --rw-live            # watch it live in a browser as it runs
+robowright show-trace robowright-traces/*.zip --no-open -o trace.html
 ```
 
-For a whole project, `robowright init` writes an example test, `pytest.ini`, `robowright.toml`, a
-GitHub Actions workflow and `.mcp.json` (so AI coding agents get the robot tools), and
-`pytest --rw-report report.html` gives the run as one HTML page.
+The same file runs on other robots and engines (`--rw-robot panda,ur5e`, `--rw-backend
+mujoco,drake`), and a policy is judged as a rate across randomized scenes with
+`@pytest.mark.trials(20, min_success=0.9)`.
+
+### Test your ROS 2 stack
+
+robowright serves its simulation as a ROS 2 robot (`/joint_states`, `/clock`, TF for the objects,
+`FollowJointTrajectory` and `GripperCommand` actions, the forward controller's topic), so the
+stack you run on the real arm drives it unchanged. The test starts your stack and watches:
+
+```python
+def test_my_stack_puts_the_cube_in_the_bin(scene, ros2):
+    with ros2.run("ros2 launch my_robot pick.launch.py use_sim_time:=true"):
+        expect(scene["cube"]).to_be_inside(scene["bin"], timeout=60)
+```
+
+[`examples/ros2_stack/pick_node.py`](examples/ros2_stack/pick_node.py) is a stand-in stack (TF,
+an IK library, the two actions) and [`tests/test_ros2_bridge.py`](tests/test_ros2_bridge.py)
+tests it that way. `robowright sim --ros2 --live` serves a simulation on its own, for you or
+an agent to drive by hand.
+
+### Then the same tests against Gazebo or the real arm
+
+`--rw-backend ros2` points the same tests at any robot behind ROS 2: a real arm with a
+`ros2_control` driver, Gazebo through `gz_ros2_control`, or Isaac Sim's bridge. robowright
+changes nothing in the robot; it reads joint states and TF, and sends commands only if the
+test asks it to. [`tests/test_gazebo.py`](tests/test_gazebo.py) runs an SO-101 in Gazebo that
+way (see [Robots behind ROS 2](#robots-behind-ros-2)).
+
+### What a passing test tells you
+
+A pass in simulation says: *this code did this task on this robot model in this engine.* It
+does not say the real arm will. robowright keeps that gap visible instead of tuning it away:
+
+- **The robot is its model file as published** (`--rw-fidelity published`, the default), plus
+  only values with a cited source, such as a gripper's rated force from its datasheet. Every
+  other change robowright makes is recorded in the run, by kind: a **repair** the file needs
+  to simulate at all, the **interface** robowright drives it through (one rule for every robot),
+  or a translation for another engine. `robowright fidelity --robot panda --backend drake` lists
+  them, and every trace and report carries them.
+- **robowright's own tuning is opt-in.** `--rw-fidelity adjusted` adds what it once used to make
+  more tests pass: stiffer contacts, capped grippers, stiffened servos, an integral term under a
+  policy's commands. More robots pass with it, on physics nobody measured.
+- **Engines disagree, and that is information.** `--rw-backend mujoco,drake` and `robowright
+  crosscheck` run the same test on another contact model; where only one engine passes, the
+  result depends on the engine, not on your code. Where an engine or a published model cannot
+  do a task, the [registry of known divergences](conftest.py) says why, measured.
+- **Some interfaces are kinder than real hardware.** Every simulated arm's weight is cancelled,
+  as industrial controllers do; hobby-servo arms (the SO-101, Koch) do not do that.
+- **Hardware is the ground truth.** `--rw-backend ros2` runs the same test on the real arm. So
+  far that has been tested against `ros2_control` on mock hardware, against robowright's own
+  simulation behind ROS 2, and against Gazebo, but not yet on a physical robot.
+
+### robowright's own controller
+
+`robot.pick(cube)` and `robot.place(on=bin)` are robowright's reference controller: they wait
+for the arm to settle, plan around the table and check the grasp. Use them to set up a
+situation (hand an object to the robot, move it somewhere) or to try a robot model out; a test
+that only calls them tests robowright, not your code.
 
 ```python
 from robowright import expect
 
 
-def test_pick_and_place(robot, scene):
+def test_the_reference_controller_on_every_robot(robot, scene):
     cube, bin = scene["cube"], scene["bin"]
-
     robot.pick(cube)
     expect(robot.gripper).to_be_holding(cube)
-
     robot.place(on=bin)
     expect(cube).to_be_inside(bin)
-    expect(cube).to_be_at_rest()
-```
-
-```console
-$ pytest --rw-robot all --rw-backend mujoco,pybullet,drake,genesis   # 13 arms x 4 engines, same test
 ```
 
 <p align="center"><img src="docs/gallery.png" alt="Every supported robot running the same test: 13 arms holding the cube, 6 legged robots standing"></p>
 
-The test above runs unchanged on a Franka Panda, a UR5e with a Robotiq gripper, a Kinova
+The same test runs unchanged on a Franka Panda, a UR5e with a Robotiq gripper, a Kinova
 Gen3, a KUKA iiwa, an xArm 7, ALOHA's ViperX, the Bridge WidowX, a PiPER, a YAM, an ARX L5,
 a Sawyer and the LeRobot SO-101, and on any other arm from its model file (MJCF, URDF or
-xacro: `--rw-robot path/to/arm.urdf`), with no code: robowright works out which joints are the
-arm, which parts are the fingers, how the gripper opens and where to mount it, from the model
-itself. See [Any robot, from its model file](#any-robot-from-its-model-file).
+xacro: `--rw-robot path/to/arm.urdf`): robowright works out which joints are the arm, which
+parts are the fingers, how the gripper opens and where to mount it, from the model itself.
+See [Any robot, from its model file](#any-robot-from-its-model-file).
 
 <p align="center"><img src="docs/robots_engines.gif" width="640" alt="Six arms running the same pick-and-place test, then a Franka Panda running it on MuJoCo, PyBullet, Drake, Genesis and Isaac Sim"></p>
 
-`python scripts/demo_video.py` records real runs (every robot, every engine, a side grasp, a
-failure) and cuts them into a one-minute 1080p demo video.
+For a whole project, `robowright init` writes an example test, `pytest.ini`, `robowright.toml`, a
+GitHub Actions workflow and `.mcp.json` (so AI coding agents get the robot tools), and
+`pytest --rw-report report.html` gives the run as one HTML page.
 
 
 ## Why
@@ -124,6 +172,7 @@ evidence to debug it. robowright brings that workflow to robots:
 
 | Playwright | robowright |
 |---|---|
+| your app is under test, in a real browser | your controller, policy (`robot.run_policy`) or ROS 2 stack (the `ros2` fixture) drives the robot, in an engine, in Gazebo or on the arm (`--rw-backend ros2`) |
 | auto-waiting actions | `robot.arm.move_to(...)` returns only once the arm has settled; `gripper.close()` returns once the jaws have stalled |
 | web-first assertions | `expect(cube).to_be_inside(bin)` re-checks every control step until it holds or times out, in *simulated* time |
 | locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots |
@@ -132,8 +181,8 @@ evidence to debug it. robowright brings that workflow to robots:
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
 | HTML reporter | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer |
-| `--headed` | `pytest --rw-headed`: watch each test in MuJoCo's window, at real-time pace |
-| Playwright MCP, test agents | `robowright mcp`: an agent drives a robot, saves a test, runs the suite and reads each failure's trace |
+| `--headed`, UI mode | `pytest --rw-live`: watch each test live in a browser (camera, joints, contacts, the current action); `--rw-headed`: MuJoCo's own window |
+| Playwright MCP, test agents | `robowright mcp`: an agent runs your policy or starts your ROS 2 stack against a robot, watches, asserts, saves a test, runs the suite and reads each failure's trace |
 
 On top of that, it adds things robots need and web pages don't:
 
@@ -676,8 +725,13 @@ failure becomes a test you can run every time.
 
 ### AI agents drive robots over MCP
 
-Playwright MCP lets an agent use a browser. `robowright mcp` lets one use a simulated
-robot the same way, then saves what it did as a test.
+Playwright MCP lets an agent use a browser, with your app in it. `robowright mcp` lets one use a
+robot the same way, with your code driving it: it runs your policy (`robot_run_policy
+"my_pkg.control:Pick"`), or serves the simulation over ROS 2 (`robot_serve_ros2`) and starts your
+stack (`robot_start_process "ros2 launch my_robot pick.launch.py"`), lets time pass, and checks
+what happened (`robot_expect`). It can send raw joint targets and step time
+(`robot_set_targets`, `robot_step`), connect to Gazebo or a real arm (`robot_launch
+backend="ros2"`), and give you a URL to watch it live (`robot_watch`).
 
 ```console
 $ claude mcp add robowright -- robowright mcp
@@ -699,8 +753,9 @@ objects (refs for other calls):
 cameras: front, top, side
 ```
 
-It acts on objects by name (`robot_pick`, `robot_place`, `robot_move_to`, `robot_push`,
-`robot_fault`, ...), checks outcomes with any matcher (`robot_expect`), and looks through
+It sets situations up with robowright's reference controller (`robot_pick`, `robot_place`,
+`robot_move_to`), disturbs them (`robot_push`, `robot_fault`, ...), checks outcomes with any
+matcher (`robot_expect`), and looks through
 the cameras (`robot_screenshot`). Each action returns the new snapshot. A failed action
 explains itself and the session carries on. `robot_generate_test` writes the session out
 as a pytest test that reproduces it bit for bit:
@@ -785,6 +840,14 @@ joints = { shoulder_pan = "joint1" }      # where the driver's names differ
 objects = { cube = "cube", bin = "bin" }  # TF frames: what object assertions read
 cameras = { front = "/camera/image_raw" } # image topics: what policies see
 ```
+
+The other direction works too: `Ros2Bridge` (the `ros2` fixture, `robowright sim --ros2`) serves
+robowright's simulation as a ROS 2 robot, so your stack drives it while the test watches, with
+ground truth, contacts, faults and traces as in any test, and each goal your stack sent in the
+trace's timeline. And against a third-party simulator: [`tests/test_gazebo.py`](tests/test_gazebo.py)
+spawns robowright's URDF export of the SO-101 in Gazebo (gz sim, DART) with `gz_ros2_control`
+and `ros2_control`'s stock controllers, bridges the objects' poses to TF, and runs the same
+moves and pick-and-place through `--rw-backend ros2`: robowright only talks to it over ROS 2.
 
 Joints come from `/joint_states`, targets go to the controllers each control step on the ROS
 clock, objects come from TF, and grasps are judged from the jaws (told to close, stopped on
@@ -1067,9 +1130,14 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 ## Limitations
 
 - **No physical robot yet:** the ROS 2 backend has run against `ros2_control`'s own controllers
-  on mock hardware and against a simulated arm behind ROS 2 topics, on Jazzy only. Nothing has
-  yet run on a real arm, where timing, a driver's quirks and perception noise will find what
-  those could not.
+  on mock hardware, against robowright's simulation served over ROS 2, and against Gazebo, on
+  Jazzy only. Nothing has yet run on a real arm, where timing, a driver's quirks and perception
+  noise will find what those could not.
+- **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
+  Published models are what their makers shipped: several of them fail tests as published
+  (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
+  engines other than MuJoCo fail some tasks at the models' real gripper forces; each is
+  registered with its measured cause.
 - **Grasps:** from above, from the side, or tilted between the two, the fingers closing level
   (no grasp that rolls the hand); plain moves interpolate joints without checking for
   collisions (pass `plan=True`). A mobile base drives only where the arm cannot reach

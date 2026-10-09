@@ -164,6 +164,8 @@ class Recorder:
             "robowright": _version(),
             "name": w.name,
             "backend": w.backend.name,
+            "fidelity": getattr(w, "fidelity", None),
+            "model_changes": [c.as_dict() for c in getattr(w, "model_changes", [])],
             "seed": w.seed,
             "scene": w.spec.to_dict(),
             "joint_names": list(w.backend.joint_names),
@@ -291,6 +293,17 @@ class Trace:
             f"  {(m.get('scene') or {}).get('robot', 'robot')} on {m['backend']}, seed {m['seed']}, {m['steps']} steps"
             f" ({float(a['t'][-1]):.2f} s simulated)",
         ]
+        if m.get("fidelity"):
+            changes = m.get("model_changes") or []
+            kinds = sorted({c["kind"] for c in changes})
+            lines.append(
+                f"  fidelity: {m['fidelity']}; the model "
+                + (
+                    f"with {len(changes)} change(s) ({', '.join(kinds)}): " + "; ".join(c["what"] for c in changes)
+                    if changes
+                    else "as published"
+                )
+            )
         if m.get("faults"):
             lines.append("  faults: " + "; ".join(m["faults"]))
         lines.append("timeline:")

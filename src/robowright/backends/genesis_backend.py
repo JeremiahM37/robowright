@@ -33,6 +33,7 @@ with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
 
 import mujoco
 
+from .. import fidelity
 from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
@@ -44,6 +45,19 @@ _DRIVE_SAT = 0.25
 # jaws meet even a thin one. At 0.25 the xArm's stopped on the test cube 22% off target and
 # pressed 1.41 of its 1.57 N m: 25.6 N per jaw against the datasheet's 30.
 _DRIVE_SAT_SPEC = 0.05
+
+
+def _rigid_options():
+    """Genesis's own solver settings (published), or the ones robowright chose (adjusted, see above)."""
+    if not fidelity.adjusted():
+        return gs.options.RigidOptions()
+    fidelity.record(
+        "adjusted",
+        "solver",
+        "implicitfast integrator and an elliptic friction cone, not Genesis's defaults (held objects crept out)",
+        engine="genesis",
+    )
+    return gs.options.RigidOptions(integrator=gs.integrator.implicitfast, friction_cone=gs.friction_cone.elliptic)
 
 
 _DEVICE = "cpu"
@@ -198,7 +212,7 @@ class GenesisBackend(Backend):
             # 1.2-1.5 Stretch and the xArm 7 lose theirs again, and noslip iterations instead cost the
             # PiPER its randomized picks and the Gen3 its tall can. At this one the iiwa 14 drops its
             # second cube mid-swing (in conftest.py's registry).
-            rigid_options=gs.options.RigidOptions(integrator=gs.integrator.implicitfast, friction_cone=gs.friction_cone.elliptic),
+            rigid_options=_rigid_options(),
             vis_options=gs.options.VisOptions(show_world_frame=False, ambient_light=(0.35, 0.35, 0.35)),
         )
         scene = self.scene

@@ -53,6 +53,7 @@ from pydrake.systems.analysis import Simulator
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.sensors import CameraInfo
 
+from .. import fidelity
 from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
@@ -81,12 +82,12 @@ def _proximity(friction: float, hydro: str | None = None, size: float = 0.01) ->
     props = ProximityProperties()
     AddContactMaterial(
         dissipation=50.0 if hydro == "soft" else None,  # s/m; less lets a placed cube rock forever
-        point_stiffness=POINT_STIFFNESS,
+        point_stiffness=_point_stiffness(),
         friction=CoulombFriction(friction, friction),
         properties=props,
     )
     if hydro == "soft":
-        AddCompliantHydroelasticProperties(size / 2, HYDRO_MODULUS, props)
+        AddCompliantHydroelasticProperties(size / 2, HYDRO_MODULUS if fidelity.adjusted() else DRAKE_HYDRO_MODULUS, props)
     elif hydro == "halfspace":
         AddRigidHydroelasticProperties(props)
     return props
@@ -103,6 +104,30 @@ HYDRO_MODULUS = 3e6
 # "near-rigid" regime, threshold 1 by default). For a 30 g cube in a 2 ms step that
 # lets the pads sink centimetres into it; a lower threshold keeps grasps rigid.
 SAP_NEAR_RIGID = 0.1
+# Drake's own values, which the published fidelity mode keeps: its default hydroelastic modulus,
+# its near-rigid threshold, and (point stiffness None) the stiffness it derives itself.
+DRAKE_HYDRO_MODULUS = 1e7
+DRAKE_SAP_NEAR_RIGID = 1.0
+
+
+def _point_stiffness() -> float | None:
+    return POINT_STIFFNESS if fidelity.adjusted() else None
+
+
+def _record_contact_settings() -> None:
+    fidelity.record(
+        "interface",
+        "contact model",
+        "hydroelastic contact for objects and bin walls (point contact elsewhere), the SAP solver (kLagged)",
+        engine="drake",
+    )
+    fidelity.record(
+        "adjusted",
+        "contact stiffness",
+        f"point stiffness {POINT_STIFFNESS:g} N/m, hydroelastic modulus {HYDRO_MODULUS:g} Pa, near-rigid threshold "
+        f"{SAP_NEAR_RIGID:g}, not Drake's defaults (a cube squeezed between pads sank a centimetre into them)",
+        engine="drake",
+    )
 
 
 def _render_ok() -> bool:
@@ -145,7 +170,8 @@ class DrakeBackend(Backend):
         self.plant, self.sg = plant, sg
         plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
         plant.set_contact_model(ContactModel.kHydroelasticWithFallback)
-        plant.set_sap_near_rigid_threshold(SAP_NEAR_RIGID)
+        _record_contact_settings()
+        plant.set_sap_near_rigid_threshold(SAP_NEAR_RIGID if fidelity.adjusted() else DRAKE_SAP_NEAR_RIGID)
         if self._render:
             sg.AddRenderer("vtk", MakeRenderEngineVtk(RenderEngineVtkParams(default_clear_color=[0.85, 0.89, 0.94])))
         parser = Parser(plant)
@@ -360,7 +386,8 @@ class DrakeBackend(Backend):
                 mu = _matched_friction(meta["geoms"].get(name, {}).get("friction", 1.0), o)
                 props = ProximityProperties(inspector.GetProximityProperties(g))
                 props.UpdateProperty("material", "coulomb_friction", CoulombFriction(mu, mu))
-                props.UpdateProperty("material", "point_contact_stiffness", POINT_STIFFNESS)
+                if fidelity.adjusted():
+                    props.UpdateProperty("material", "point_contact_stiffness", POINT_STIFFNESS)
                 # Rigid hydroelastic against the soft objects: a grasp becomes two pressure
                 # patches instead of one point per pad, which jumps between the pad's
                 # faces and edges as it squeezes and makes the grip chatter.

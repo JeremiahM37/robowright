@@ -331,7 +331,13 @@ class Ros2Backend(Backend):
         from rclpy.duration import Duration
         from rclpy.time import Time
 
-        t = self._tf.lookup_transform(self.cfg["frame"], frame, Time(), timeout=Duration(seconds=1.0)).transform
+        # The first lookup of a frame waits as long as start-up may take: a TF tree comes up a piece
+        # at a time (robot_state_publisher, a perception node), and asked a moment too early the
+        # base frame "does not exist". Once seen, a frame that stops arriving fails within a second.
+        seen = self.__dict__.setdefault("_tf_seen", set())
+        wait = 1.0 if frame in seen else float(self.cfg["timeout"])
+        t = self._tf.lookup_transform(self.cfg["frame"], frame, Time(), timeout=Duration(seconds=wait)).transform
+        seen.add(frame)
         p = np.array([t.translation.x, t.translation.y, t.translation.z])
         quat = np.array([t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z])
         # Relative to the robot's base, which robowright mounts at base_pos, turned base_yaw.

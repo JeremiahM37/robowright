@@ -84,13 +84,28 @@ class Session:
 
     def __init__(self, trace_dir: str | Path | None = None):
         self.world: World | None = None
+        self.view = None  # a LiveView, once watch() is called
+        self.bridge = None  # a Ros2Bridge, once serve_ros2() is called
+        self.process = None  # the code under test, once start_process() is called
         self.trace_dir = Path(trace_dir or tempfile.mkdtemp(prefix="robowright-session-"))
         self._n = 0
         self.last_trace: Path | None = None
 
     # --- lifecycle -------------------------------------------------------------
-    def launch(self, robot: str = "so101", backend: str = "mujoco", seed: int = 0, objects: list[dict] | None = None) -> str:
-        """Start a fresh world (closing any open one) and return its snapshot."""
+    def launch(
+        self,
+        robot: str = "so101",
+        backend: str = "mujoco",
+        seed: int = 0,
+        objects: list[dict] | None = None,
+        fidelity: str | None = None,
+        ros2: dict | None = None,
+    ) -> str:
+        """Start a fresh world (closing any open one) and return its snapshot.
+
+        ``backend="ros2"`` connects to a robot behind ROS 2 instead (a real arm, Gazebo, Isaac
+        Sim's bridge), with ``ros2`` its settings (topics, controllers, TF frames: see
+        ``robowright.backends.ros2_backend``)."""
         if self.world is not None:
             self.close()
         model = robots.get(robot)
@@ -101,9 +116,13 @@ class Session:
         self._n += 1
         # No camera frames in the trace: screenshots are taken on request, and rendering
         # every few steps would cost more than the physics.
-        settings = Settings(trace="on", trace_dir=str(self.trace_dir), trace_cameras=[])
-        self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings)
+        settings = Settings(trace="on", trace_dir=str(self.trace_dir), trace_cameras=[], fidelity=fidelity)
+        if backend == "ros2":
+            scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name
+        self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings, **(ros2 or {}))
         self.world.robot.reset_to()
+        if self.view is not None:
+            self.view.watch(self.world)
         return self.snapshot()
 
     @staticmethod
@@ -119,6 +138,10 @@ class Session:
     def close(self) -> str:
         """Close the world and keep its trace; returns where it was saved."""
         w = self._w()
+        self.stop_process()
+        if self.bridge is not None:
+            self.bridge.close()
+            self.bridge = None
         self.world = None
         self.last_trace = w.close(failed=w.status == "failed")
         return f"closed; trace saved to {self.last_trace}"
@@ -319,6 +342,117 @@ class Session:
         getattr(w.faults, kind)(**params)
         return self.snapshot()
 
+    # --- the code under test ------------------------------------------------------
+    def run_policy(
+        self,
+        policy: str,
+        kwargs: dict | None = None,
+        until: dict | None = None,
+        timeout: float = 20.0,
+        hold: float = 0.0,
+    ) -> str:
+        """Run a controller or policy (``"package.module:name"``: a callable ``obs -> joint targets``,
+        a class taking ``kwargs``, or a learned policy a LearnedPolicy loads) until ``until`` holds
+        (``{"subject": "cube", "matcher": "to_be_inside", "args": {"container": "bin"}}``) or
+        ``timeout`` passes. Returns whether it succeeded, how long it took, and the snapshot."""
+        from .expect import condition
+
+        w = self._w()
+        pol = _load_policy(policy, kwargs or {})
+        done = None
+        if until:
+            kw = dict(until.get("args") or {})
+            for k in _SUBJECT_ARGS:
+                if isinstance(kw.get(k), str):
+                    kw[k] = self._subject(kw[k])
+            done = condition(self._subject(until["subject"]), until["matcher"], **kw)
+        try:
+            rollout = self._attempt(w.robot.run_policy, pol, until=done, timeout=float(timeout), hold=float(hold))
+        except RobowrightError as e:
+            return f"FAILED: {type(e).__name__}: {e}\n\n{self.snapshot()}"
+        if done is None:  # nothing to judge it by
+            head = f"ran {rollout.steps} steps ({rollout.sim_seconds:.2f} s simulated); no goal was given, so no verdict"
+        else:
+            verdict = "SUCCEEDED" if rollout.success else "did not succeed"
+            head = f"{verdict}: {rollout.steps} steps, {rollout.sim_seconds:.2f} s simulated"
+        return f"{head}\n\n{self.snapshot()}"
+
+    def set_targets(self, joints: dict[str, float] | None = None, gripper: float | None = None) -> str:
+        """Set joint targets (radians, by name) and/or the gripper opening (0 closed .. 1 open)
+        without waiting for them: the low-level command a controller sends each control step.
+        Time does not pass; follow with ``step``."""
+        w = self._w()
+        r = w.robot
+        names = list(w.backend.joint_names)[: r.n_arm] if hasattr(r, "n_arm") else list(w.backend.joint_names)
+        for k, v in (joints or {}).items():
+            if k not in names:
+                raise RobowrightError(f"unknown joint {k!r}; the joints are: {', '.join(names)}")
+            r._target[names.index(k)] = float(v)
+        if gripper is not None:
+            if not w.backend.has_gripper:
+                raise RobowrightError("this robot has no gripper")
+            r._target[-1] = float(np.clip(gripper, 0.0, 1.0))
+        if w.trace:
+            w.trace.event("edit", "set_targets", {"joints": dict(joints or {}), "gripper": gripper})
+        return self.snapshot()
+
+    def step(self, steps: int = 1) -> str:
+        """Advance ``steps`` control periods with the current targets."""
+        return self._act(self._w().step, int(steps))
+
+    def serve_ros2(
+        self,
+        namespace: str = "",
+        arm_controller: str = "arm_controller",
+        gripper_controller: str = "gripper_controller",
+    ) -> str:
+        """Serve the simulated world as a ROS 2 robot (see ``robowright.ros2_bridge``), so a ROS 2
+        stack (yours) can drive it. The world runs while ``wait``/``expect`` step it, in real time."""
+        from .ros2_bridge import Ros2Bridge
+
+        w = self._w()
+        if self.bridge is None:
+            self.bridge = Ros2Bridge(w, namespace=namespace, arm_controller=arm_controller, gripper_controller=gripper_controller)
+        a = f"{namespace.rstrip('/')}/{arm_controller}/follow_joint_trajectory"
+        return f"serving the world as a ROS 2 robot: /joint_states, /clock, TF for the objects, {a} and the gripper's GripperCommand"
+
+    def start_process(self, command: str, cwd: str | None = None) -> str:
+        """Start the code under test (a launch file, a node, a script) as its own process. Its
+        output is kept; ``stop_process`` ends it and returns the output's tail."""
+        import shlex
+        import subprocess
+
+        if self.process is not None:
+            self.stop_process()
+        log = self.trace_dir / f"process_{self._n}.log"
+        proc = subprocess.Popen(shlex.split(command), stdout=log.open("w"), stderr=subprocess.STDOUT, cwd=cwd, start_new_session=True)
+        self.process = (proc, log)
+        w = self._w()
+        if w.trace:
+            w.trace.event("edit", "start_process", {"command": command})
+        return f"started pid {proc.pid}: {command} (output in {log})"
+
+    def stop_process(self) -> str:
+        if self.process is None:
+            return "no process is running"
+        from .ros2_bridge import _stop
+
+        proc, log = self.process
+        self.process = None
+        _stop(proc)
+        tail = log.read_text()[-3000:] if log.exists() else ""
+        return f"stopped (exit {proc.returncode}); its output ended:\n{tail}"
+
+    def watch(self, port: int = 8765) -> str:
+        """Serve the world live in a browser: the camera streaming, joints, objects, contacts."""
+        from .live import LiveView
+
+        if self.view is None:
+            self.view = LiveView(port=port, quiet=True)
+        if self.world is not None:
+            self.view.watch(self.world)
+        return f"watch live at {self.view.url}"
+
     # --- assertions --------------------------------------------------------------
     def expect(self, subject: str, matcher: str, args: dict | None = None, negate: bool = False, timeout: float | None = None) -> str:
         """Check a robowright matcher; returns PASS or FAIL with the reason, and never ends the session."""
@@ -379,3 +513,17 @@ class Session:
         w = self._w()
         p = w.trace.save(path or self.trace_dir / f"{w.name}.zip")
         return str(p)
+
+
+def _load_policy(ref: str, kwargs: dict):
+    """A policy from ``"package.module:name"``: a callable, a class (built with ``kwargs``), or a
+    reference a LearnedPolicy loader understands."""
+    import importlib
+
+    mod, _, name = ref.partition(":")
+    if not name:
+        from .learned import LearnedPolicy
+
+        return LearnedPolicy(ref, **kwargs)
+    obj = getattr(importlib.import_module(mod), name)
+    return obj(**kwargs) if isinstance(obj, type) else obj

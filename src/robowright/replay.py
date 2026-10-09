@@ -48,7 +48,10 @@ def _is_edit(e) -> bool:
 def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1e-6) -> ReplayResult:
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     meta = tr.meta
-    b = backends.create(backend or meta["backend"], tr.scene(), seed=meta["seed"])
+    from . import fidelity
+
+    with fidelity.using(meta.get("fidelity")):  # rebuilt as it ran
+        b = backends.create(backend or meta["backend"], tr.scene(), seed=meta["seed"])
     try:
         restored = tr.state0 is not None and backends.STATE in b.capabilities
         if restored:

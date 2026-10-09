@@ -154,3 +154,78 @@ def test_legged_push_and_checks_on_the_robot(session):
     assert session.expect("robot", "to_be_upright", {"tol_deg": 15}).startswith("PASS")  # the robot's pose is its base's
     code = session.generate_test("test_push")
     assert "world.wait(0.1)" in code and "expect(robot.base).to_be_upright(tol_deg=15)" in code
+
+
+def test_run_the_users_policy_until_its_goal(session):
+    session.launch("so101")
+    out = session.run_policy(
+        "robowright.policies:ScriptedPickPlace",
+        until={"subject": "cube", "matcher": "to_be_inside", "args": {"container": "bin"}},
+        hold=0.5,
+        timeout=15,
+    )
+    assert out.startswith("SUCCEEDED"), out
+    assert "inside bin" in out
+
+
+def test_a_plain_function_is_a_policy(session, tmp_path, monkeypatch):
+    (tmp_path / "my_controller.py").write_text("def hold_still(obs):\n    return obs['target']\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    session.launch("so101")
+    out = session.run_policy("my_controller:hold_still", timeout=0.5)
+    assert "no goal was given" in out and "SUCCEEDED" not in out  # nothing to judge it by
+
+
+def test_raw_targets_then_time(session):
+    session.launch("so101")
+    w = session.world
+    q0 = w.robot.qpos()[0]
+    snap = session.set_targets({"shoulder_pan": q0 + 0.2}, gripper=0.0)
+    assert f"t={w.time:.3f}" in snap  # no time has passed
+    session.step(100)
+    assert abs(w.robot.qpos()[0] - (q0 + 0.2)) < 0.02
+    assert w.robot.gripper.opening < 0.1
+    with pytest.raises(Exception, match="unknown joint"):
+        session.set_targets({"elbow": 0.1})
+
+
+def test_the_code_under_test_runs_as_a_process(session, tmp_path):
+    import sys
+
+    session.launch("so101")
+    print(session.start_process(f"{sys.executable} -c \"print('stack up')\""))
+    session.wait(0.2)
+    import time
+
+    time.sleep(0.5)
+    assert "stack up" in session.stop_process()
+
+
+def test_watch_serves_the_session_live(session):
+    import json
+    import urllib.request
+
+    session.launch("so101")
+    url = session.watch(port=0).split()[-1]
+    state = json.loads(urllib.request.urlopen(url + "/state").read())
+    assert state["robot"] == "so101" and state["objects"]
+    session.launch("panda")  # a new world is watched too
+    session.wait(0.1)
+    assert json.loads(urllib.request.urlopen(url + "/state").read())["robot"] == "panda"
+    session.view.close()
+
+
+def test_mcp_lists_the_code_under_test_tools():
+    pytest.importorskip("mcp")
+    from robowright.mcp_server import INSTRUCTIONS, build_server
+
+    server = build_server()
+    names = set()
+    for attr in ("_tool_manager", "tool_manager"):
+        tm = getattr(server, attr, None)
+        if tm is not None:
+            names = {t.name for t in tm.list_tools()}
+    if not names:
+        pytest.skip("this mcp version keeps its tools elsewhere")
+    assert {"robot_run_policy", "robot_set_targets", "robot_step", "robot_serve_ros2", "robot_start_process", "robot_watch"} <= names
+    assert "code under test is the user's" in INSTRUCTIONS

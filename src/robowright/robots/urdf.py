@@ -23,10 +23,11 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from .. import fidelity
 from .model import RobotModel, closing_speeds, joint_followers
 
 BASE = "robowright_base"
-VERSION = 27  # bump when the output format changes, to invalidate caches
+VERSION = 29  # bump when the output format changes, to invalidate caches
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
 
 
@@ -37,13 +38,17 @@ def cache_root() -> Path:
 
 def export(model: RobotModel) -> Path:
     """Directory holding ``robot.urdf``, ``robot.json`` and ``meshes/``; built once and cached."""
-    h = hashlib.sha1(f"{VERSION}|{_cache_key(model)}".encode()).hexdigest()[:12]
+    h = hashlib.sha1(f"{VERSION}|{fidelity.mode()}|{_cache_key(model)}".encode()).hexdigest()[:12]
     out = cache_root() / f"{model.name}-{h}"
     if (out / "robot.json").exists():
         return out
     tmp = out.with_name(out.name + f".{os.getpid()}.tmp")
     (tmp / "meshes").mkdir(parents=True, exist_ok=True)
-    _write(model, tmp)
+    with fidelity.recording() as log:
+        _write(model, tmp)
+    meta = json.loads((tmp / "robot.json").read_text())
+    meta["changes"] = [c.as_dict() for c in log]
+    (tmp / "robot.json").write_text(json.dumps(meta))
     try:
         tmp.replace(out)
     except OSError:  # another process won the race
@@ -71,8 +76,13 @@ def _cache_key(model: RobotModel) -> str:
 
 
 def load(model: RobotModel) -> tuple[Path, dict]:
+    """The exported robot, and its metadata. The changes made in exporting it (written with it,
+    as a cached export does not rebuild) are recorded again for the world being built."""
     d = export(model)
-    return d / "robot.urdf", json.loads((d / "robot.json").read_text())
+    meta = json.loads((d / "robot.json").read_text())
+    for c in meta.get("changes", ()):
+        fidelity.record(**c)
+    return d / "robot.urdf", meta
 
 
 def _fmt(v) -> str:
@@ -365,9 +375,19 @@ def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
     hand = m.body(model.hand).id
     tcp = d.xpos[hand] + d.xmat[hand].reshape(3, 3) @ der.tcp_offset
 
-    pad = model.grip_force or MAX_PAD_FORCE  # a datasheet's jaw force replaces the blanket cap
+    # A datasheet's jaw force caps the squeeze. Without one, the model's own force carries over as it
+    # is (published), or is capped at MAX_PAD_FORCE (adjusted: stiffer engines than MuJoCo push pads
+    # squeezing like the xArm 7's ~400 N through the object).
+    if model.grip_force:
+        pad = model.grip_force
+    elif fidelity.adjusted():
+        pad = MAX_PAD_FORCE
+    else:
+        pad = _modelled_squeeze(model)
 
     def cap(name):
+        if pad is None:
+            return np.inf
         j = m.joint(name).id
         if m.jnt_type[j] == _SLIDE:
             return pad
@@ -388,8 +408,29 @@ def _grip_effort(m, model: RobotModel) -> tuple[dict, list]:
             # travel): the driver's force, through the ratio of their travels.
             (cd, od), (cf, of) = der.gripper_joints[driven[0]], der.gripper_joints[name]
             f = own[driven[0]] * abs(od - cd) / abs(of - cf) if abs(of - cf) > 1e-6 else 0.0
-        out[name] = min(f if f > 1e-6 else max(peers), cap(name))
+        want = f if f > 1e-6 else max(peers)
+        out[name] = min(want, cap(name))
+        if out[name] < want - 1e-9 and not model.grip_force:
+            fidelity.record("adjusted", "gripper force capped", f"at {MAX_PAD_FORCE:g} N at the pads for engines other than MuJoCo")
     return out, driven
+
+
+def _modelled_squeeze(model: RobotModel) -> float | None:
+    """The force the MuJoCo model's own gripper presses a 25 mm block with, for engines whose
+    finger motors push at a set force: what the model does on an object, not the much larger
+    force its servo makes far from its target (half open, which is what the joint's effort
+    reads). None if the jaws do not both reach the block."""
+    from .model import _squeeze
+
+    clamp, _ = _squeeze(model, free=False)
+    if clamp <= 0:
+        return None
+    fidelity.record(
+        "interface",
+        "gripper force carried over",
+        f"{clamp:.1f} N at the jaws: what the model's gripper presses a 25 mm block with in MuJoCo",
+    )
+    return clamp
 
 
 def _drives_a_finger(m, model: RobotModel, driven) -> bool:

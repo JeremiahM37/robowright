@@ -386,7 +386,7 @@ class Robot:
         self._still = self._still + 1 if held else 0
         if not held:
             self._bias *= 0.9  # moving again: let it go over half a second, not as a jump
-        elif self._integrates and self._policy and self._still * self.world.dt >= 0.1:  # past a command's own transient (and any delay)
+        elif self._helps_policies and self._policy and self._still * self.world.dt >= 0.1:  # past a command's own transient (and any delay)
             b = self.world.backend
             unit = self._joint_units
             off = (target[:n] - b.qpos()[:n]) / unit
@@ -432,6 +432,13 @@ class Robot:
                 if hit.size:
                     kp[hit[0]] = -m.actuator_biasprm[a, 1]
         return kp
+
+    @functools.cached_property
+    def _helps_policies(self) -> bool:
+        """Whether the integral term above is added under a policy's commands too. Only in the
+        ``adjusted`` fidelity mode: it is help the robot's own servos do not give, and a policy
+        under test must succeed or fail on what the robot does with its commands."""
+        return self._integrates and self.world.fidelity == "adjusted"
 
     @functools.cached_property
     def _integrates(self) -> bool:
@@ -987,11 +994,18 @@ class Rollout:
         return f"<Rollout success={self.success} steps={self.steps} sim={self.sim_seconds:.2f}s>"
 
 
-@functools.cache
 def _kinematics(name: str) -> Kinematics:
-    from . import robots
+    from . import fidelity
 
-    return Kinematics(robots.get(name))
+    return _kinematics_in(name, fidelity.mode())
+
+
+@functools.cache
+def _kinematics_in(name: str, mode: str) -> Kinematics:
+    from . import fidelity, robots
+
+    with fidelity.using(mode), fidelity.silent():
+        return Kinematics(robots.get(name))
 
 
 def solve_ik(kin: Kinematics, p, seed, home, approach=DOWN, yaw=None, rest=None, level=False):
@@ -1090,11 +1104,18 @@ def _folded(name: str, q, depth: float = 0.0) -> bool:
     return False
 
 
-@functools.cache
 def _self_model(name: str):
-    from . import robots
+    from . import fidelity
 
-    return robots.get(name).robot_spec().compile()
+    return _self_model_in(name, fidelity.mode())
+
+
+@functools.cache
+def _self_model_in(name: str, mode: str):
+    from . import fidelity, robots
+
+    with fidelity.using(mode), fidelity.silent():
+        return robots.get(name).robot_spec().compile()
 
 
 def _hand_bodies(mm, hand: str | None) -> set[int]:
