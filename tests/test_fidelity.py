@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import robowright as rw
@@ -91,7 +93,9 @@ def test_mode(world):
     assert world.fidelity == "adjusted"
 """
     )
+    before = os.environ.get(fidelity.ENV)
     pytester.runpytest("-p", "no:cacheprovider", "--rw-fidelity", "adjusted").assert_outcomes(passed=1)
+    assert os.environ.get(fidelity.ENV) == before  # the inner run's mode does not leak into this one
 
 
 def test_a_robot_behind_ros2_runs_as_it_is():

@@ -28,6 +28,8 @@ def _client(action_type, name):
     from rclpy.action import ActionClient
     from rclpy.executors import SingleThreadedExecutor
 
+    if not rclpy.ok():
+        rclpy.init()
     node = rclpy.create_node(f"test_client_{int(time.time() * 1000) % 100000}")
     client = ActionClient(node, action_type, name)
     ex = SingleThreadedExecutor()
@@ -66,3 +68,46 @@ def test_your_stack_puts_the_cube_in_the_bin(world, scene, ros2):
     with ros2.run([sys.executable, str(node), "--robot", world.backend.robot_model.name]):
         expect(scene["cube"]).to_be_inside(scene["bin"], timeout=60)
         expect(scene["cube"]).to_be_at_rest()
+
+
+def test_observe_only_reads_the_robot_and_never_commands_it(tmp_path):
+    """``[ros2] command = false``: a test reads a robot something else serves and drives, and cannot
+    move it. The robot here is `robowright sim --ros2`, in a process of its own, as a real one is."""
+    import subprocess
+
+    import robowright as rw
+    from robowright.errors import CapabilityError
+    from robowright.ros2_bridge import _stop
+    from robowright.scene import default_scene
+
+    ns = f"/observed_{os.getpid()}"
+    log = (tmp_path / "sim.log").open("w")
+    sim = subprocess.Popen(
+        [sys.executable, "-m", "robowright.cli", "sim", "--ros2", "--namespace", ns],
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        obs = rw.launch(
+            scene=default_scene("so101"),
+            backend="ros2",
+            settings=rw.Settings(trace="off"),
+            namespace=ns,
+            frame="base_link",
+            objects={"cube": "cube"},
+            command=False,
+            timeout=30.0,
+        )
+        try:
+            q0 = obs.robot.qpos().copy()
+            assert np.allclose(obs.scene["cube"].position[:2], (0.22, -0.06), atol=0.005)  # through TF
+            obs.robot.reset_to()  # takes the robot as it is
+            obs.step(25)
+            assert np.allclose(obs.robot.qpos(), q0, atol=1e-3)  # nothing was sent, so nothing moved
+            with pytest.raises(CapabilityError, match="observe-only"):
+                obs.robot.arm.move_to(obs.robot.tcp.position + [0, 0, 0.02])
+        finally:
+            obs.close()
+    finally:
+        _stop(sim)

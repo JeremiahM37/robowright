@@ -192,7 +192,7 @@ def test_codegen_keeps_settings_and_expect_timeouts(tmp_path):
         with pytest.raises(ExpectationError):
             expect(w.scene["cube"], timeout=0.3).to_be_inside(w.scene["bin"])
     code = generate(w.trace_path)
-    assert "settings=rw.Settings(max_joint_speed=1.0)" in code
+    assert "settings=rw.Settings(max_joint_speed=1.0" in code  # (and fidelity="adjusted", when it ran so)
     assert "timeout=0.3" in code
     assert "robot.reset_to()" in code
 

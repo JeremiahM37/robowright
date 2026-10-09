@@ -16,7 +16,7 @@ def test_live_view_serves_the_page_the_state_and_frames():
         page = _get(v.url + "/").decode()
         assert "robowright live" in page and "/stream" in page
         s = json.loads(_get(v.url + "/state"))
-        assert s["robot"] == "so101" and s["backend"] == "mujoco" and s["fidelity"] == "published"
+        assert s["robot"] == "so101" and s["backend"] == "mujoco" and s["fidelity"] == w.fidelity
         assert s["t"] > 1.0 and "pick" in s["action"]
         assert any("cube" in c for c in s["contacts"])
         assert _get(v.url + "/frame.jpg?camera=front")[:3] == b"\xff\xd8\xff"

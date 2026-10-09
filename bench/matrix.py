@@ -260,6 +260,20 @@ def markdown(data: dict) -> str:
         ],
         "Every cell is measured; nothing here is written by hand.",
         "",
+        *(
+            [
+                f"Fidelity: **{data['fidelity']}**"
+                + (
+                    " (each robot as its model file has it, plus cited specs; robowright's own tuning off: "
+                    "`--rw-fidelity adjusted` turns it on, and `bench/results/matrix_adjusted.json` has that run)."
+                    if data["fidelity"] == "published"
+                    else " (robowright's own tuning on)."
+                ),
+                "",
+            ]
+            if data.get("fidelity")
+            else []
+        ),
         "## Arms: randomised pick-and-place",
         "",
         f"Each cell runs the same test {data['trials']} times with the cube's position (σ = 15 mm) and yaw (σ = 0.6 rad) "
@@ -386,7 +400,10 @@ def main():
         print(f"{len(jobs)} cells on {a.jobs} processes: backends {backends}, {len(names)} robots, {a.trials} trials each", flush=True)
         t0 = time.time()
         results = _run_all(jobs, a.jobs, a.cell_timeout)
+        from robowright import fidelity
+
         data = {
+            "fidelity": fidelity.mode(),
             "env": env(),
             "backends": backends,
             "trials": a.trials,

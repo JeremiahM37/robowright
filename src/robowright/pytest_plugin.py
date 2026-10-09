@@ -96,7 +96,18 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     mode = config.getoption("--rw-fidelity", None)
     if mode:
-        os.environ[fidelity.ENV] = mode  # this process, and the xdist workers it starts
+        # For this run, and the xdist workers it starts; put back after, as a run inside another
+        # (pytester, in-process) would otherwise leave every later test in its mode.
+        previous = os.environ.get(fidelity.ENV)
+        os.environ[fidelity.ENV] = mode
+
+        def restore():
+            if previous is None:
+                os.environ.pop(fidelity.ENV, None)
+            else:
+                os.environ[fidelity.ENV] = previous
+
+        config.add_cleanup(restore)
     config.addinivalue_line("markers", "scene(spec): scene spec or zero-arg factory for this test")
     config.addinivalue_line("markers", "seed(n): seed for this test")
     config.addinivalue_line("markers", "backends(*names): only run on these backends")

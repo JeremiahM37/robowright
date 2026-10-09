@@ -299,11 +299,18 @@ class IsaacBackend(Backend):
         px.CreateTimeStepsPerSecondAttr(int(round(1.0 / self._dt)))
         px.CreateEnableGPUDynamicsAttr(self._gpu)
         px.CreateBroadphaseTypeAttr("GPU" if self._gpu else "MBP")
-        # PhysX's own solver, TGS, as published. Adjusted: PGS, under which every arm passes the
-        # conformance suite (under TGS the xArm 7's linkage gripper wound its arm radians off target).
-        if fidelity.adjusted():
-            px.CreateSolverTypeAttr("PGS")
-            fidelity.record("adjusted", "solver", "PhysX's PGS solver, not its default TGS", engine="isaac")
+        # PGS, not PhysX's default TGS. Under TGS a run is not reproducible: a scene restored from a
+        # saved state replays 1e-6 off (measured on 6 of the 13 arms; TGS keeps solver state PhysX's
+        # state API does not hand back), and determinism, replay and generated tests all rest on
+        # that. (It also keeps the xArm 7's linkage gripper from winding its arm off target, which
+        # TGS does.) Both are PhysX's own solvers; the choice is recorded with every run.
+        px.CreateSolverTypeAttr("PGS")
+        fidelity.record(
+            "interface",
+            "solver",
+            "PhysX's PGS solver, not its default TGS: under TGS a restored state does not replay bit for bit",
+            engine="isaac",
+        )
         fidelity.record(
             "interface",
             "drives",

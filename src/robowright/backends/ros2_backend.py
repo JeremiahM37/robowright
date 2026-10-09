@@ -57,6 +57,10 @@ _DEFAULTS = {
     "use_sim_time": False,
     "timeout": 10.0,  # seconds to wait for the robot's first joint states, and for reset_to
     "reset_speed": 0.5,  # rad/s (or m/s) that reset_to drives at
+    # False: observe only. robowright never publishes a command or drives to a reset pose; your own
+    # stack drives the robot and the test reads joint states and TF. An action that would move it
+    # fails at once with a CapabilityError, rather than waiting for a move that never comes.
+    "command": True,
     "reset_tolerance": 0.02,
     "node_name": None,
 }
@@ -238,6 +242,11 @@ class Ros2Backend(Backend):
         self._last_q, self._last_t = q, t
         return out
 
+    @property
+    def commands(self) -> bool:
+        """Whether robowright sends this robot commands (``[ros2] command``)."""
+        return bool(self.cfg["command"])
+
     def set_ctrl(self, target) -> None:
         self._ctrl = np.array(target, float)
 
@@ -292,7 +301,8 @@ class Ros2Backend(Backend):
 
     def step(self) -> None:
         """Send this step's targets, then wait out the control period (on the ROS clock)."""
-        self._send(self._ctrl)
+        if self.commands:
+            self._send(self._ctrl)
         self._tick += self.control_dt
         if self.cfg["use_sim_time"]:
             while self._now() < self._tick - 1e-9:
@@ -310,6 +320,8 @@ class Ros2Backend(Backend):
         """Drive to ``q`` (a real arm cannot be teleported): at ``reset_speed``, then until it
         is within ``reset_tolerance``, or ``TimeoutError`` after ``timeout`` seconds."""
         q = np.asarray(q, float)
+        if not self.commands:
+            return  # observe-only: the robot stays wherever its own stack has it
         start = self.qpos()
         span = np.abs(q - start)[: self.n_arm]
         n = max(1, int(np.ceil(float(span.max(initial=0.0)) / self.cfg["reset_speed"] / self.control_dt)))

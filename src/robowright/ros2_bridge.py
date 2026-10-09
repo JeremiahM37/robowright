@@ -90,13 +90,14 @@ class Ros2Bridge:
         self._wall0 = self._sim0 = None
         self.goals: list[str] = []  # what the stack under test asked for, in order (also in the trace)
 
-        if not rclpy.ok():
-            rclpy.init()
-            self._owns_rclpy = True
-        else:
-            self._owns_rclpy = False
+        # A ROS 2 context of its own: starting or closing a bridge never touches the process's
+        # default context, which the code under test, the test's own nodes or a robowright ros2
+        # backend in the same process may be using. (Sharing it, closing one bridge shut ROS down
+        # for whatever came next.)
+        self._context = rclpy.Context()
+        rclpy.init(context=self._context)
         ns = namespace.rstrip("/")
-        self.node = node = rclpy.create_node(node_name, namespace=ns or None)
+        self.node = node = rclpy.create_node(node_name, namespace=ns or None, context=self._context)
         cb = ReentrantCallbackGroup()
         self._clock = node.create_publisher(Clock, "/clock", 10)
         self._states = node.create_publisher(JointState, "joint_states", 10)
@@ -127,7 +128,7 @@ class Ros2Bridge:
             self._gripper_server = ActionServer(
                 node, GripperCommand, f"{gripper_controller}/gripper_cmd", execute_callback=self._execute_gripper, callback_group=cb
             )
-        self._executor = MultiThreadedExecutor(num_threads=4)
+        self._executor = MultiThreadedExecutor(num_threads=4, context=self._context)
         self._executor.add_node(node)
         self._spin = threading.Thread(target=_spin, args=(self._executor,), name="robowright-ros2", daemon=True)
         self._spin.start()
@@ -325,11 +326,9 @@ class Ros2Bridge:
             self.world._step_hooks.remove(self._on_step)
         self._executor.shutdown(timeout_sec=1.0)
         self.node.destroy_node()
-        if self._owns_rclpy:
-            import rclpy
-
-            with contextlib.suppress(Exception):
-                rclpy.shutdown()
+        with contextlib.suppress(Exception):
+            self._context.try_shutdown()
+        self._spin.join(timeout=2.0)
 
     def __enter__(self):
         return self

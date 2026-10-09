@@ -839,7 +839,12 @@ gripper = { controller = "gripper_controller", interface = "action" }          #
 joints = { shoulder_pan = "joint1" }      # where the driver's names differ
 objects = { cube = "cube", bin = "bin" }  # TF frames: what object assertions read
 cameras = { front = "/camera/image_raw" } # image topics: what policies see
+command = true                            # false: observe only, for a robot your own stack drives
 ```
+
+On a real arm, start with `command = false`: robowright then reads joint states and TF and never
+sends a command, and any action that would move the robot fails at once. [docs/hardware.md](docs/hardware.md)
+is the order to bring an arm up in.
 
 The other direction works too: `Ros2Bridge` (the `ros2` fixture, `robowright sim --ros2`) serves
 robowright's simulation as a ROS 2 robot, so your stack drives it while the test watches, with
@@ -867,25 +872,45 @@ failure with the measured reason, so CI fails the day one starts passing.
 
 `python bench/matrix.py` runs the same randomised pick-and-place on every (engine, arm)
 pair, 20 seeds each (cube position σ = 15 mm, yaw σ = 0.6 rad, the same seeds in every
-column), plus standing and push recovery for the legged robots. Every number is measured;
-the full tables are in [MATRIX.md](MATRIX.md).
+column), plus standing and push recovery for the legged robots, with each robot as its model
+file has it (fidelity *published*). Every number is measured; the full tables are in
+[MATRIX.md](MATRIX.md).
 
 | robot | MuJoCo | PyBullet | Drake | Genesis | Isaac Sim |
 |---|---:|---:|---:|---:|---:|
-| SO-101 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| SO-101 | 20/20 | **11/20** | **8/20** | 20/20 | 20/20 |
 | Franka Emika Panda | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Universal Robots UR5e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Universal Robots UR10e + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Kinova Gen3 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | KUKA LBR iiwa 14 + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| UFACTORY xArm 7 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| UFACTORY xArm 7 | 20/20 | **5/20** | 20/20 | 20/20 | 20/20 |
 | Trossen ViperX 300 S (ALOHA) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
 | Trossen WidowX 250 S (Bridge) | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| AgileX PiPER | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| AgileX PiPER | 20/20 | 20/20 | 20/20 | **19/20** | 20/20 |
 | I2RT YAM | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| ARX L5 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
+| ARX L5 | 20/20 | 20/20 | **12/20** | 20/20 | 20/20 |
 | Rethink Sawyer + Robotiq 2F-85 | 20/20 | 20/20 | 20/20 | 20/20 | 20/20 |
-| *legged: stands, and recovers from a sideways shove of 0.59–1.62× body weight* | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+| *legged: stands, and recovers from a sideways shove of 0.56–1.62× body weight* | 6/6 | 6/6 | 6/6 | 6/6 | 6/6 |
+
+60 of the 65 arm cells are 20/20. The five that are not are the engines and models disagreeing,
+measured and left visible:
+
+- **SO-101 on PyBullet (11/20) and Drake (8/20).** The SO-101's modelled gripper presses a cube
+  with about 65 N in MuJoCo, the servo's full torque at the jaw. PyBullet's rigid contacts push
+  the cube 9 mm into the fixed jaw's 2 mm pad plates under that and sometimes squeeze it out;
+  with Drake's default contact stiffness the placed cube chatters on the bin floor and never
+  rests. MuJoCo's soft contacts, Genesis and Isaac Sim hold it.
+- **xArm 7 on PyBullet (5/20).** PyBullet has no closed kinematic chains, so the xArm Gripper's
+  four-bar linkage runs as a motor on each passive joint, and at its rated 30 N the jaws close
+  unevenly and push the cube aside.
+- **ARX L5 on Drake (12/20), PiPER on Genesis (19/20).** Drake's default contact again (the placed
+  cube does not settle); one of twenty PiPER grasps in Genesis loses the cube.
+
+With robowright's own tuning (`--rw-fidelity adjusted`: a 30 N cap on unrated grippers, stiffer
+Drake contact, the integral term under policies) every cell was 20/20; that run is
+`bench/results/matrix_adjusted.json`. The tuning is still there, off by default, because those
+values were chosen to make tests pass, not measured on the robots.
 
 What running everything on everything turned up:
 
@@ -918,8 +943,9 @@ What running everything on everything turned up:
   arms. Genesis stays within 7 mm on every arm; Isaac Sim within 8 mm on all but the PiPER
   (12 mm); Drake within 9 mm on all but the PiPER (13 mm) and the Panda (19 mm); PyBullet
   within 0.6–14 mm.
-- **Every arm passes on every engine: 65 of 65 cells at 20/20.** The last failures were
-  robowright's, not the engines'; see the next two findings.
+- **With robowright's tuning, every arm passed on every engine (65 of 65).** Some of those
+  failures were robowright's own bugs, found and fixed (the next two findings); others were
+  tuned around, and with the robots as published they are back (the table above).
 - **Genesis's last two failures were the same staircase.** The iiwa's Robotiq 2F-85 let the
   cube slide out in transport (15/20) and the PiPER's jaws knocked it away as they closed
   (14/20, each a `GraspError`), recorded as Genesis's soft mimic constraint. Traced per

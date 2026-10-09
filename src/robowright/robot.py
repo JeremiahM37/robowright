@@ -15,7 +15,7 @@ from collections import deque
 import mujoco
 import numpy as np
 
-from .errors import ActionTimeoutError, GraspError, TooWideError, UnreachableError
+from .errors import ActionTimeoutError, CapabilityError, GraspError, TooWideError, UnreachableError
 from .locators import ObjectHandle, Subject, as_subject
 from .robots import PREFIX, Kinematics
 
@@ -62,6 +62,11 @@ def action(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         world = self.world
+        if not getattr(world.backend, "commands", True):
+            raise CapabilityError(
+                f"{self._label}.{fn.__name__}: this robot is observe-only ([ros2] command = false): robowright reads it "
+                "and never commands it. Let the code under test drive it, and assert with expect()."
+            )
         tr = world.trace
         ev = None
         if tr:
@@ -352,6 +357,8 @@ class Robot:
         ``gripper`` is an opening between 0 (closed) and 1 (open).
         """
         q = np.concatenate([self.home_q if q_arm is None else np.asarray(q_arm, float), [gripper]])
+        if not getattr(self.world.backend, "commands", True):
+            q = np.asarray(self.world.backend.qpos(), float)  # observe-only: where it is, not where it would be sent
         self.world.backend.set_joint_positions(q)
         self._target = q.copy()
         self._held, self._bias, self._still = None, np.zeros(self.n_arm), 0  # placed, not driven there
