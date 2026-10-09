@@ -218,9 +218,14 @@ class Gripper(Subject):
     def position(self):
         return self.robot.tcp.position
 
+    def _need(self) -> None:
+        if not self.robot.model.has_gripper:
+            raise CapabilityError(f"{self.robot.model.name} has no gripper (loaded with gripper=False): it has a tool flange, not jaws")
+
     @property
     def opening(self) -> float:
         """0 = fully closed, 1 = fully open."""
+        self._need()
         return float(np.clip(self.robot.true_qpos()[-1], 0, 1))
 
     def touching(self) -> tuple[set, set]:
@@ -250,6 +255,7 @@ class Gripper(Subject):
         self._go(GRIPPER_CLOSED, timeout, stall_ok=True)
 
     def _go(self, opening, timeout, stall_ok=False):
+        self._need()
         r = self.robot
         start = r._target[-1]
         # Closing takes 0.7 s for a full stroke: at twice the pace the xArm 6's linkage pads met a
@@ -356,7 +362,9 @@ class Robot:
 
         ``gripper`` is an opening between 0 (closed) and 1 (open).
         """
-        q = np.concatenate([self.home_q if q_arm is None else np.asarray(q_arm, float), [gripper]])
+        q = np.asarray(self.home_q if q_arm is None else q_arm, float)
+        if self.world.backend.has_gripper:
+            q = np.append(q, gripper)
         if not getattr(self.world.backend, "commands", True):
             q = np.asarray(self.world.backend.qpos(), float)  # observe-only: where it is, not where it would be sent
         self.world.backend.set_joint_positions(q)
@@ -373,7 +381,8 @@ class Robot:
         self._target[: self.n_arm] = q
 
     def _set_gripper(self, a):
-        self._target[-1] = a
+        if self.model.has_gripper:  # (a bare arm's last target is its wrist's)
+            self._target[-1] = a
 
     def _servo_target(self) -> np.ndarray:
         """The targets the servos are given this step: the commanded ones, plus an integral term.
@@ -1111,6 +1120,37 @@ def _folded(name: str, q, depth: float = 0.0) -> bool:
     return False
 
 
+def _below_floor(name: str, q) -> bool:
+    """Whether the arm at ``q`` reaches below the floor its base stands on: a link the arm moves
+    (not the base) with a point under it. (A bare UR's flange-down home, without a gripper's
+    length below the wrist, had a solution with the forearm on the floor.)"""
+    from . import robots
+
+    m = robots.get(name)
+    mm = _self_model(name)
+    d = mujoco.MjData(mm)
+    for j, v in zip(m.arm_joints, q):
+        d.qpos[mm.joint(j).qposadr[0]] = v
+    mujoco.mj_kinematics(mm, d)
+    first = min(int(mm.jnt_bodyid[mm.joint(j).id]) for j in m.arm_joints)  # the first body the arm moves
+    moved = {first}
+    for b in range(first + 1, mm.nbody):  # bodies come after their parents
+        if mm.body_parentid[b] in moved:
+            moved.add(b)
+    turn = next(mm.joint(j).id for j in m.arm_joints if mm.jnt_bodyid[mm.joint(j).id] == first)
+    if abs(d.xaxis[turn][2]) > 0.99:
+        moved.discard(first)  # a link turning about the vertical cannot be lowered (the UR's shoulder dips into its base)
+    signs = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float)
+    for g in range(mm.ngeom):
+        if mm.geom_bodyid[g] not in moved or mm.geom_contype[g] == 0 and mm.geom_conaffinity[g] == 0:
+            continue
+        centre, half = mm.geom_aabb[g, :3], mm.geom_aabb[g, 3:]
+        corners = d.geom_xpos[g] + (centre + signs * half) @ d.geom_xmat[g].reshape(3, 3).T
+        if corners[:, 2].min() < -0.005:  # the self model stands where the world does: the floor is z = 0
+            return True
+    return False
+
+
 def _self_model(name: str):
     from . import fidelity
 
@@ -1183,7 +1223,7 @@ def home_q(name: str) -> np.ndarray:
     if seed is None:
         seed = np.clip(np.zeros(m.n_arm), kin.lower, kin.upper)
     q, err = kin.ik(m.home, seed, DOWN, yaw=0.0, rest=seed)
-    if err > 1e-3 or _folded(name, q):
+    if err > 1e-3 or _folded(name, q) or _below_floor(name, q):
         # IK is local: a model's own pose can sit in a basin that does not reach home, or reaches it
         # folded into itself (the e.DO's gripper 1 cm inside its forearm, its wrist servo pushing
         # at its limit). Try from mid-range and a few fixed random poses (as robots.detect does
@@ -1198,7 +1238,7 @@ def home_q(name: str) -> np.ndarray:
                 q, err = kin.ik(m.home, s, DOWN, yaw=y, rest=seed)
                 if err <= 1e-3:
                     first = first or (q, err)
-                    if not _folded(name, q):
+                    if not _folded(name, q) and not _below_floor(name, q):
                         found = True
                         break
             if found:

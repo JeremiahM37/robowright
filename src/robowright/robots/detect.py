@@ -129,6 +129,7 @@ def build(path: str | Path, name: str | None = None, **overrides) -> Built:
 def _build(path, name, drive: bool, **overrides) -> Built:
     path, query = _split_query(path)
     overrides = dict(overrides)
+    bare = overrides.pop("gripper", True) is False
     xacro_args = {**query, **overrides.pop("xacro_args", {})}
     if not path.exists():
         raise FileNotFoundError(f"no robot model at {path}")
@@ -145,9 +146,9 @@ def _build(path, name, drive: bool, **overrides) -> Built:
         path_mjcf = path
     mjcf = _named(path_mjcf)
     mjcf, held = (_drive_mobile_base if drive else _hold_mobile_base)(mjcf)
-    det = detect(mjcf, overrides.get("attach"), given=overrides)
+    det = detect(mjcf, overrides.get("attach"), given=overrides, bare=bare)
     det.notes[:0] = first + held
-    if first and det.fields.get("family", "arm") == "arm" and "attach" not in det.fields:
+    if first and not bare and det.fields.get("family", "arm") == "arm" and "attach" not in det.fields:
         # From a URDF: grasping needs the jaws' real shapes where their hulls would not do.
         from .from_urdf import split_jaws
 
@@ -321,8 +322,11 @@ def _name_for(path: Path, registry, xacro_args: dict | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
-def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | None = None) -> Detection:
+def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | None = None, bare: bool = False) -> Detection:
     """Work out the :class:`RobotModel` fields for the robot in ``mjcf``.
+
+    ``bare``: the arm as its model has it, with no gripper (none is attached): its tool flange is
+    the hand. For a robot robowright reaches over ROS 2, the model has to be the robot that is there.
 
     Fields in ``given`` are taken as they are, and what depends on them is worked out from them:
     a model whose gripper range is a placeholder, say, is read once ``gripper_open`` and
@@ -346,6 +350,9 @@ def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | Non
             # (build() holds such a base still first; this is detect() called on the model as it is.)
             raise DetectionError("a free-floating base with a gripper and no legs is a mobile manipulator: load it with robots.load")
         out.update(_legged(m, free[0], notes))
+        return Detection(out, notes)
+    if bare:
+        out.update(_bare_arm(m, notes, given))
         return Detection(out, notes)
     if attach is None:
         attach = _default_attachment(m, spec, notes)
@@ -551,6 +558,76 @@ def _default_attachment(m: mujoco.MjModel, spec: mujoco.MjSpec, notes) -> Attach
     how = "" if quat is None else f", turned to face along the last joint's axis {np.round(n, 3).tolist()}"
     notes.append(f"gripper: none in the model, so a Robotiq 2F-85 is attached at the origin of {flange!r}, the end of the arm{how}")
     return Attachment(gripper, "robowright_flange", body=flange, quat=quat)
+
+
+def _bare_arm(m: mujoco.MjModel, notes, given: dict) -> dict:
+    """An arm with no gripper: every actuated joint from the base to the flange, which is the hand."""
+    moved = _moved_joints(m)
+    joints = {j for js in moved.values() for j in js}
+    if "hand" in given:
+        hand = m.body(given["hand"]).id
+    else:
+        if len(joints) < 3:
+            raise DetectionError(f"{len(joints)} actuated joint(s) is not an arm: pass arm_joints=..., hand=...")
+        last = max(joints, key=lambda j: len(_ancestors(m, int(m.jnt_bodyid[j]))))
+        hand = int(m.jnt_bodyid[last])
+        while len(kids := [c for c in range(1, m.nbody) if m.body_parentid[c] == hand]) == 1:
+            hand = kids[0]  # past the bodies fixed to the last link (UR's flange, then tool0)
+        notes.append(f"hand: {m.body(hand).name!r}, the end of the arm (no gripper: the TCP is its origin)")
+    if "arm_joints" in given:
+        arm = [m.joint(n).id for n in given["arm_joints"]]
+    else:
+        path = [b for b in reversed(_ancestors(m, hand)) if b > 0]
+        arm = [j for b in path for j in range(m.body_jntadr[b], m.body_jntadr[b] + m.body_jntnum[b]) if j in joints]
+    if not arm:
+        raise DetectionError("no actuated joints between the base and the hand: pass arm_joints=...")
+    notes.append(f"arm_joints: {len(arm)} on the chain from the base to the hand; no gripper")
+    out = {
+        "arm_joints": tuple(m.joint(j).name for j in arm),
+        "hand": m.body(hand).name,
+        "gripper_actuator": None,
+        "tags": (f"{len(arm)}dof", "no gripper"),
+    }
+    if "tcp" not in given and (tool := _tool_frame(m, hand)) is not None:
+        # Where a tool would be mounted, as the model marks it: the TCP, facing along the frame's
+        # tool axis (Menagerie's UR5e: a site 10 cm past the wrist's origin).
+        name, tcp, axis = tool
+        out["tcp"], out["tool_axis"] = tcp, axis
+        notes.append(f"tcp: at {name} (the tool flange), {np.round(tcp, 4).tolist()} from the hand, facing {np.round(axis, 3).tolist()}")
+    return out
+
+
+def _tool_frame(m: mujoco.MjModel, hand: int) -> tuple[str, tuple, tuple] | None:
+    """The tool flange the model marks on the hand (or on a frame fixed to it): its name, and its
+    position and outward axis in the hand's frame. In order: an attachment site (Menagerie's,
+    facing along z); a ROS ``tool0`` frame (REP 199: z out of the flange); a site named for a
+    flange, tool or TCP (z); a ROS ``flange`` frame (REP 199: x out). None when there is none."""
+    bodies = {hand} | _subtree(m, hand)
+    sites = [i for i in range(m.nsite) if m.site_bodyid[i] in bodies and m.site(i).name]
+    frames = {m.body(b).name: b for b in bodies}
+    d = mujoco.MjData(m)
+    reset_data(m, d)
+    mujoco.mj_kinematics(m, d)
+    R, p0 = d.xmat[hand].reshape(3, 3), d.xpos[hand]
+
+    def place(pos, rot, axis, name):
+        z = R.T @ rot[:, axis]
+        p = R.T @ (pos - p0)
+        return name, tuple(round(float(v), 9) for v in p), tuple(round(float(v), 9) for v in z / np.linalg.norm(z))
+
+    site = next((i for i in sites if "attach" in m.site(i).name.lower()), None)
+    if site is not None:
+        return place(d.site_xpos[site], d.site_xmat[site].reshape(3, 3), 2, f"site {m.site(site).name!r}")
+    if "tool0" in frames:
+        b = frames["tool0"]
+        return place(d.xpos[b], d.xmat[b].reshape(3, 3), 2, "frame 'tool0'")
+    site = next((i for i in sites if re.search(r"flange|tool|tcp", m.site(i).name, re.I)), None)
+    if site is not None:
+        return place(d.site_xpos[site], d.site_xmat[site].reshape(3, 3), 2, f"site {m.site(site).name!r}")
+    if "flange" in frames:
+        b = frames["flange"]
+        return place(d.xpos[b], d.xmat[b].reshape(3, 3), 0, "frame 'flange'")
+    return None
 
 
 def _arm(m: mujoco.MjModel, spec: mujoco.MjSpec, notes, given: dict) -> dict:

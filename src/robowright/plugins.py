@@ -227,9 +227,10 @@ def _relative(config: Path, ref: str) -> str:
     return ref
 
 
-def add_project_robot(file: str, name: str, config: Path | None = None) -> Path:
+def add_project_robot(file: str, name: str, config: Path | None = None, fields: dict | None = None) -> Path:
     """Append ``[robots.<name>]`` for ``file`` to ``robowright.toml`` (the one found from the
-    working directory, else a new one there); the file is written relative to it."""
+    working directory, else a new one there); the file is written relative to it. ``fields``:
+    overrides to write with it (``{"gripper": False}``)."""
     import re
 
     if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
@@ -252,5 +253,7 @@ def add_project_robot(file: str, name: str, config: Path | None = None) -> Path:
     if text and not text.endswith("\n"):
         text += "\n"
     text += f'\n[robots.{name}]\nfile = "{rel}{"?" + query if query else ""}"\n'
+    for k, v in (fields or {}).items():
+        text += f"{k} = {str(v).lower() if isinstance(v, bool) else repr(v)}\n"
     target.write_text(text.lstrip("\n"))
     return target

@@ -97,6 +97,10 @@ class Backend(ABC):
     reusable: bool = False
     # One scene per process (Isaac Sim has one stage): building another closes the kept ones.
     exclusive: bool = False
+    # Whether robowright builds the robot it runs (from its model file, recording what it changes:
+    # robowright.fidelity) or reaches one that is already there (over ROS 2: a real arm, or a
+    # robot someone else's simulator runs).
+    builds: bool = True
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         self.spec = spec
@@ -285,7 +289,7 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     _reclaim()
     with fidelity.recording() as log:
         b = cls(spec, seed=seed, **kw)
-        if GROUND_TRUTH in b.capabilities:  # a simulator (a robot behind ROS 2 is what it is)
+        if b.builds:  # a simulator robowright built (a robot behind ROS 2 is what it is)
             if spec.robot_model.family == "arm":
                 fidelity.record(
                     "interface",
@@ -304,7 +308,7 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
                 )
     # What a simulator ran differs from the model file by these; a robot behind ROS 2 (real, or
     # another simulator) runs as it is, and robowright changes nothing in it.
-    b.model_changes = list(dict.fromkeys([*spec.robot_model.changes(), *log])) if GROUND_TRUTH in b.capabilities else []
+    b.model_changes = list(dict.fromkeys([*spec.robot_model.changes(), *log])) if b.builds else []
     start = b.robot_model.start
     if start is not None and not b.robot_model.floating:
         # An arm whose zero pose is not a place to start (a URDF's arm folded into the table).

@@ -127,52 +127,11 @@ POSE_PLUGIN = (
 )
 
 
-def _box(hx, hy, hz) -> str:
-    return f"<geometry><box><size>{2 * hx} {2 * hy} {2 * hz}</size></box></geometry>"
-
-
 def world_sdf(robot: str) -> str:
+    from robowright.gazebo import model
     from robowright.scene import default_scene
 
-    spec = default_scene(robot)
-    models = []
-    for o in spec.objects:
-        x, y, z = o.initial_pos
-        r, g, b, a = o.rgba
-        if o.kind == "bin":
-            from robowright.backends.mujoco_backend import bin_walls
-
-            links = "".join(
-                f'<collision name="w{i}"><pose>{px} {py} {pz} 0 0 0</pose>{_box(hx, hy, hz)}</collision>'
-                f'<visual name="v{i}"><pose>{px} {py} {pz} 0 0 0</pose>{_box(hx, hy, hz)}'
-                f"<material><diffuse>{r} {g} {b} {a}</diffuse></material></visual>"
-                for i, ((px, py, pz), (hx, hy, hz)) in enumerate(bin_walls(o.size))
-            )
-            models.append(
-                f'<model name="{o.name}"><static>true</static><pose>{x} {y} {z} 0 0 {o.yaw}</pose>'
-                f'<link name="link">{links}</link>{POSE_PLUGIN}</model>'
-            )
-            continue
-        if o.kind == "box":
-            geo = f"<box><size>{2 * o.size[0]} {2 * o.size[1]} {2 * o.size[2]}</size></box>"
-            ixx = o.mass / 3 * (o.size[1] ** 2 + o.size[2] ** 2)
-            iyy = o.mass / 3 * (o.size[0] ** 2 + o.size[2] ** 2)
-            izz = o.mass / 3 * (o.size[0] ** 2 + o.size[1] ** 2)
-        elif o.kind == "cylinder":
-            geo = f"<cylinder><radius>{o.size[0]}</radius><length>{2 * o.size[1]}</length></cylinder>"
-            ixx = iyy = o.mass * (3 * o.size[0] ** 2 + (2 * o.size[1]) ** 2) / 12
-            izz = o.mass * o.size[0] ** 2 / 2
-        else:
-            geo = f"<sphere><radius>{o.size[0]}</radius></sphere>"
-            ixx = iyy = izz = 0.4 * o.mass * o.size[0] ** 2
-        models.append(
-            f'<model name="{o.name}"><pose>{x} {y} {z} 0 0 {o.yaw}</pose><link name="link">'
-            f"<inertial><mass>{o.mass}</mass><inertia><ixx>{ixx}</ixx><iyy>{iyy}</iyy><izz>{izz}</izz></inertia></inertial>"
-            f'<collision name="c"><geometry>{geo}</geometry><surface><friction><ode>'
-            f"<mu>{o.friction}</mu><mu2>{o.friction}</mu2></ode></friction></surface></collision>"
-            f'<visual name="v"><geometry>{geo}</geometry><material><diffuse>{r} {g} {b} {a}</diffuse></material></visual>'
-            "</link>" + POSE_PLUGIN + "</model>"
-        )
+    models = [model(o, POSE_PLUGIN, pose=True) for o in default_scene(robot).objects]
     return f"""<?xml version="1.0"?>
 <sdf version="1.9"><world name="robowright">
   <physics name="1ms" type="dart"><max_step_size>0.001</max_step_size><real_time_factor>1.0</real_time_factor>

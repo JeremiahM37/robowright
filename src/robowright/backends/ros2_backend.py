@@ -16,7 +16,11 @@ driver (most arms do), and with any simulator that speaks ROS 2 (Gazebo, Isaac S
 
 A ROS 2 robot claims none of the simulator capabilities (no ground truth, contacts, state
 or forces): the contract skips what needs them, and the rest of a test is the same test as
-in simulation. Time is the ROS clock (``use_sim_time`` follows ``/clock``), and each control
+in simulation. A robot in Gazebo can have more (``gazebo = true``): robowright then also drives
+the simulator itself (:mod:`robowright.gazebo`), for the objects' true poses, and to place,
+spawn and randomize them (the scene's objects missing from the Gazebo world are spawned into
+it); robowright's world frame is then Gazebo's, and the robot's ``base_pos`` is where it stands
+in it. Time is the ROS clock (``use_sim_time`` follows ``/clock``), and each control
 step waits for its period to pass. ``robot.reset_to`` drives to the pose, as a real arm
 cannot be teleported.
 
@@ -43,7 +47,7 @@ import time as _time
 
 import numpy as np
 
-from .base import RENDER, Backend, register
+from .base import GROUND_TRUTH, RENDER, Backend, register
 
 _DEFAULTS = {
     "namespace": "",
@@ -63,6 +67,8 @@ _DEFAULTS = {
     "command": True,
     "reset_tolerance": 0.02,
     "node_name": None,
+    # The robot is in Gazebo, and robowright may drive Gazebo too: true, or {world = "name"}.
+    "gazebo": False,
 }
 _INTERFACES = {"arm": ("position", "trajectory"), "gripper": ("with_arm", "position", "trajectory", "action", "none")}
 
@@ -93,6 +99,8 @@ def _topic(ns: str, name: str) -> str:
 
 @register("ros2")
 class Ros2Backend(Backend):
+    builds = False  # the robot is there already: robowright changes nothing in it
+
     def __init__(self, spec, seed: int = 0, **options):
         super().__init__(spec, seed)
         import rclpy
@@ -145,8 +153,21 @@ class Ros2Backend(Backend):
                 f"(heard {seen or 'nothing'}): is the robot's driver running, and are its joint names mapped "
                 f"in [ros2] joints?"
             )
+        if cfg["use_sim_time"]:
+            # A node on sim time reads 0 until its first /clock message; started from that, the
+            # world's clock would jump to the simulator's (Gazebo's minutes in) at once, and
+            # every timeout running would expire before anything had moved.
+            deadline = _time.monotonic() + cfg["timeout"]
+            while self._now() == 0.0:
+                if _time.monotonic() > deadline:
+                    self.close()
+                    raise TimeoutError(f"no /clock within {cfg['timeout']} s: use_sim_time is set, so the simulator must publish it")
+                _time.sleep(0.005)
         self._t0 = self._now()
         self._tick = self._t0
+        self.gazebo = None
+        if cfg["gazebo"]:
+            self._open_gazebo(spec, cfg["gazebo"] if isinstance(cfg["gazebo"], dict) else {})
         q = self.qpos()
         self._ctrl = q.copy()
         self._last_q, self._last_t = q, self._t0
@@ -335,6 +356,49 @@ class Ros2Backend(Backend):
             self.step()
 
     # --- the world -------------------------------------------------------------------------
+    def _open_gazebo(self, spec, opts: dict) -> None:
+        from ..gazebo import Gazebo
+
+        try:
+            self.gazebo = gz = Gazebo(world=opts.get("world"), timeout=self.cfg["timeout"])
+        except BaseException:
+            self.close()
+            raise
+        self.capabilities = self.capabilities | {GROUND_TRUTH}
+        mine = _SPAWNED.setdefault(gz.world, set())
+        for o in spec.objects:
+            if gz.has(o.name) and o.name not in mine:
+                continue  # the world's own model: it stays where the world has it
+            pos = (o.pos[0], o.pos[1], o.half_height if o.kind != "bin" else 0.0) if o.pos[2] is None else o.pos
+            quat = (np.cos(o.yaw / 2), 0.0, 0.0, np.sin(o.yaw / 2))
+            if gz.has(o.name):
+                gz.set_pose(o.name, pos, quat)  # spawned for an earlier test: back where this scene has it
+            else:
+                gz.spawn_object(o)
+                mine.add(o.name)
+        # The scene's cameras, other than those [ros2] cameras maps to a robot's own image topics,
+        # are Gazebo cameras: render() is then what Gazebo draws, not a picture robowright makes.
+        self._gz_cameras = [c for c in spec.cameras if c.name not in self.cfg["cameras"]]
+        for c in self._gz_cameras:
+            gz.add_camera(c.name, c.pos, c.lookat, c.fovy, c.width, c.height)
+        if self._gz_cameras:
+            self.capabilities = self.capabilities | {RENDER}
+
+    def object_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
+        if self.gazebo is None:
+            return super().object_pose(name)
+        return self.gazebo.pose(name)
+
+    def object_velocity(self, name: str) -> np.ndarray:
+        if self.gazebo is None:
+            return super().object_velocity(name)
+        return self.gazebo.velocity(name)
+
+    def set_object_pose(self, name: str, pos, quat=None) -> None:
+        if self.gazebo is None:
+            return super().set_object_pose(name, pos, quat)
+        self.gazebo.set_pose(name, pos, quat)
+
     def perception(self) -> dict:
         """A pose source per object with a TF frame: ``world.perception`` reads them."""
         return {name: (lambda f=frame: self._tf_pose(f)) for name, frame in self.cfg["objects"].items()}
@@ -360,6 +424,8 @@ class Ros2Backend(Backend):
         return p, _qmul(yaw, quat)
 
     def render(self, camera: str, width: int, height: int) -> np.ndarray:
+        if self.gazebo is not None and camera not in self.cfg["cameras"] and any(c.name == camera for c in self._gz_cameras):
+            return _resize(self.gazebo.image(camera, timeout=self.cfg["timeout"]), width, height)
         if camera not in self.cfg["cameras"]:
             raise KeyError(f"no ROS camera {camera!r}; [ros2] cameras has {sorted(self.cfg['cameras'])}")
         deadline = _time.monotonic() + self.cfg["timeout"]
@@ -371,13 +437,12 @@ class Ros2Backend(Backend):
             if _time.monotonic() > deadline:
                 raise TimeoutError(f"no image from {self.cfg['cameras'][camera]} within {self.cfg['timeout']} s")
             _time.sleep(0.01)
-        if img.shape[:2] != (height, width):  # nearest-neighbour: what a policy asked for, cheaply
-            ys = (np.arange(height) * img.shape[0] / height).astype(int)
-            xs = (np.arange(width) * img.shape[1] / width).astype(int)
-            img = img[ys][:, xs]
-        return np.ascontiguousarray(img)
+        return _resize(img, width, height)
 
     def close(self) -> None:
+        if getattr(self, "gazebo", None) is not None:
+            self.gazebo.close()
+            self.gazebo = None
         ex = getattr(self, "_executor", None)
         if ex is not None:
             ex.shutdown()
@@ -386,6 +451,17 @@ class Ros2Backend(Backend):
         if getattr(self, "node", None) is not None:
             self.node.destroy_node()
             self.node = None
+
+
+def _resize(img: np.ndarray, width: int, height: int) -> np.ndarray:
+    if img.shape[:2] != (height, width):  # nearest-neighbour: what a policy asked for, cheaply
+        ys = (np.arange(height) * img.shape[0] / height).astype(int)
+        xs = (np.arange(width) * img.shape[1] / width).astype(int)
+        img = img[ys][:, xs]
+    return np.ascontiguousarray(img)
+
+
+_SPAWNED: dict[str, set[str]] = {}  # Gazebo world -> the models robowright spawned into it
 
 
 def _qmul(a, b):

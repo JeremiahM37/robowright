@@ -95,8 +95,35 @@ an agent to drive by hand.
 `--rw-backend ros2` points the same tests at any robot behind ROS 2: a real arm with a
 `ros2_control` driver, Gazebo through `gz_ros2_control`, or Isaac Sim's bridge. robowright
 changes nothing in the robot; it reads joint states and TF, and sends commands only if the
-test asks it to. [`tests/test_gazebo.py`](tests/test_gazebo.py) runs an SO-101 in Gazebo that
-way (see [Robots behind ROS 2](#robots-behind-ros-2)).
+test asks it to.
+
+The whole stack can be someone else's. [`tests/test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)
+runs Universal Robots' own Gazebo simulation of a UR5e (`ur_simulation_gz`: UR's description,
+`gz_ros2_control`, UR's `scaled_joint_trajectory_controller`) and MoveIt (`ur_moveit_config`),
+all as shipped. A MoveIt client standing in for your code asks `move_group` for poses; robowright
+loads UR's description as it is (no gripper added), watches on Gazebo's clock without sending a
+command, and asserts where the tool ended up:
+
+```python
+ur = robots.load("ur_description/urdf/ur.urdf.xacro?ur_type=ur5e&name=ur", gripper=False, base_pos=(0, 0, 0))
+w = rw.launch(
+    SceneSpec(robot=ur.name, objects=[]), backend="ros2", command=False, frame="base_link", gripper={"interface": "none"}, use_sim_time=True
+)
+with subprocess.Popen(["python", "reach.py", "0.4", "0.2", "0.4"]):  # your MoveIt code
+    expect(w.robot.tcp).to_be_near((0.4, 0.2, 0.4), tol=0.002, timeout=45, hold=0.5)
+```
+
+A client off by 4 cm fails the test even though MoveIt reports success, and robowright's model of
+the arm agrees with the robot's own TF to under half a millimetre. Running it found two
+robowright bugs that its own simulation had hidden: the ROS clock read 0 until Gazebo's first
+`/clock`, so a test's timeout could expire before anything moved, and every arm was assumed to
+have a gripper.
+
+In Gazebo, robowright can also **drive the simulator**, the way Playwright drives a browser
+(`[ros2] gazebo = true`, [`robowright.gazebo`](src/robowright/gazebo.py)): objects' positions are
+Gazebo's own, the scene's objects are spawned into the world, `world.move_object` and the trials'
+scene randomization move them there, it pauses Gazebo and steps it an exact number of physics
+iterations, and screenshots are Gazebo's rendering from cameras it adds to the world.
 
 ### What a passing test tells you
 
@@ -731,7 +758,10 @@ robot the same way, with your code driving it: it runs your policy (`robot_run_p
 stack (`robot_start_process "ros2 launch my_robot pick.launch.py"`), lets time pass, and checks
 what happened (`robot_expect`). It can send raw joint targets and step time
 (`robot_set_targets`, `robot_step`), connect to Gazebo or a real arm (`robot_launch
-backend="ros2"`), and give you a URL to watch it live (`robot_watch`).
+backend="ros2"`), and give you a URL to watch it live (`robot_watch`). With a robot in Gazebo
+(`ros2={"gazebo": true}`) it drives the simulator itself: `sim_pause`, `sim_play`, `sim_step`
+(exact physics iterations), `sim_spawn`, `sim_remove`, `sim_state`, with `robot_move_object`
+moving Gazebo's models and `robot_screenshot` returning Gazebo's own rendering.
 
 ```console
 $ claude mcp add robowright -- robowright mcp
@@ -844,7 +874,15 @@ command = true                            # false: observe only, for a robot you
 
 On a real arm, start with `command = false`: robowright then reads joint states and TF and never
 sends a command, and any action that would move the robot fails at once. [docs/hardware.md](docs/hardware.md)
-is the order to bring an arm up in.
+is the order to bring an arm up in. Give robowright the robot's own description, as the driver
+has it: `robots.load("my_arm.urdf.xacro", gripper=False)` for an arm with no gripper (otherwise a
+gripperless arm gets a Robotiq 2F-85, as robowright's own simulations do).
+
+With `gazebo = true` (or `{ world = "name" }`) robowright also talks to Gazebo itself, over its
+transport rather than ROS 2 ([`robowright.gazebo`](src/robowright/gazebo.py), Gazebo Harmonic):
+object poses become Gazebo's ground truth (TF stays what your stack's perception sees), the
+scene's objects are spawned into the world if missing, and `move_object`, trial randomization,
+pause, exact stepping, spawning, removing and camera images act on the simulator.
 
 The other direction works too: `Ros2Bridge` (the `ros2` fixture, `robowright sim --ros2`) serves
 robowright's simulation as a ROS 2 robot, so your stack drives it while the test watches, with
@@ -1156,9 +1194,12 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 ## Limitations
 
 - **No physical robot yet:** the ROS 2 backend has run against `ros2_control`'s own controllers
-  on mock hardware, against robowright's simulation served over ROS 2, and against Gazebo, on
-  Jazzy only. Nothing has yet run on a real arm, where timing, a driver's quirks and perception
-  noise will find what those could not.
+  on mock hardware, against robowright's simulation served over ROS 2, against an SO-101 in
+  Gazebo, and against Universal Robots' own Gazebo simulation with MoveIt, on Jazzy only. Nothing
+  has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
+  those could not. The MoveIt client in the UR test is a stand-in written for it, not a stack
+  from a real project; MoveIt's OMPL sometimes finds no plan for its narrow pose goals, and it
+  plans again, as a MoveIt client has to.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and

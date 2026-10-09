@@ -751,6 +751,14 @@ def _limit_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
 
 
 def _derive(model: RobotModel) -> Derived:
+    if not model.has_gripper:
+        # A bare arm (a tool flange, as UR's own description has it): the TCP is the hand's
+        # origin, and the tool points along the hand's z, the flange convention (ISO 9409).
+        axis = np.asarray(model.tool_axis if model.tool_axis is not None else (0.0, 0.0, 1.0), float)
+        side = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        grip = side - axis * (side @ axis)
+        tcp = np.zeros(3) if model.tcp is None else np.asarray(model.tcp, float)
+        return Derived(axis, grip / np.linalg.norm(grip), tcp, 0.0, {}, "", 0.0)
     s = model.robot_spec(calibrated=False)
     s.option.gravity = [0, 0, 0]
     # Finger travel is a property of the gripper, not of whatever the fingers

@@ -100,15 +100,20 @@ class Session:
         objects: list[dict] | None = None,
         fidelity: str | None = None,
         ros2: dict | None = None,
+        robot_options: dict | None = None,
     ) -> str:
         """Start a fresh world (closing any open one) and return its snapshot.
 
         ``backend="ros2"`` connects to a robot behind ROS 2 instead (a real arm, Gazebo, Isaac
-        Sim's bridge), with ``ros2`` its settings (topics, controllers, TF frames: see
-        ``robowright.backends.ros2_backend``)."""
+        Sim's bridge), with ``ros2`` its settings (topics, controllers, TF frames, ``gazebo``: see
+        ``robowright.backends.ros2_backend``). ``robot_options``: for a robot given as a model
+        file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``)."""
         if self.world is not None:
             self.close()
-        model = robots.get(robot)
+        if robot_options and not robots.is_file(robot):
+            raise RobowrightError(f"robot_options are for a robot given as a model file; {robot!r} is a built-in robot")
+        opts = {k: tuple(v) if isinstance(v, list) else v for k, v in (robot_options or {}).items()}
+        model = robots.load(robot, **opts) if opts else robots.get(robot)
         scene = default_scene(model.name)
         if objects is not None:
             scene.objects = [self._object(o) for o in objects]
@@ -117,8 +122,8 @@ class Session:
         # No camera frames in the trace: screenshots are taken on request, and rendering
         # every few steps would cost more than the physics.
         settings = Settings(trace="on", trace_dir=str(self.trace_dir), trace_cameras=[], fidelity=fidelity)
-        if backend == "ros2":
-            scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name
+        if backend == "ros2" and not (ros2 or {}).get("gazebo"):
+            scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name (in Gazebo, any)
         self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings, **(ros2 or {}))
         self.world.robot.reset_to()
         if self.view is not None:
@@ -399,6 +404,54 @@ class Session:
     def step(self, steps: int = 1) -> str:
         """Advance ``steps`` control periods with the current targets."""
         return self._act(self._w().step, int(steps))
+
+    # --- the simulator itself (Gazebo, when the ROS 2 backend has gazebo = true) --------
+    def _gazebo(self):
+        gz = getattr(self._w().backend, "gazebo", None)
+        if gz is None:
+            raise RobowrightError("no simulator to drive: launch with backend='ros2' and ros2={'gazebo': true} for a robot in Gazebo")
+        return gz
+
+    def sim_state(self) -> str:
+        gz = self._gazebo()
+        return (
+            f"Gazebo world {gz.world!r}: t={gz.time:.3f} s, {gz.iterations} iterations, "
+            f"{'paused' if gz.paused else 'running'} at {gz.real_time_factor:.2f}x real time\n"
+            f"models: {', '.join(gz.models())}"
+        )
+
+    def sim_pause(self) -> str:
+        self._gazebo().pause()
+        return self.sim_state()
+
+    def sim_play(self) -> str:
+        self._gazebo().play()
+        return self.sim_state()
+
+    def sim_step(self, iterations: int = 1) -> str:
+        """Advance the paused simulator exactly ``iterations`` physics steps (pausing it first)."""
+        self._gazebo().step(int(iterations))
+        return self.sim_state()
+
+    def sim_spawn(self, object: dict) -> str:
+        """Put a new object into the simulator (the same fields as launch's ``objects``)."""
+        o = self._object(object)
+        self._gazebo().spawn_object(o)
+        w = self._w()
+        w.spec.objects.append(o)
+        w.object_names.append(o.name)
+        if w.trace:
+            w.trace.event("edit", "sim_spawn", {"object": object})
+        return self.snapshot()
+
+    def sim_remove(self, name: str) -> str:
+        self._gazebo().remove(name)
+        w = self._w()
+        w.spec.objects = [o for o in w.spec.objects if o.name != name]
+        w.object_names = [n for n in w.object_names if n != name]
+        if w.trace:
+            w.trace.event("edit", "sim_remove", {"name": name})
+        return self.snapshot()
 
     def serve_ros2(
         self,

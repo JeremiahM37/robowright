@@ -27,6 +27,10 @@ def test_detects_what_each_built_in_robot_is_told(name, monkeypatch):
     m = robots.get(name)
     f = _detect(m.mjcf()).fields
     assert f.get("family", "arm") == m.family
+    if m.family == "arm":
+        from robowright.robot import _below_floor, home_q
+
+        assert not _below_floor(name, home_q(name))  # its home is clear of the floor it stands on
     assert set(f["arm_joints"]) == set(m.arm_joints)
     if m.family == "legged":
         assert f["base_body"] == m.base_body
@@ -353,3 +357,40 @@ def test_fingers_that_follow_another_settle_where_they_are_told():
             w.wait(0.02)
             samples.append(g.opening)
         assert np.ptp(samples) < 0.005 and abs(np.mean(samples) - 0.5) < 0.01
+
+
+def test_an_arm_with_no_gripper_is_loaded_as_it_is(monkeypatch):
+    """gripper=False: the arm its file describes, for a robot reached over ROS 2 whose driver has
+    no gripper joint. The TCP is the flange the model marks (Menagerie's UR5e: a site 10 cm past
+    the wrist's origin, facing along it), and the gripper's calls say there is none."""
+    from robowright.errors import CapabilityError
+
+    monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
+    m = robots.load(robots.menagerie.path("universal_robots_ur5e/ur5e.xml"), name="ur5e_flange", gripper=False)
+    assert not m.has_gripper and m.hand == "wrist_3_link"
+    assert m.tcp == (0.0, 0.1, 0.0) and m.tool_axis == (0.0, 1.0, 0.0)
+    w = rw.launch(rw.SceneSpec(robot=m.name, objects=[]), backend="mujoco", settings=rw.Settings(trace="off"))
+    try:
+        r = w.robot
+        r.reset_to()
+        assert len(r._target) == m.n_arm  # no gripper slot: the last target is the wrist's
+        goal = r.tcp.position + (0.05, 0.05, -0.05)
+        r.arm.move_to(goal)
+        w.wait(0.5)
+        assert np.linalg.norm(r.tcp.position - goal) < 1e-3
+        with pytest.raises(CapabilityError, match="no gripper"):
+            r.gripper.close()  # (it used to turn the wrist, its last joint)
+        with pytest.raises(CapabilityError, match="no gripper"):
+            _ = r.gripper.opening
+    finally:
+        w.close(failed=False)
+
+
+def test_a_bare_arms_home_keeps_it_off_the_floor(monkeypatch):
+    """Without a gripper's length below the wrist, the UR5e's home had a solution with its forearm
+    on the floor, where every move then stalled."""
+    from robowright.robot import _below_floor, home_q
+
+    monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
+    m = robots.load(robots.menagerie.path("universal_robots_ur5e/ur5e.xml"), name="ur5e_floor", gripper=False)
+    assert not _below_floor(m.name, home_q(m.name))

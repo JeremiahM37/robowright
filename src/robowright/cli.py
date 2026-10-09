@@ -261,7 +261,7 @@ def _robots(args, rest):
     if args.action == "add":
         return _add(args)
     if args.inspect:
-        return _inspect(args.inspect)
+        return _inspect(args.inspect, bare=args.no_gripper)
     rows = []
     for name in robots.names(args.family):
         m = robots.get(name)
@@ -299,10 +299,10 @@ def _add(args) -> int:
     if args.name in project_robots():
         print(f"robowright: this project already names a robot {args.name!r}", file=sys.stderr)
         return 1
-    if _inspect(args.file, hint=False):
+    if _inspect(args.file, hint=False, bare=args.no_gripper):
         return 1
     try:
-        target = add_project_robot(args.file, args.name)
+        target = add_project_robot(args.file, args.name, fields={"gripper": False} if args.no_gripper else None)
     except ValueError as e:
         print(f"robowright: {e}", file=sys.stderr)
         return 1
@@ -311,7 +311,7 @@ def _add(args) -> int:
     return 0
 
 
-def _inspect(path, hint: bool = True) -> int:
+def _inspect(path, hint: bool = True, bare: bool = False) -> int:
     """What robowright works out about the robot in a model file, and why."""
     import warnings
 
@@ -320,7 +320,7 @@ def _inspect(path, hint: bool = True) -> int:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # MuJoCo's notes on attaching a gripper are not the user's business
         try:
-            built = build(path)
+            built = build(path, **({"gripper": False} if bare else {}))
         except (DetectionError, FileNotFoundError) as e:
             print(f"robowright cannot drive {path}: {e}")
             return 1
@@ -328,7 +328,10 @@ def _inspect(path, hint: bool = True) -> int:
     print(f"{path}: {m.family}, {m.n_arm} joints, named {m.name!r}")
     for note in built.notes:
         print(f"  {note}")
-    if hint:
+    if hint and bare:
+        print("\nan arm with no gripper: for tests of a robot reached over ROS 2 (--rw-backend ros2), not pick-and-place")
+        print(f"give it a name:  robowright robots add {path} --name NAME --no-gripper")
+    elif hint:
         print(f"\nrun its tests with:  pytest --rw-robot {path}")
         print(f"or give it a name:  robowright robots add {path} --name NAME")
         print("override any of the above in robowright.toml: [robots.NAME] file = ..., <field> = ...")
@@ -471,6 +474,11 @@ def main(argv=None) -> int:
     rb.add_argument("action", nargs="?", choices=["add"], help="add: name the robot in FILE in this project's robowright.toml")
     rb.add_argument("file", nargs="?", help="the model file to add (MJCF, URDF or xacro)")
     rb.add_argument("--name", help="the name to give it")
+    rb.add_argument(
+        "--no-gripper",
+        action="store_true",
+        help="the arm as its file has it, with no gripper (else a gripperless arm gets a Robotiq 2F-85): for a robot over ROS 2",
+    )
     sub.add_parser("check", help="run the contract every robot and engine meets (robowright check --robot R --backend B)", add_help=False)
     rd = sub.add_parser("render", help="render a trace to video (mp4, or gif) from its recorded state")
     rd.add_argument("trace")

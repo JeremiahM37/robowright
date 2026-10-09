@@ -142,6 +142,9 @@ def test_robots_add_writes_the_entry(tmp_path, monkeypatch):
         plugins.add_project_robot("models/so101/so101.xml", "arm_a")
     with pytest.raises(ValueError, match="letters, digits"):
         plugins.add_project_robot("models/so101/so101.xml", "my arm")
+    plugins.add_project_robot("models/ur/ur.urdf.xacro?ur_type=ur5e", "ur", fields={"gripper": False})
+    assert target.read_text().endswith('\n[robots.ur]\nfile = "models/ur/ur.urdf.xacro?ur_type=ur5e"\ngripper = false\n')
+    assert plugins.project_robots(tmp_path)["ur"][1] == {"gripper": False}  # read back as the loader takes it
 
 
 def test_check_runs_the_contract_on_a_project_robot(tmp_path):

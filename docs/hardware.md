@@ -6,9 +6,11 @@ only `--rw-backend` does. This page is the order to bring an arm up in, so that 
 that moves is something you chose to move.
 
 None of this has run on a physical robot yet. The same backend passes against `ros2_control`
-on mock hardware, against robowright's own simulation served over ROS 2, and against an SO-101
-in Gazebo (`tests/test_ros2.py`, `tests/test_ros2_bridge.py`, `tests/test_gazebo.py`). Expect
-the first real run to find things those could not: timing, a driver's quirks, sensor noise.
+on mock hardware, against robowright's own simulation served over ROS 2, against an SO-101
+in Gazebo, and observe-only against Universal Robots' own Gazebo simulation driven by MoveIt
+(`tests/test_ros2.py`, `tests/test_ros2_bridge.py`, `tests/test_gazebo.py`,
+`tests/test_moveit_gazebo.py`). Expect the first real run to find things those could not:
+timing, a driver's quirks, sensor noise.
 
 ## 1. Describe the robot
 
@@ -19,6 +21,11 @@ package) to know its joints, gripper and kinematics. Check what it makes of it f
 robowright robots --inspect path/to/my_arm.urdf.xacro
 robowright robots add path/to/my_arm.urdf.xacro --name my_arm   # names it in robowright.toml
 ```
+
+Give it the description the driver uses, as it is. An arm with no gripper in its description
+(a UR on its own, say) is loaded with `robots.load(path, gripper=False)`; without that, robowright
+attaches a Robotiq 2F-85 to it, as it does for its own simulations, and then waits for a gripper
+joint the driver never publishes.
 
 ## 2. Point robowright at the driver
 

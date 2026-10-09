@@ -35,6 +35,12 @@ start their stack with robot_start_process; then let time pass (robot_wait, robo
 check what happened with robot_expect. robot_set_targets sends raw joint/gripper targets.
 robot_watch gives a URL where the user can watch the world live in a browser.
 
+A robot in Gazebo (ros2={"gazebo": true}): robowright drives the simulator as well as watching
+the robot, the way a browser is driven. sim_state, sim_pause, sim_play, sim_step (exact physics
+iterations), sim_spawn and sim_remove act on Gazebo itself; robot_move_object moves a model there;
+object positions are Gazebo's own; robot_screenshot is Gazebo's rendering, from cameras robowright
+adds to the world. robot_options={"gripper": false} loads an arm's own description as it is.
+
 robowright's own reference controller sets up situations and explores: robot_pick,
 robot_place, robot_move_to, robot_gripper, robot_move_joints, robot_home (arms), robot_stand,
 robot_crouch (legged). Disturb the world with robot_push, robot_move_object and robot_fault.
@@ -92,13 +98,17 @@ def build_server(session: Session | None = None):
         objects: list[dict] | None = None,
         fidelity: str | None = None,
         ros2: dict | None = None,
+        robot_options: dict | None = None,
     ) -> str:
         """Start a fresh world, closing any open one, and return its snapshot.
 
         robot: a name from robot_list_robots, or a model file. backend: mujoco (default,
         fastest), pybullet, drake, genesis or isaac, whichever are installed; or ros2 to
         connect to a robot behind ROS 2, with ros2 its settings, e.g. {"frame": "base_link",
-        "objects": {"cube": "cube"}, "use_sim_time": true}. fidelity: "published" (default:
+        "objects": {"cube": "cube"}, "use_sim_time": true, "command": false (observe only),
+        "gazebo": true (the robot is in Gazebo: drive Gazebo too)}. robot_options: for a robot
+        given as a model file, e.g. {"gripper": false, "base_pos": [0, 0, 0]} (an arm with no
+        gripper, standing at the world origin). fidelity: "published" (default:
         the model as its makers published it) or "adjusted" (robowright's tuning too). seed:
         same seed and same calls give the same world. objects: replace the default scene's objects, each
         {"name", "kind": box|cylinder|sphere|bin, "size": half-extents in m (box/bin xyz,
@@ -106,7 +116,9 @@ def build_server(session: Session | None = None):
         floor, or [x, y, z] (z is a free object's centre, a bin's base),
         "color": red|green|blue|yellow|..., "mass": kg}.
         """
-        return await run(s.launch, robot=robot, backend=backend, seed=seed, objects=objects, fidelity=fidelity, ros2=ros2)
+        return await run(
+            s.launch, robot=robot, backend=backend, seed=seed, objects=objects, fidelity=fidelity, ros2=ros2, robot_options=robot_options
+        )
 
     @tool
     async def robot_run_policy(
@@ -130,6 +142,39 @@ def build_server(session: Session | None = None):
     async def robot_step(steps: int = 1) -> str:
         """Advance the world this many control periods (50 per second) with the current targets."""
         return await run(s.step, steps)
+
+    @tool
+    async def sim_state() -> str:
+        """The simulator's own state (Gazebo): its time, iterations, paused or running, real-time
+        factor, and every model in it."""
+        return await run(s.sim_state)
+
+    @tool
+    async def sim_pause() -> str:
+        """Pause the simulator (Gazebo). Its clock stops: so do the ROS 2 stack's timers on sim time."""
+        return await run(s.sim_pause)
+
+    @tool
+    async def sim_play() -> str:
+        """Let the paused simulator (Gazebo) run again."""
+        return await run(s.sim_play)
+
+    @tool
+    async def sim_step(iterations: int = 1) -> str:
+        """Advance the simulator (Gazebo) exactly this many physics iterations, paused before and
+        after: to look at a moment closely."""
+        return await run(s.sim_step, iterations)
+
+    @tool
+    async def sim_spawn(object: dict) -> str:
+        """Add an object to the simulator (Gazebo): {"name", "kind": box|cylinder|sphere|bin,
+        "size", "pos", "color", "mass"}, as robot_launch's objects."""
+        return await run(s.sim_spawn, object)
+
+    @tool
+    async def sim_remove(name: str) -> str:
+        """Remove a model from the simulator (Gazebo)."""
+        return await run(s.sim_remove, name)
 
     @tool
     async def robot_serve_ros2(
