@@ -218,6 +218,8 @@ register(
         maker="Trossen Robotics",
         license="BSD",
         tags=("aloha", "6dof"),
+        grip_force=12.8,  # the ALOHA follower gripper (this arm, XM430-W350), measured at the tip; the model squeezes 5.4 N
+        grip_force_source="https://aloha-2.github.io/assets/aloha2.pdf (Fig. 4)",
     )
 )
 register(
@@ -237,6 +239,11 @@ register(
         maker="Trossen Robotics",
         license="BSD",
         tags=("bridge", "open-x", "6dof"),
+        # The same rail gripper on an XL430-W250 (1.5 N m stall) instead of the ViperX's XM430-W350
+        # (4.1 N m): the ViperX's measured 12.8 N scaled by the two servos' stall torques. The model
+        # squeezes 2.2 N.
+        grip_force=4.7,
+        grip_force_source="https://docs.trossenrobotics.com/interbotix_xsarms_docs/specifications/wx250s.html",
     )
 )
 register(
@@ -277,6 +284,8 @@ register(
         maker="I2RT",
         license="MIT",
         tags=("low-cost", "6dof"),
+        grip_force=50.0,  # the force the maker's SDK limits a blocked gripper to; the model squeezes 1.9 N
+        grip_force_source="https://github.com/i2rt-robotics/i2rt/blob/main/i2rt/robots/get_robot.py (limit_gripper_force)",
     )
 )
 register(
@@ -296,6 +305,10 @@ register(
         maker="ARX",
         license="BSD-3-Clause",
         tags=("low-cost", "6dof"),
+        # The SDK trips over-current above 1.5 N m at the gripper motor, 86 N at the jaws without
+        # friction; Menagerie's model limits its actuator to 10 N, which is taken. The model squeezes 0.9 N.
+        grip_force=10.0,
+        grip_force_source="https://github.com/real-stanford/arx5-sdk/blob/main/include/app/config.h (gripper_torque_max)",
     )
 )
 register(

@@ -20,7 +20,7 @@ def _pick_and_place(w):
 
 
 def _record(w, run):
-    """Joint and object positions at every step, then the pixels of a final camera frame."""
+    """Joint and object positions at every step, and the pixels of a final camera frame."""
     qs = []
     w._step_hooks.append(
         lambda world: qs.append(np.concatenate([world.backend.qpos(), *(world.backend.object_pose(n)[0] for n in world.object_names)]))
@@ -29,7 +29,15 @@ def _record(w, run):
     b = w.backend
     frame = b.render(b.spec.cameras[0].name, 96, 72).ravel() if RENDER in b.capabilities and b.spec.cameras else []
     w.close()
-    return np.concatenate([np.ravel(qs), np.asarray(frame, float)])
+    return np.ravel(qs), np.asarray(frame, float)
+
+
+def _same(a, b):
+    """The same run: physics bit for bit, and the frame to within a few pixels. An NVIDIA GPU
+    shared between processes rasterises the same scene a few pixels differently now and then
+    (5 of 6912 on an RTX 5080, 3 runs in 24, with nothing changed between them)."""
+    (qa, fa), (qb, fb) = a, b
+    return qa.shape == qb.shape and np.array_equal(qa, qb) and fa.shape == fb.shape and (fa.size == 0 or np.mean(fa != fb) < 0.01)
 
 
 BACKENDS = [
@@ -73,7 +81,7 @@ def test_a_reused_scene_runs_bit_for_bit_like_a_fresh_one(monkeypatch, backend, 
     assert again.backend is built  # kept, not rebuilt
     reused = _record(again, run)
     base.close_kept()
-    assert fresh.shape == reused.shape and np.array_equal(fresh, reused)
+    assert _same(fresh, reused)
 
 
 @pytest.mark.parametrize("robot", ["so101", "go2"])
@@ -84,7 +92,7 @@ def test_tracing_does_not_change_the_run(monkeypatch, tmp_path, backend, robot):
         _record(rw.launch(robot=robot, backend=backend, settings=rw.Settings(trace=t, trace_dir=str(tmp_path))), _RUNS[robot])
         for t in ("off", "on")
     ]
-    assert np.array_equal(*runs)
+    assert _same(*runs)
 
 
 def test_a_kept_scene_closes_cleanly_at_exit():

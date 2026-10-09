@@ -24,16 +24,16 @@ def test_an_outcome_both_engines_share(tmp_path):
 
 
 def test_an_outcome_that_depends_on_the_engine(tmp_path):
-    """A shove on the ARX L5's 0.9 N grip: MuJoCo lets the cube go, PyBullet's stiffer contacts keep it."""
-    pytest.importorskip("pybullet")
+    """A 6 N push for half a second on a cube the WidowX 250 holds: MuJoCo keeps it (through 8 N),
+    Drake, given the same commands, lets it go (from 5 N)."""
+    pytest.importorskip("pydrake")
     s = rw.Settings(trace="on", trace_dir=str(tmp_path))
-    with rw.launch(robot="arx_l5", name="arx", settings=s) as w:
+    with rw.launch(robot="wx250s", name="widowx", settings=s) as w:
         w.robot.reset_to()
         w.robot.pick(w.scene["cube"])
-        w.faults.push("cube", force=(0.0, 1.5, 0.0), duration=0.1)
+        w.faults.push("cube", force=(0.0, 6.0, 0.0), duration=0.5)
         w.wait(0.5)
-        with pytest.raises(rw.ExpectationError):
-            expect(w.robot.gripper).to_be_holding(w.scene["cube"])
-    r = crosscheck(w.trace_path, "pybullet")
-    assert r.passed and not r.agrees, r.summary()
+        expect(w.robot.gripper).to_be_holding(w.scene["cube"])
+    r = crosscheck(w.trace_path, "drake")
+    assert not r.passed and not r.agrees, r.summary()
     assert "VERDICTS DIFFER" in r.summary()

@@ -31,6 +31,7 @@ POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error correc
 GRAVITY = 9.81
 ARMATURE_FLOOR = 2e-3  # kg m^2, see __init__
 GEAR_FORCE = 1000.0  # N or N m: a finger linkage's gear constraint is effectively rigid
+_GRIP_SCALE: dict[str, float] = {}  # per robot: see PybulletBackend._measure_grip
 GEAR_ERP = 0.8  # fraction of a gear constraint's position drift corrected per step
 
 
@@ -210,6 +211,49 @@ class PybulletBackend(Backend):
             self.set_joint_positions(rm.stand_q())
         else:
             self.set_joint_positions(np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0))
+            if self.has_gripper and rm.grip_force is not None and self._links_j:
+                if rm.name not in _GRIP_SCALE:
+                    _GRIP_SCALE[rm.name] = self._measure_grip(rm.grip_force)
+                self._finger_force = self._finger_force * _GRIP_SCALE[rm.name]
+
+    def _measure_grip(self, want: float) -> float:
+        """How much to scale the driven fingers' force by so the jaws press a held block with
+        ``want`` newtons each.
+
+        A linkage gripper here has no closed chain: its driver's force is its datasheet force
+        times its lever to the TCP, and each passive joint follows on a motor of its own. Through
+        the xArm Gripper's four-bar linkage that pressed 13.7 N of 30. So, with a datasheet force,
+        it is measured: the jaws close on a fixed 25 mm block at the TCP, as MuJoCo's calibration
+        does, and the world is put back as it was.
+        """
+        c, rm = self.cid, self.robot_model
+        state = p.saveState(physicsClientId=c)
+        q0 = np.append(np.clip(np.zeros(self.n_arm), self._lo, self._hi), 1.0)
+        hand = self._links[urdf._safe(rm.hand)]
+        pos, orn = p.getLinkState(self.robot, hand, computeForwardKinematics=True, physicsClientId=c)[4:6]
+        tcp = np.array(pos) + np.array(p.getMatrixFromQuaternion(orn)).reshape(3, 3) @ rm.derived.tcp_offset
+        shape = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.0125] * 3, physicsClientId=c)
+        block = p.createMultiBody(0, shape, -1, tcp.tolist(), orn, physicsClientId=c)
+        self.set_ctrl(np.append(q0[:-1], 0.0))
+        seen = []
+        n = int(1.5 / self.control_dt)
+        for k in range(n):
+            self.step()
+            if k >= n - 10:
+                side = {"left_finger": 0.0, "right_finger": 0.0}
+                for pt in p.getContactPoints(self.robot, block, physicsClientId=c):
+                    part = self._link_label.get(pt[3], "").split(":")[-1]
+                    if part in side:
+                        side[part] += pt[9]
+                seen.append(np.mean(list(side.values())) if min(side.values()) > 0 else 0.0)
+        p.removeBody(block, physicsClientId=c)
+        p.restoreState(stateId=state, physicsClientId=c)
+        p.removeState(state, physicsClientId=c)
+        self._t = 0.0
+        self._ramp = TargetRamp()
+        self.set_joint_positions(q0)
+        got = float(np.mean(seen))
+        return want / got if got > 0.1 * want else 1.0
 
     def _make_object(self, o, c: int | None = None, visual_only: bool = False) -> int:
         c = self.cid if c is None else c

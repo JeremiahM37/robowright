@@ -407,11 +407,12 @@ def _settle(m, d, ctrl_index, value, max_seconds=10.0):
 _CALIBRATION: dict[str, tuple[float, float]] = {}
 
 
-def _squeeze(model: RobotModel, limit: float | None = None) -> tuple[float, float]:
+def _squeeze(model: RobotModel, limit: float | None = None, spec: mujoco.MjSpec | None = None) -> tuple[float, float]:
     """Close the modelled gripper on a 25 mm block held at its TCP, the actuator capped at
-    ``limit``; returns (mean normal force of the two jaws on the block, actuator force)."""
+    ``limit``; returns (mean normal force of the two jaws on the block, actuator force).
+    ``spec``: the robot as given (a gripper already calibrated), not as modelled."""
     der = model.derived
-    s = model.robot_spec(calibrated=False)
+    s = spec if spec is not None else model.robot_spec(calibrated=False)
     _free_gripper(s, model)
     s.option.gravity = [0, 0, 0]
     if limit is not None:
@@ -639,6 +640,26 @@ def _limit_grip(s: mujoco.MjSpec, model: RobotModel) -> None:
     a.biasprm[1] *= stiff
     a.forcerange = [-limit, limit]
     a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+    # The calibration is measured below the model's own force and extrapolated; check it at the
+    # datasheet's force, as stiffened, and correct once. (The ViperX's jaws pressed 10.8 N of the
+    # 12.8 N measured on it: their force grows more slowly above the model's 5 N.)
+    got, _ = _squeeze(model, spec=s.copy())
+    if got > 0.1 * model.grip_force:
+        limit = offset + (limit - offset) * model.grip_force / got
+        a.forcerange = [-limit, limit]
+    # Never opened past its joint's stop: the YAM's model opens to 0.041 m against a 0.0376 m stop,
+    # harmless at its own 1.9 N, but stiffened to 50 N the jaw pressed 2 mm into the soft limit and
+    # never settled at "open". (Closing past the stop stays: that is what lets the servo reach its
+    # full force on an object; clamped there too, the ViperX pressed 10 N of its 12.8.)
+    if a.trntype == mujoco.mjtTrn.mjTRN_JOINT and abs(a.gear[0] - 1.0) < 1e-9:
+        j = s.joint(a.target)
+        if j.range[1] > j.range[0]:
+            lo, hi = a.ctrlrange
+            if model.gripper_open > model.gripper_closed:
+                hi = min(hi, j.range[1])
+            else:
+                lo = max(lo, j.range[0])
+            a.ctrlrange = [lo, hi]
     # It closes no faster than the model did: damping on the driven joints (outside the
     # actuator's force limit, and exported to every engine) holds a jaw at full force to the
     # model's own top speed. Stiffened alone, a light jaw slams into the object and knocks it away.

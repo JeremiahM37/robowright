@@ -191,7 +191,14 @@ class GenesisBackend(Backend):
         self.scene = gs.Scene(
             show_viewer=False,
             sim_options=gs.options.SimOptions(dt=self._dt),
-            rigid_options=gs.options.RigidOptions(integrator=gs.integrator.implicitfast),
+            # An elliptic friction cone, which holds what Genesis's default pyramidal one let slip
+            # under a steady load: a tall can crept out of the xArm 7's fingers, Stretch's cube out
+            # of its pads, and Spot slid backward standing still at 2 cm/s. Nothing tried holds every
+            # robot: with impratio 2-10 too the SO-100's jaws squeeze the cube out as they close, at
+            # 1.2-1.5 Stretch and the xArm 7 lose theirs again, and noslip iterations instead cost the
+            # PiPER its randomized picks and the Gen3 its tall can. At this one the iiwa 14 drops its
+            # second cube mid-swing (in conftest.py's registry).
+            rigid_options=gs.options.RigidOptions(integrator=gs.integrator.implicitfast, friction_cone=gs.friction_cone.elliptic),
             vis_options=gs.options.VisOptions(show_world_frame=False, ambient_light=(0.35, 0.35, 0.35)),
         )
         scene = self.scene

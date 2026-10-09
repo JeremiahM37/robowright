@@ -288,7 +288,7 @@ hand-written entries say. On robots robowright had never seen, the arm contract 
 |---|---|
 | Franka FR3, FR3 v2, Flexiv Rizon 4, UFACTORY Lite 6 (with the 2F-85), ALOHA's arm, SO-100, Koch low-cost arm | all 21 pass |
 | PAL TIAGo and TIAGo Dual (base held) | all 21 pass |
-| Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis it reaches and tracks, but the cube slides out of its rounded rubber pads as it lifts (a recorded divergence). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
+| Hello Robot Stretch 3 (base drives, telescope as one joint) | all 21 pass, and on Drake; all 20 that run on Isaac Sim (rendering is off there) and all 19 on PyBullet (it has no state save there). On Genesis too, since robowright gives Genesis an elliptic friction cone (with its default pyramidal one the cube slid out of its rounded rubber pads as it lifted). The side grasp is skipped: holding its gripper level, it reaches no lower than 11.5 cm |
 | Unitree Z1 | 17 of 21; the 3 that carry the cube to the bin (and 1 example) are registered limits (strict xfails, `conftest.py`): its moving jaw swings from a pivot 9 cm up, so at a 25 mm cube the jaws stand 13 degrees apart, closer at the top, and wedge the cube downward with ~9 N. It picks, lifts and survives a shove, but MuJoCo's friction creeps under that load (0.5-1.5 mm/s, whatever the contact stiffness, noslip or impratio) and the cube slides off the pads on the way to the bin |
 | Lite 6, narrow gripper | 12 mm gap: every test that picks the 25 mm cube is skipped, saying so; the rest pass |
 | Google Robot | all 21 pass: its servos are soft (time constants to 1 s) and sag under gravity and joint friction; robowright times its moves to them and adds an integral term, as a controller would |
@@ -435,9 +435,10 @@ flipping at a limit - and tries other directions round the object, or says why n
 On the built-in arms, a 10 cm can picked from the side and set in a bin works on 7 of 13
 (Panda, UR5e, UR10e, xArm 7, Gen3, ViperX, Sawyer) on MuJoCo, PyBullet, Drake and Isaac Sim; the iiwa,
 PiPER, SO-101, YAM and ARX cannot hold the hand level beside it from where they are mounted,
-and the WidowX's gripper opens 4 mm wider than the can. On Genesis the can creeps out of the
-xArm 7's fingers mid-carry (a recorded divergence); the Robotiq-gripped arms hold it since
-Genesis holds the gripper linkages' couplings rigid.
+and the WidowX's gripper opens 4 mm wider than the can. On Genesis the can once crept out of
+the xArm 7's fingers mid-carry, until robowright gave Genesis an elliptic friction cone, which
+holds under a steady load where its default pyramidal one slips; the Robotiq-gripped arms hold it since Genesis
+holds the gripper linkages' couplings rigid.
 
 A grasp can come in at any angle between level and straight down, the fingers closing level:
 `approach=(1, 0, -1)` comes in at 45 degrees. It plans and checks its moves as a side grasp
@@ -714,13 +715,14 @@ A run that passes on one engine may only pass because of that engine's contact m
 `crosscheck` makes a trace's calls again on another engine, from the same scene and seed,
 and compares the verdict and where each object ended up:
 
-Here an ARX L5 holds a cube, a 1.5 N shove hits it, and the test expects it still held. Its
-0.9 N grip lets go in MuJoCo; PyBullet's stiffer contacts keep it:
+Here a WidowX 250 holds a cube, a 6 N push leans on it for half a second, and the test
+expects it still held. MuJoCo's contacts keep it (up to an 8 N push); Drake's let it go from
+5 N, and the push, still acting on the freed cube, throws it across the floor:
 
 ```console
-$ robowright crosscheck arx_shove.zip --backend pybullet
-pybullet: passes; on mujoco it failed
-  cube ends 115.3 mm from where it did on mujoco
+$ robowright crosscheck widowx_push.zip --backend drake
+drake: fails (ExpectationError: expect(gripper).to_be_holding failed after 2.00s (timeout 2.0s)); on mujoco it passed
+  cube ends 110259.1 mm from where it did on mujoco
 VERDICTS DIFFER: the outcome depends on the engine
 ```
 
@@ -823,11 +825,15 @@ What running everything on everything turned up:
   robowright drives the gripper at it, the way real grippers work: a stiff servo whose force
   limit is the datasheet's. Closing the model on a block converts that jaw force into an
   actuator force, whatever the transmission. Every engine then presses within 15% of the
-  datasheet (`test_grip_force_matches_the_datasheet`), except on the xArm's six-joint linkage:
-  PyBullet presses 13.7 N, because it has no closed kinematic chains. Grippers with no published figure
-  (Trossen, I2RT, ARX, SO-101) squeeze as modelled: 0.9–2.2 N on the low-cost slide grippers.
-  The PiPER went from 0/20 to 20/20 in PyBullet once it pressed at its rated 40 N instead of
-  0.25 N; every engine holds a 30 g cube in the others at their modelled forces.
+  datasheet (`test_grip_force_matches_the_datasheet`). PyBullet has no closed kinematic chains,
+  so the xArm's six-joint linkage pressed 13.7 N there until the backend measured its own
+  squeeze on a block and scaled the driver to match. Without a datasheet, a measured or vendor
+  figure is used: the ViperX's 12.8 N measured at the tip (ALOHA 2, Fig. 4), the WidowX's 4.7 N
+  (the same gripper scaled by its servo's stall torque), the YAM's 50 N (the force its SDK limits
+  a blocked gripper to) and the ARX L5's 10 N (Menagerie's actuator limit, under its SDK's
+  1.5 N m cut-out). Modelled, they pressed 0.9–5.4 N, and a 1.5 N shove knocked the cube out on
+  every engine; at these forces it holds on all five. The PiPER went from 0/20 to 20/20 in
+  PyBullet once it pressed at its rated 40 N instead of 0.25 N.
 - **Contact models disagree by millimetres.** Same robot, same seed, same commands: Genesis,
   Isaac Sim and Drake put the cube within 1 mm of MuJoCo's final position on about half the
   arms. Genesis stays within 7 mm on every arm; Isaac Sim within 8 mm on all but the PiPER
@@ -878,8 +884,8 @@ What running everything on everything turned up:
   at a capped pace. The one test it moved was MuJoCo's ViperX under a shove: its modelled grip
   chatters between 0 and 1.9 N on the cube, and whether a 1.5 N shove knocks the cube out
   depends on where in that chatter it lands (it lets go anywhere from 1.25 to 1.55 N). It now
-  lands on the losing side, as it already did on Drake, and it is in the registry with that
-  measurement.
+  lands on the losing side, as it already did on Drake. Driven at the 12.8 N measured on the real
+  gripper, it no longer chatters and holds on every engine.
 - **Runs are deterministic down to the last bit, wherever they run.** Three things could
   change a run's last digits without changing its inputs, and none can now:
   - Sensor noise, camera dropout and `jitter()` drew from one shared random stream, so a
@@ -1054,10 +1060,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   otherwise, as two idealised joints (no wheel slip).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
-- **Gripper models:** grippers are driven at their datasheet force only where the maker
-  publishes one (Franka Hand, xArm Gripper, PiPER; the Robotiq 2F-85's model already squeezes
-  inside its 20–235 N range). The Trossen, I2RT, ARX and SO-101 grippers squeeze as modelled,
-  which is 0.9–2.2 N on the slide grippers.
+- **Gripper models:** grippers are driven at a published or measured force (Franka Hand, xArm
+  Gripper, PiPER, ViperX, WidowX, YAM, ARX L5; the Robotiq 2F-85's model already squeezes inside
+  its 20–235 N range). The SO-101 squeezes as modelled; the WidowX's and ARX's figures are
+  derived (see above), not datasheets.
 - **Example policies read object poses:** the scripted policy and the trained example both
   take object poses as input (ground truth, or TF behind ROS 2). Camera inputs are translated
   and tested (`tests/test_learned.py`), but no camera-trained example ships.
