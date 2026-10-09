@@ -23,13 +23,14 @@ Markers::
     @pytest.mark.seed(7)
     @pytest.mark.backends("mujoco")              # restrict
     @pytest.mark.robots("panda", "ur5e")         # restrict
-    @pytest.mark.trials(20, min_success=0.9)     # run across up to 20 seeds, judge the rate
+    @pytest.mark.trials(20, min_success=0.9)     # up to 20 seeds, each with the scene randomized; judge the rate
 """
 
 from __future__ import annotations
 
 import os
 import re
+import warnings
 from pathlib import Path
 
 import pytest
@@ -77,7 +78,11 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "seed(n): seed for this test")
     config.addinivalue_line("markers", "backends(*names): only run on these backends")
     config.addinivalue_line("markers", "robots(*names): only run on these robots")
-    config.addinivalue_line("markers", "trials(n, min_success=1.0, lower_bound=False): run across n seeds and judge the success rate")
+    config.addinivalue_line(
+        "markers",
+        "trials(n, min_success=1.0, lower_bound=False, randomize=True): run across n seeds, each with its free objects "
+        "moved to a seeded random pose, and judge the success rate",
+    )
     config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
@@ -287,7 +292,9 @@ def pytest_pyfunc_call(pyfuncitem):
     if m is None:
         return None
     n = m.args[0] if m.args else m.kwargs.get("n", 10)
+    randomize = m.kwargs.get("randomize", True)
     report = TrialReport(_plain(pyfuncitem.nodeid), n, 0, m.kwargs.get("min_success", 1.0), m.kwargs.get("lower_bound", False))
+    random_runs = 0
     request = pyfuncitem._request
     backend = pyfuncitem.funcargs.get("rw_backend", "mujoco")
     argnames = pyfuncitem._fixtureinfo.argnames
@@ -296,6 +303,8 @@ def pytest_pyfunc_call(pyfuncitem):
     for i in range(n):
         w = _make_world(pyfuncitem, request, backend, base + i, f"[trial {i}]")
         w.robot.reset_to()
+        if randomize:
+            w.faults.randomize_scene()  # without it, every seed would run the same scene
         args = {k: pyfuncitem.funcargs[k] for k in argnames}
         args.update({k: v for k, v in (("world", w), ("robot", w.robot), ("scene", w.scene)) if k in args})
         if "seed" in args:
@@ -308,6 +317,7 @@ def pytest_pyfunc_call(pyfuncitem):
             raise  # this robot cannot run the test at all (see pytest_runtest_call)
         except (AssertionError, RobowrightError) as e:
             failed, msg = True, f"{type(e).__name__}: {e}"
+        random_runs += w.faults.used_randomness()
         path = None
         try:
             path = w.close(failed=failed, trace_path=_trace_path(pyfuncitem.config, f"{_plain(pyfuncitem.nodeid)}[trial {i}]"))
@@ -322,6 +332,15 @@ def pytest_pyfunc_call(pyfuncitem):
         report.ran = i + 1
         if report.settled and not every:
             break  # same seeds, same order: the verdict all n trials would give
+    report.identical = random_runs == 0 and report.runs > 1
+    if report.identical:
+        warnings.warn(
+            pytest.PytestWarning(
+                f"{_plain(pyfuncitem.nodeid)}: its {report.runs} trials ran the same scene with nothing random in them, so they "
+                "are one run repeated and its rate says nothing. Drop randomize=False, or add a fault that draws from the seed "
+                "(jitter, joint_noise, camera_dropout) or draw from world.rng."
+            )
+        )
     pyfuncitem._rw_trials = report
     pyfuncitem.config.stash[_REPORTS][pyfuncitem.nodeid] = report
     if not report.ok:

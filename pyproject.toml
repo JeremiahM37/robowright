@@ -18,6 +18,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Testing",
 ]
@@ -39,7 +43,9 @@ mcp = ["mcp>=1.2"]
 onnx = ["onnxruntime>=1.17"]
 # Reading URDFs: COLLADA meshes (trimesh, pycollada), splitting concave jaws (coacd), xacro templates.
 urdf = ["trimesh>=4", "scipy>=1.10", "pycollada>=0.8", "coacd>=1.0", "xacro>=2"]
-dev = ["pybullet>=3.2.6", "pytest-xdist>=3", "ruff>=0.5", "imageio>=2.31", "imageio-ffmpeg>=0.4", "mcp>=1.2", "trimesh>=4", "scipy>=1.10", "pycollada>=0.8", "xacro>=2", "onnxruntime>=1.17"]
+# No PyBullet here: it has wheels only up to Python 3.11, and later Pythons build it from source
+# (a C++ compiler and the Python headers). Add it with ".[dev,pybullet]"; its tests skip without it.
+dev = ["pytest-xdist>=3", "ruff>=0.5", "imageio>=2.31", "imageio-ffmpeg>=0.4", "mcp>=1.2", "trimesh>=4", "scipy>=1.10", "pycollada>=0.8", "xacro>=2", "onnxruntime>=1.17"]
 
 [project.scripts]
 robowright = "robowright.cli:main"

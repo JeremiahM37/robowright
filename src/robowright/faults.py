@@ -12,6 +12,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# How far ``randomize_scene`` (and so every ``trials`` run) moves each free object: up to 1.5 cm
+# along each table axis, and any turn about z up to 45 degrees, which for a cube is every yaw
+# it can have.
+SCENE_XY = 0.015
+SCENE_YAW = np.pi / 4
+
 
 @dataclass
 class Fault:
@@ -67,7 +73,11 @@ class Faults:
         # draws shifted every later sensor-noise sample, and a test regenerated from a trace
         # (which places the jittered object rather than re-jittering it) read different noise.
         seed = world.seed
-        self._rng = {k: np.random.default_rng([seed, i]) for i, k in enumerate(("jitter", "joint_noise", "camera_dropout"), 1)}
+        self._rng = {k: np.random.default_rng([seed, i]) for i, k in enumerate(("jitter", "joint_noise", "camera_dropout", "scene"), 1)}
+        self._fresh = {k: r.bit_generator.state for k, r in self._rng.items()}
+        self._fresh_world = world.rng.bit_generator.state
+        # name -> (the pose the scene gave it, the pose randomize_scene moved it to)
+        self._randomized: dict = {}
 
     def _add(self, f: Fault) -> Fault:
         self.active.append(f)
@@ -100,10 +110,69 @@ class Faults:
     def camera_dropout(self, p: float = 0.1):
         return self._add(CameraDropout(p))
 
+    def randomize_scene(self, xy: float = SCENE_XY, yaw: float = SCENE_YAW) -> dict:
+        """Move every free object resting on the table to a seeded random pose near where the
+        scene put it: up to ``xy`` metres along each table axis, turned up to ``yaw`` radians.
+
+        ``@pytest.mark.trials`` calls this before every trial, so its trials are different runs
+        rather than copies of one. Bins stay put, objects stacked on, under or inside another are
+        left alone, and no object is moved closer to another than it already was or than their
+        footprints allow. Returns ``{name: new position}``.
+        """
+        rng = self._rng["scene"]
+        objs = self.world.spec.objects
+        start = {o.name: self.world.backend.object_pose(o.name) for o in objs}
+        xy0 = {n: np.asarray(p[:2], float) for n, (p, _) in start.items()}
+        touching = {  # stacked, or one inside the other: moving either would upset both
+            n
+            for a in objs
+            for b in objs
+            if a is not b and np.linalg.norm(xy0[a.name] - xy0[b.name]) < _footprint(a) + _footprint(b)
+            for n in (a.name, b.name)
+        }
+        movable = [o for o in objs if not o.static and o.mass > 0 and o.name not in touching]
+        placed = {n: v for n, v in xy0.items()}
+        moved = {}
+        for o in movable:
+            for _ in range(50):
+                cand = xy0[o.name] + rng.uniform(-xy, xy, 2)
+                if all(
+                    np.linalg.norm(cand - placed[b.name]) >= min(np.linalg.norm(xy0[o.name] - xy0[b.name]), _footprint(o) + _footprint(b))
+                    for b in objs
+                    if b is not o
+                ):
+                    break
+            else:
+                continue  # crowded: leave it where the scene put it
+            pos, quat = start[o.name]
+            turn = rng.uniform(-yaw, yaw)
+            q = np.asarray(quat, float)
+            new_quat = _yaw_quat(2 * np.arctan2(q[3], q[0]) + turn)
+            new_pos = np.array([cand[0], cand[1], pos[2]])
+            self.world.move_object(o.name, new_pos, new_quat)
+            placed[o.name] = cand
+            self._randomized[o.name] = ((np.asarray(pos, float), q), new_pos)
+            moved[o.name] = new_pos
+        return moved
+
+    def used_randomness(self) -> bool:
+        """Whether anything random happened in this world: a seeded fault drew a number, or
+        the test drew from ``world.rng``. Without it every seed runs the same."""
+        return self.world.rng.bit_generator.state != self._fresh_world or any(
+            r.bit_generator.state != self._fresh[k] for k, r in self._rng.items()
+        )
+
     def jitter(self, object: str, xy_std: float = 0.01, yaw_std: float = 0.0):
-        """Randomise an object's starting pose (domain randomisation), seeded."""
+        """Randomise an object's starting pose (domain randomisation), seeded.
+
+        Under ``trials`` the object has already been moved by ``randomize_scene``; a jitter
+        replaces that move rather than adding to it, so the spread is the one asked for."""
         rng = self._rng["jitter"]
         pos, quat = self.world.backend.object_pose(object)
+        if object in self._randomized:
+            (pos0, quat0), moved_to = self._randomized.pop(object)
+            if np.linalg.norm(np.asarray(pos[:2]) - moved_to[:2]) < 1e-3:
+                pos, quat = pos0, quat0
         pos = pos + np.array([*rng.normal(0, xy_std, 2), 0.0])
         if yaw_std:
             yaw = 2 * np.arctan2(quat[3], quat[0]) + rng.normal(0, yaw_std)
@@ -141,3 +210,14 @@ class Faults:
             if isinstance(f, Push) and f.at <= t < f.at + f.duration:
                 out[f.object] = out.get(f.object, np.zeros(3)) + np.array(f.force)
         return out
+
+
+def _footprint(o) -> float:
+    """The radius of the circle an object covers on the table."""
+    if o.kind in ("box", "bin"):
+        return float(np.hypot(o.size[0], o.size[1]))
+    return float(o.size[0])
+
+
+def _yaw_quat(yaw: float) -> np.ndarray:
+    return np.array([np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)])

@@ -26,6 +26,7 @@ __tracebackhide__ = True
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSED = 0.0
 DOWN = (0.0, 0.0, -1.0)
+SWING_SAG = 0.01  # how far below its ends a move across the workspace may dip (see Robot._swing)
 # Fingertips must clear the table by this much at the bottom of a top-down grasp.
 TABLE_CLEARANCE = 0.004
 
@@ -570,6 +571,27 @@ class Robot:
             raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} (closest {err * 1000:.1f} mm)")
         return q, err
 
+    def _swing(self, target, yaw, timeout):
+        """Move the tool to ``target`` across the workspace, never lower than the move's ends.
+
+        A joint-space move is the natural way across, but its tool path is a curve, and when IK
+        lands the goal in another wrist or elbow posture that curve can sag well below both ends.
+        On the Flexiv Rizon 4, a cube turned 38 degrees was carried 5 cm down, through the bin's
+        wall, and the arm stalled against it. So the path is checked first, and if it sags more
+        than ``SWING_SAG`` the tool goes along a straight line instead (or, where that line is
+        out of reach, the joint path after all)."""
+        target = np.asarray(target, float)
+        q_now = self._target[: self.n_arm].copy()
+        q, _ = self._ik(target, q_now, DOWN, yaw)
+        floor = min(float(self.kin.tcp(q_now)[2]), float(target[2])) - SWING_SAG
+        lowest = min(float(self.kin.tcp(q_now + (q - q_now) * s)[2]) for s in np.linspace(0, 1, 33))
+        if lowest < floor:
+            try:
+                return self.arm.move_to.__wrapped__(self.arm, target, yaw=yaw, linear=True, timeout=timeout)
+            except UnreachableError:
+                pass
+        self.arm.move_to.__wrapped__(self.arm, target, yaw=yaw, timeout=timeout)
+
     # skills ------------------------------------------------------------------
     @action
     def pick(self, obj, lift: float = 0.05, timeout: float | None = None, approach="top"):
@@ -601,7 +623,7 @@ class Robot:
             grasp[2] = max(p[2], self.min_grasp_z)
         self.gripper.open.__wrapped__(self.gripper, opening)
         self._grip_open = opening
-        self.arm.move_to.__wrapped__(self.arm, grasp + [0, 0, 0.05], yaw=yaw, timeout=timeout)
+        self._swing(grasp + [0, 0, 0.05], yaw, timeout)
         face = fixed_jaw_face(self.model.name)
         if face is not None and isinstance(o, ObjectHandle) and o.spec.kind != "bin":
             # A jaw fixed to the hand comes straight down: if the object would reach under it, aim
@@ -747,7 +769,7 @@ class Robot:
                 pass
             else:
                 self.arm.move_to.__wrapped__(self.arm, [here[0], here[1], above[2]], yaw=yaw, linear=True, timeout=timeout)
-        self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, timeout=timeout)
+        self._swing(above, yaw, timeout)
         # Set the object down there, not the tool: a hand with one fixed jaw holds it off
         # centre (1.5 cm on an SO-101), which put a second cube on the rim of a bin. Measured
         # once above the spot: on the way the wrist can turn half round (the jaws grip either

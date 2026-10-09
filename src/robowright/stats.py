@@ -34,6 +34,7 @@ class TrialReport:
     use_lower_bound: bool = False
     failures: list = field(default_factory=list)  # (seed, message, trace path)
     ran: int | None = None  # trials run, when the verdict was settled before all n
+    identical: bool = False  # nothing random happened in any trial: one run, repeated
 
     @property
     def runs(self) -> int:
@@ -73,4 +74,6 @@ class TrialReport:
         out = f"{self.passed}/{self.runs} passed ({self.rate:.0%}, 95% CI {lo:.0%}-{hi:.0%}); required {req}"
         if self.runs < self.n:
             out += f" of {self.n}, settled after {self.runs}"
+        if self.identical:
+            out += "; WARNING: every trial ran the same scene with nothing random, so this is one run repeated"
         return out

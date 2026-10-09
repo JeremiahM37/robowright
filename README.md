@@ -137,7 +137,7 @@ evidence to debug it. robowright brings that workflow to robots:
 
 On top of that, it adds things robots need and web pages don't:
 
-- **Statistical tests:** a policy that works 92% of the time is normal. `@pytest.mark.trials(20, min_success=0.9)` judges a rate, with confidence intervals.
+- **Statistical tests:** a policy that works 92% of the time is normal. `@pytest.mark.trials(20, min_success=0.9)` runs 20 differently randomized scenes and judges the rate, with confidence intervals.
 - **Fault injection:** sensor noise, command latency, weak servos, shoves and camera dropout, all seeded.
 - **Invariants:** `expect(robot).always.to_have_no_collisions()` is checked after every step.
 - **Deterministic replay:** re-simulates a trace from its recorded motor commands and reports the first step where anything diverges.
@@ -362,14 +362,15 @@ pip install "git+https://github.com/JeremiahM37/robowright"      # core: MuJoCo,
 ```
 
 To work on robowright itself: `git clone https://github.com/JeremiahM37/robowright && cd robowright && pip install -e ".[dev]"`
-(MuJoCo, PyBullet, xdist, ruff and the test tools).
+(MuJoCo, xdist, ruff and the test tools; any Python 3.10-3.13, no compiler). Add PyBullet with
+`pip install -e ".[dev,pybullet]"`; without it the PyBullet tests skip.
 
 ### Which engine?
 
 | Engine | Install | Python | Notes |
 |---|---|---|---|
 | **MuJoCo** (default) | included | 3.10+ | Fastest; draws the trace views. Start here. |
-| **PyBullet** | `pip install "robowright[pybullet]"` | 3.10+ | Light, CPU only. A good second engine for cross-checks. |
+| **PyBullet** | `pip install "robowright[pybullet]"` | 3.10+ (3.12+ builds it, see below) | Light, CPU only. A good second engine for cross-checks. |
 | **Drake** | `pip install "robowright[drake]"` | **3.12+** | Different contact model; catches engine-specific passes. |
 | **Genesis** | install [PyTorch](https://pytorch.org) first, then `pip install "robowright[genesis]"` | 3.10+ | Heavy (torch); CPU or CUDA. |
 | **Isaac Sim** | not a pip extra, see below | 3.11 | NVIDIA GPU only. |
@@ -401,7 +402,7 @@ into the same environment and use `--rw-backend isaac`. Its URDF importer needs
 | Symptom | Fix |
 |---|---|
 | `the 'pybullet' engine is not installed: pip install "robowright[pybullet]"` | The engine's extra is missing. Install the extra named in the message; `robowright info` lists the engines you have. |
-| `[pybullet]` takes a minute and runs a compiler | PyBullet has no wheel for the newest Python, so pip builds it from source (needs a C++ compiler). Use Python 3.12 or 3.13: `uv venv --python 3.12`. |
+| `[pybullet]` takes a minute and runs a compiler, or fails with `Python.h: No such file` | PyBullet publishes wheels only up to Python 3.11, so on 3.12 and 3.13 pip builds it from source. That needs a C++ compiler and the Python headers. Install the headers for your Python (`sudo apt install python3.13-dev`, or `python3.12-dev`), or use a uv-managed Python, which ships them: `uv venv --python 3.13 --python-preference only-managed`. Or use Python 3.10 or 3.11, which get a prebuilt wheel. Checked on 3.13: the build fails with the system Python lacking headers and succeeds with uv's. |
 | Drake is unavailable | Drake wheels need Python 3.12+. Create the venv with `uv venv --python 3.12`. |
 | `offscreen rendering: unavailable` in `robowright info` | Tests still pass and traces still record; the viewer just has no camera picture. On headless Linux install Mesa EGL (`sudo apt install libegl1 libgl1 libgles2 libosmesa6`) and set `MUJOCO_GL=egl`. |
 | `show-trace` does nothing on a server | It opens a browser. Use `--no-open -o trace.html` and open the file. |
@@ -567,8 +568,23 @@ def test_policy_with_randomized_cube(world, robot, scene):
 PASS examples/test_pick_and_place.py::test_policy_with_randomized_cube[mujoco]: 20/20 passed (100%, 95% CI 84%-100%); required rate >= 100%
 ```
 
-Each trial gets its own seed. A failing trial keeps its own trace, and its seed is printed,
-so you can rerun exactly that one. Trials stop once the rest cannot change the verdict
+Each trial gets its own seed, and the seed decides the scene. Before every trial each free
+object resting on the table is moved to a random pose near where the scene puts it: up to
+1.5 cm along each table axis and turned up to 45 degrees (for a cube, every yaw it can have).
+Bins stay put, objects stacked on, under or inside another are left alone, and no two objects
+are pushed into each other. A `jitter` in the test replaces that move rather than adding to it,
+so the test above sees exactly the 2 cm spread it asks for.
+
+That default is small on purpose: it makes trials different runs, not a model of your
+deployment. The physics is deterministic, so without it 20 trials would be one run repeated
+and a "95% CI 84%-100%" would mean nothing. For a rate that means something about the real
+robot, randomize what varies there: wider `jitter`, `joint_noise`, `action_delay`,
+`camera_dropout`, `push` (see Faults). `randomize=False` turns the default off; if nothing
+else in the test draws from the seed, robowright warns that its trials were one run repeated
+and says so in the trials summary instead of presenting the rate as evidence.
+
+A failing trial keeps its own trace, and its seed is printed, so you can rerun exactly that
+one. Trials stop once the rest cannot change the verdict
 (with `min_success=0.9`, 18 passes of 20 already meet it and 3 failures already miss it), so
 the verdict is always the one all 20 would give. `--rw-all-trials` runs every one, for a rate
 measured on all of them.

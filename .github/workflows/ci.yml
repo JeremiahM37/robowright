@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.12"]
+        python: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Offscreen GL (Mesa EGL)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,pybullet]"
       - name: Lint
         run: ruff check . && ruff format --check .
       - run: robowright info
@@ -52,7 +52,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,pybullet]"
       - if: matrix.backend == 'drake'
         run: pip install -e ".[drake]"
       - if: matrix.backend == 'genesis'
