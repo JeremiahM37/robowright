@@ -5,9 +5,10 @@
   (``scaled_joint_trajectory_controller`` among them);
 * MoveIt: ``ur_moveit_config``'s ``ur_moveit.launch.py`` (``move_group``, OMPL), on sim time.
 
-Both are the packages' launch files as shipped, headless (no Gazebo GUI, no RViz), with two
-settings a cell needs and UR's defaults leave out (``floor_mounted`` and ``finer_checks``,
-below), each through UR's or MoveIt's own parameters. Run as
+Both are the packages' launch files as shipped, headless (no Gazebo GUI, no RViz), with the
+settings a cell needs and UR's defaults leave out (``floor_mounted``, ``finer_checks`` and
+``ground``, below), each through UR's, MoveIt's or pymoveit2's own parameters, and one fix to
+ros2_control (controller time, below). Run as
 ``python tests/ur_moveit_rig.py [ur5e]`` to start it on its own (Ctrl-C stops it).
 
 **Floor mounting.** Every UR joint but the elbow is allowed two full turns (-360 to 360 degrees),
@@ -27,10 +28,19 @@ failed MoveIt's own check of the finished path (the forearm through the wrist).
 
 **Gazebo's floor.** UR's ``ground_plane`` is 1 cm below the base, but Gazebo's world has its own
 ground at the base (``empty.sdf``): MoveIt accepted motions through a centimetre that Gazebo's
-floor stops. The first run of all saw one execution aborted (``PATH_TOLERANCE_VIOLATED``, a wrist
-0.23 rad behind, every joint jolted at once, as by a contact) that none of about 80 since has repeated.
-``ground`` adds Gazebo's floor to MoveIt's planning scene with pymoveit2's own collision
-example, its top 1 mm under the base.
+floor stops. ``ground`` adds Gazebo's floor to MoveIt's planning scene with pymoveit2's own
+collision example, its top 1 mm under the base.
+
+**Controller time.** UR's controller now and then aborted a trajectory with
+``PATH_TOLERANCE_VIOLATED``: the arm stopped dead for a quarter of a second and the trajectory
+ran ahead of it. ros2_control's controller manager, on sim time, gives controllers the time of
+its own ROS clock, which is the last ``/clock`` message it received (bridged from Gazebo by
+another process), and not the time of the step ``gz_ros2_control`` calls it for. When ``/clock``
+arrives late, controller time stands still while Gazebo runs on, then jumps. Under load (24 busy
+processes) UR's own example was aborted 7 times in 60; with the controller manager given the
+step's time (``scripts/patches/ros2_control-sim-time-argument.patch``, built by
+``scripts/ros2_env.sh ros2_control`` and preloaded here), 0 in 60 through ``/clock`` stalls of
+up to 2.5 s. Without that build the rig runs UR's stack as installed, and can abort a move.
 """
 
 from __future__ import annotations
@@ -49,6 +59,8 @@ from pathlib import Path
 SHARE = Path(sys.prefix) / "share"
 # pymoveit2, whose examples are the MoveIt clients under test (scripts/ros2_env.sh pymoveit2)
 PYMOVEIT2 = Path(os.environ.get("ROBOWRIGHT_PYMOVEIT2", Path(sys.prefix) / "src" / "pymoveit2"))
+# ros2_control's controller manager with scripts/patches/ros2_control-*.patch (scripts/ros2_env.sh ros2_control)
+CONTROLLER_MANAGER = Path(sys.prefix) / "overlay" / "lib" / "libcontroller_manager.so"
 READY = {
     "control.log": "Configured and activated scaled_joint_trajectory_controller",
     "moveit.log": "You can start planning now",
@@ -131,11 +143,20 @@ def _start(cmd, log: Path, env=None) -> subprocess.Popen:
     return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
 
 
-def _headless() -> dict:
-    """The environment without ``DISPLAY``: UR's launch starts ``gz sim`` with no way to pass
+def _environment() -> dict:
+    """What UR's simulation launch runs with.
+
+    Without ``DISPLAY``: UR's launch starts ``gz sim`` with no way to pass
     ``--headless-rendering``, and with DISPLAY set to an X server without GLX, Gazebo's renderer
-    fails to make a window and the server crashes once a camera renders."""
-    return {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+    fails to make a window and the server crashes once a camera renders.
+
+    With the patched controller manager preloaded, where ``scripts/ros2_env.sh ros2_control`` has
+    built it (the plugin finds the installed one by its own RPATH, so it cannot simply be put on
+    the library path)."""
+    env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+    if CONTROLLER_MANAGER.exists():
+        env["LD_PRELOAD"] = os.pathsep.join(filter(None, [str(CONTROLLER_MANAGER), env.get("LD_PRELOAD")]))
+    return env
 
 
 def _stop(procs) -> None:
@@ -184,7 +205,7 @@ def ur_moveit(
             ["ros2", "launch", "ur_simulation_gz", "ur_sim_control.launch.py", f"ur_type:={ur_type}"]
             + ["launch_rviz:=false", "gazebo_gui:=false", *cell],
             d / "control.log",
-            _headless(),
+            _environment(),
         )
     ]
     try:

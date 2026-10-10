@@ -1,0 +1,51 @@
+From 9ffe891c7a8d5bdc24f09f19afe0f9315eb16655 Mon Sep 17 00:00:00 2001
+From: JeremiahM37 <JeremiahM37@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 03:04:26 -0600
+Subject: [PATCH] Use the time argument for controllers when triggering on ROS
+ time
+
+With use_sim_time the trigger clock is the node's ROS clock, which is only as
+current as the last /clock message the node received. A simulator passes
+update() the time of the step it is simulating (gz_ros2_control does), but the
+controllers were given the node clock's time and a period measured on it. When
+/clock is delivered late, controller time stands still while the simulation
+runs on, and then jumps: a trajectory controller stops moving its command, and
+aborts with PATH_TOLERANCE_VIOLATED when the reference jumps ahead.
+
+Use the time argument for the controllers' time and period when the trigger
+clock is a ROS clock.
+---
+ controller_manager/src/controller_manager.cpp | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/controller_manager/src/controller_manager.cpp b/controller_manager/src/controller_manager.cpp
+index 393d758d..4dd50844 100644
+--- a/controller_manager/src/controller_manager.cpp
++++ b/controller_manager/src/controller_manager.cpp
+@@ -3441,7 +3441,12 @@ controller_interface::return_type ControllerManager::update(
+       const bool first_update_cycle =
+         (*loaded_controller.last_update_cycle_time ==
+          rclcpp::Time(0, 0, this->get_trigger_clock()->get_clock_type()));
+-      const rclcpp::Time current_time = get_clock()->started() ? get_trigger_clock()->now() : time;
++      // With use_sim_time the trigger clock is the node's ROS clock, which only knows the last
++      // /clock message it received. `time` is the time of the cycle being updated: a simulator
++      // passes the time of its own step, so use that and stay in step with it.
++      const bool ros_time_trigger = get_trigger_clock()->get_clock_type() == RCL_ROS_TIME;
++      const rclcpp::Time current_time =
++        (ros_time_trigger || !get_clock()->started()) ? time : get_trigger_clock()->now();
+       const auto controller_actual_period =
+         first_update_cycle ? controller_period
+                            : (current_time - *loaded_controller.last_update_cycle_time);
+@@ -3470,7 +3475,8 @@ controller_interface::return_type ControllerManager::update(
+         try
+         {
+           const auto trigger_result =
+-            loaded_controller.c->trigger_update(this->now(), controller_actual_period);
++            loaded_controller.c->trigger_update(
++              ros_time_trigger ? time : this->now(), controller_actual_period);
+           trigger_status = trigger_result.successful;
+           controller_ret = trigger_result.result;
+           if (trigger_status && trigger_result.execution_time.has_value())
+-- 
+2.47.3
+

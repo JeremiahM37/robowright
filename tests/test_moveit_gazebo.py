@@ -200,11 +200,8 @@ def test_urs_own_example_moves_the_arm_where_it_says(world):
         return lambda robot: all(abs(robot.joints[j] - v) <= tol for j, v in zip(joints, q))
 
     # Each test starts from a known state, as each Playwright test gets a fresh page: here the
-    # pose UR's simulation starts in, which UR's example is written for. Left wherever the last
-    # test's MoveIt plan ended (the wrists can be most of a turn away), the example's first
-    # trajectory sweeps them most of a turn back in 4 s, and from such a pose UR's controller
-    # aborted it 2 times in 30 (ros2_control stopped writing the command for a quarter of a
-    # second while Gazebo ran on); from this one, 0 in 40.
+    # pose UR's simulation starts in, which UR's example is written for (the last test's MoveIt
+    # plan can leave the wrists most of a turn away, and the example then sweeps them back in 4 s).
     start = rig.start_pose()
     home = _pymoveit2("ex_joint_goal.py", f"joint_positions:=[{', '.join(map(str, start))}]")
     _watch(home, lambda: expect(r).to_satisfy(at(start, 0.01), "at UR's start pose", timeout=45, hold=0.3))

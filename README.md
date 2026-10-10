@@ -146,14 +146,18 @@ in every layer:
   loads one; the rig now waits for every spawner. These settings are in
   [`tests/ur_moveit_rig.py`](tests/ur_moveit_rig.py), through UR's, MoveIt's and pymoveit2's own
   parameters, with UR's packages otherwise as shipped.
-- **Still open, in UR's stack:** now and then ros2_control stops writing the arm's command for a
-  quarter of a second while Gazebo runs on; the arm stops, the trajectory runs ahead, and UR's
-  controller aborts the move (its 0.2 rad path tolerance). It is UR's stack alone (no robowright
-  running), and not found yet. A large, fast wrist sweep makes it likelier: UR's own
-  `example_move.py` from a pose with the wrists most of a turn from UR's start was aborted 2 times
-  in 30, and from UR's start 0 in 40, so that test first moves the arm there (pymoveit2's
-  `ex_joint_goal.py`), as each test should start from a known state. In 13 runs of the UR tests
-  since, it aborted one MoveIt move.
+- **ros2_control, in simulation:** now and then UR's controller aborted a move
+  (`PATH_TOLERANCE_VIOLATED`): the arm stopped dead for a quarter of a second while the
+  trajectory ran ahead of it. The controller manager, on sim time, gives controllers the time
+  of its own ROS clock, which is the last `/clock` message it received (bridged from Gazebo by
+  another process), and not the time of the step `gz_ros2_control` calls it for. When `/clock`
+  arrives late, controller time stands still while Gazebo runs on, then jumps. Found with
+  probes in the running Gazebo (every physics step had its hardware write; Gazebo never
+  paused) and the controller's own commands; with the machine loaded, UR's own example was
+  aborted 7 times in 60. Given the step's time instead
+  ([`scripts/patches/`](scripts/patches/ros2_control-sim-time-argument.patch), built and
+  preloaded by `scripts/ros2_env.sh` and the rig), 0 in 60, through `/clock` stalls of up to
+  2.5 s. Not reported upstream yet.
 
 In Gazebo, robowright can also **drive the simulator**, the way Playwright drives a browser
 (`[ros2] gazebo = true`, [`robowright.gazebo`](src/robowright/gazebo.py)): objects' positions are

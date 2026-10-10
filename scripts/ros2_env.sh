@@ -4,7 +4,10 @@
 # gz_ros2_control, MoveIt, and Universal Robots' Gazebo simulation and MoveIt configuration),
 # with robowright installed into it in development mode, and pymoveit2 (a MoveIt client
 # library the UR tests run the examples of) at a pinned commit with one fix applied
-# (scripts/patches: it could not read a robot description that move_group gets on topics).
+# (scripts/patches: it could not read a robot description that move_group gets on topics),
+# and ros2_control's controller manager built with one fix (scripts/patches: in simulation it
+# timed controllers by the /clock messages it had received, not by the simulator's step, so a
+# late /clock stopped a trajectory and then aborted it). The UR rig preloads that build.
 #
 #   scripts/ros2_env.sh create                  # once (about 2 GB)
 #   scripts/ros2_env.sh pytest tests/test_ros2.py
@@ -29,6 +32,7 @@ if [ "${1:-}" = "create" ]; then
         ros-jazzy-moveit ros-jazzy-ur-simulation-gz ros-jazzy-ur-moveit-config ros-jazzy-ur-description ros-jazzy-ur-robot-driver uv
     "$ENV/bin/uv" pip install --python "$ENV/bin/python" -e "$REPO[dev,onnx]"
     "$0" pymoveit2
+    "$0" ros2_control
     exit 0
 fi
 if [ "${1:-}" = "pymoveit2" ]; then
@@ -37,6 +41,23 @@ if [ "${1:-}" = "pymoveit2" ]; then
     git clone -q https://github.com/AndrejOrsula/pymoveit2.git "$ENV/src/pymoveit2"
     git -C "$ENV/src/pymoveit2" checkout -q "$PYMOVEIT2_COMMIT"
     git -C "$ENV/src/pymoveit2" apply "$REPO"/scripts/patches/pymoveit2-*.patch
+    exit 0
+fi
+if [ "${1:-}" = "ros2_control" ]; then
+    # The installed version, patched, as $ENV/overlay/lib/libcontroller_manager.so
+    version="$(ls "$ENV/conda-meta" | sed -n 's/^ros-jazzy-controller-manager-\([0-9.]*\)-.*/\1/p' | head -1)"
+    [ -n "$version" ] || { echo "ros-jazzy-controller-manager is not installed in $ENV" >&2; exit 1; }
+    MAMBA_ROOT_PREFIX="$TOOLS/root" "$MM" install -y -q -p "$ENV" -c conda-forge -c robostack-jazzy --freeze-installed gxx_linux-64 make
+    rm -rf "$ENV/src/ros2_control" "$ENV/overlay/build"
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$version" https://github.com/ros-controls/ros2_control.git "$ENV/src/ros2_control"
+    git -C "$ENV/src/ros2_control" apply "$REPO"/scripts/patches/ros2_control-*.patch
+    mkdir -p "$ENV/overlay/build" "$ENV/overlay/lib"
+    "$MM" run -p "$ENV" cmake -S "$ENV/src/ros2_control/controller_manager" -B "$ENV/overlay/build" \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$ENV" > "$ENV/overlay/build.log" 2>&1
+    "$MM" run -p "$ENV" make -C "$ENV/overlay/build" -j"$(nproc)" controller_manager >> "$ENV/overlay/build.log" 2>&1 \
+        || { tail -20 "$ENV/overlay/build.log" >&2; exit 1; }
+    cp "$ENV/overlay/build/libcontroller_manager.so" "$ENV/overlay/lib/"
+    rm -rf "$ENV/overlay/build"
     exit 0
 fi
 [ -x "$ENV/bin/python" ] || { echo "no ROS 2 environment at $ENV: run $0 create" >&2; exit 1; }
