@@ -28,7 +28,7 @@ steps:
     actions:
       - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_gazebo.py -q -n 4 -p no:cacheprovider", timeout: 1200 }
 
-  - name: someone else's whole stack (UR's Gazebo simulation, ros2_control and MoveIt), robowright only watching and driving Gazebo
+  - name: someone else's whole stack (UR's Gazebo simulation, ros2_control and MoveIt, driven by pymoveit2's and UR's own example clients), robowright only watching and driving Gazebo
     actions:
       - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_moveit_gazebo.py -q -p no:cacheprovider", timeout: 900 }
 

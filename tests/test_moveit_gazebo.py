@@ -1,11 +1,13 @@
 """robowright as the harness around someone else's whole stack: Universal Robots' Gazebo
 simulation of a UR5e (``ur_simulation_gz``, ros2_control, UR's controllers), MoveIt
-(``ur_moveit_config``), and a MoveIt client standing in for the code under test
-(``examples/moveit_ur/reach.py``). robowright simulates nothing here and commands nothing: it
-loads UR's own description, reads ``/joint_states`` on Gazebo's clock, and asserts.
+(``ur_moveit_config``), and, as the code under test, other projects' clients run as published:
+pymoveit2's ``ex_pose_goal.py`` (a pose goal through ``move_group``) and UR's own
+``example_move.py`` (trajectories straight to UR's controller). robowright simulates nothing
+here and commands nothing: it loads UR's own description, reads ``/joint_states`` on Gazebo's
+clock, and asserts.
 
-Needs a ROS 2 environment with ``ros-jazzy-ur-simulation-gz`` and ``ros-jazzy-ur-moveit-config``
-(``scripts/ros2_env.sh``); skipped elsewhere.
+Needs a ROS 2 environment with ``ros-jazzy-ur-simulation-gz``, ``ros-jazzy-ur-moveit-config`` and
+pymoveit2 (``scripts/ros2_env.sh create``, or ``scripts/ros2_env.sh pymoveit2``); skipped elsewhere.
 """
 
 import importlib.util
@@ -25,7 +27,6 @@ from robowright.errors import CapabilityError
 from robowright.scene import ObjectSpec, SceneSpec
 
 HERE = Path(__file__).parent
-REACH = HERE.parent / "examples" / "moveit_ur" / "reach.py"
 
 
 def _rig():
@@ -39,10 +40,12 @@ rig = _rig()
 pytestmark = [
     pytest.mark.skipif(importlib.util.find_spec("rclpy") is None, reason="needs a ROS 2 environment (rclpy)"),
     pytest.mark.skipif(not rig.installed(), reason="needs ur_simulation_gz and ur_moveit_config"),
+    pytest.mark.skipif(not (rig.PYMOVEIT2 / "examples").is_dir(), reason="needs pymoveit2 (scripts/ros2_env.sh pymoveit2)"),
 ]
 _worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
-if "PYTEST_XDIST_WORKER" in os.environ:
-    os.environ["ROS_DOMAIN_ID"] = str(200 + int(_worker.removeprefix("gw")) % 30)
+# This module's own ROS graph: UR's stack and the clients under test, and nothing else on the
+# machine that happens to use the default domain
+os.environ["ROS_DOMAIN_ID"] = str(170 + (int(_worker.removeprefix("gw")) * 7 + os.getpid()) % 30)
 os.environ["GZ_PARTITION"] = f"rw-ur-{_worker}-{os.getpid()}"  # this module's Gazebo, and no other
 os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
 
@@ -108,8 +111,20 @@ class _Tool:
         self._ctx.try_shutdown()
 
 
+def _pymoveit2(example: str, *params: str) -> subprocess.Popen:
+    """One of pymoveit2's examples, as published, on sim time."""
+    cmd = [sys.executable, str(rig.PYMOVEIT2 / "examples" / example), "--ros-args"]
+    for param in (*params, "use_sim_time:=true", "timeout_sec:=60.0"):
+        cmd += ["-p", param]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(rig.PYMOVEIT2), os.environ.get("PYTHONPATH")])))
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+
+
 def _reach(goal) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, str(REACH), *map(str, goal)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    """pymoveit2's pose-goal example: ``move_group`` plans and executes a pose for UR's
+    ``tool0``, here pointing down (half a turn about x)."""
+    xyz = ", ".join(f"{v:.4f}" for v in goal)
+    return _pymoveit2("ex_pose_goal.py", f"position:=[{xyz}]", "quat_xyzw:=[1.0, 0.0, 0.0, 0.0]")
 
 
 def _watch(proc: subprocess.Popen, check) -> None:
@@ -140,7 +155,7 @@ def test_moveit_moves_a_ur5e_in_gazebo_and_robowright_sees_it_arrive(world):
             # clock for the arm, by its own kinematics of UR's description, to settle at the goal.
             _watch(reach, lambda g=goal: expect(r.tcp).to_be_near(g, tol=0.002, timeout=45, hold=0.5))
             out, _ = reach.communicate(timeout=30)
-            assert reach.returncode == 0, out
+            assert reach.returncode == 0 and "Pose motion completed successfully" in out, out
             assert world.time - start > 0.5  # it moved there, on sim time (not a clock that jumped)
             # robowright's model of the arm agrees with the robot's own TF to a fraction of a millimetre
             p, _ = tool.pose()
@@ -164,9 +179,52 @@ def test_a_stack_that_puts_the_tool_in_the_wrong_place_fails(world):
         with pytest.raises(rw.errors.ExpectationError, match="to_be_near"):
             expect(r.tcp).to_be_near(meant, tol=0.002, timeout=15, hold=0.5)
     finally:
-        out, _ = reach.communicate(timeout=30)
-    assert reach.returncode == 0, out  # MoveIt did what it was told
+        out, _ = reach.communicate(timeout=60)
+    assert reach.returncode == 0 and "Pose motion completed successfully" in out, out  # MoveIt did what it was told
     assert abs(np.linalg.norm(r.tcp.position - meant) - 0.04) < 0.002  # and robowright measured the miss
+
+
+# UR's example_move.py: two trajectories, sent straight to scaled_joint_trajectory_controller
+UR_EXAMPLE_END = (0.30493, -0.982258, 0.955637, -1.48215, -1.72737, 0.204445)
+UR_EXAMPLE_VIA = (-0.195016, -1.70093, 0.902027, -0.944217, -1.52982, -0.195171)
+
+
+def test_urs_own_example_moves_the_arm_where_it_says(world):
+    """The code under test is UR's: ``ur_robot_driver``'s ``example_move.py``, which drives the arm
+    through its controller with no MoveIt. robowright watches it pass through the first
+    trajectory's end and settle at the second's, and checks the tool against UR's TF there."""
+    r = world.robot
+    joints = list(r.model.arm_joints)
+
+    def at(q, tol):
+        return lambda robot: all(abs(robot.joints[j] - v) <= tol for j, v in zip(joints, q))
+
+    # Each test starts from a known state, as each Playwright test gets a fresh page: here the
+    # pose UR's simulation starts in, which UR's example is written for. Left wherever the last
+    # test's MoveIt plan ended (the wrists can be most of a turn away), the example's first
+    # trajectory sweeps them most of a turn back in 4 s, and from such a pose UR's controller
+    # aborted it 2 times in 30 (ros2_control stopped writing the command for a quarter of a
+    # second while Gazebo ran on); from this one, 0 in 40.
+    start = rig.start_pose()
+    home = _pymoveit2("ex_joint_goal.py", f"joint_positions:=[{', '.join(map(str, start))}]")
+    _watch(home, lambda: expect(r).to_satisfy(at(start, 0.01), "at UR's start pose", timeout=45, hold=0.3))
+    out, _ = home.communicate(timeout=60)
+    assert home.returncode == 0, out
+    example = subprocess.Popen(
+        ["ros2", "run", "ur_robot_driver", "example_move.py"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    tool = _Tool()
+    try:
+        _watch(example, lambda: expect(r).to_satisfy(at(UR_EXAMPLE_VIA, 0.01), "at the first trajectory's end", timeout=30))
+        _watch(example, lambda: expect(r).to_satisfy(at(UR_EXAMPLE_END, 0.01), "at the second trajectory's end", timeout=30, hold=0.5))
+        out, _ = example.communicate(timeout=30)
+        assert "Done with all trajectories" in out, out
+        p, _ = tool.pose()
+        assert np.linalg.norm(p - r.tcp.position) < 5e-4, (p, r.tcp.position)
+    finally:
+        tool.close()
+        if example.poll() is None:
+            example.kill()
 
 
 SCENE = [
@@ -215,6 +273,12 @@ def test_robowright_pauses_and_steps_gazebo_exactly(scene_world):
         gz.step(250)
         assert gz.iterations - i0 == 250
         assert gz.time - t0 == pytest.approx(0.25, abs=1e-6)
+        for _ in range(20):
+            # Gazebo reports the world unpaused while it steps, and about a third of the time the
+            # message with the last step still says so: a step has to end paused, every time.
+            before = gz.iterations
+            gz.step(100)
+            assert gz.iterations - before == 100 and gz.paused
         assert np.allclose(scene_world.robot.true_qpos(), q0, atol=1e-3)  # the arm holds, paused or stepped
     finally:
         gz.play()

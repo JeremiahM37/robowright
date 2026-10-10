@@ -2,7 +2,9 @@
 # A ROS 2 Jazzy environment for robowright's ROS 2 tests, without root or a ROS install:
 # RoboStack's conda packages (rclpy, ros2_control, ros2_controllers, tf2_ros, Gazebo with
 # gz_ros2_control, MoveIt, and Universal Robots' Gazebo simulation and MoveIt configuration),
-# with robowright installed into it in development mode.
+# with robowright installed into it in development mode, and pymoveit2 (a MoveIt client
+# library the UR tests run the examples of) at a pinned commit with one fix applied
+# (scripts/patches: it could not read a robot description that move_group gets on topics).
 #
 #   scripts/ros2_env.sh create                  # once (about 2 GB)
 #   scripts/ros2_env.sh pytest tests/test_ros2.py
@@ -26,6 +28,15 @@ if [ "${1:-}" = "create" ]; then
         ros-jazzy-robot-state-publisher ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge ros-jazzy-gz-ros2-control \
         ros-jazzy-moveit ros-jazzy-ur-simulation-gz ros-jazzy-ur-moveit-config ros-jazzy-ur-description ros-jazzy-ur-robot-driver uv
     "$ENV/bin/uv" pip install --python "$ENV/bin/python" -e "$REPO[dev,onnx]"
+    "$0" pymoveit2
+    exit 0
+fi
+if [ "${1:-}" = "pymoveit2" ]; then
+    PYMOVEIT2_COMMIT=4c83fb30f1004aa26bb75483637fbc7e917e508b
+    rm -rf "$ENV/src/pymoveit2"
+    git clone -q https://github.com/AndrejOrsula/pymoveit2.git "$ENV/src/pymoveit2"
+    git -C "$ENV/src/pymoveit2" checkout -q "$PYMOVEIT2_COMMIT"
+    git -C "$ENV/src/pymoveit2" apply "$REPO"/scripts/patches/pymoveit2-*.patch
     exit 0
 fi
 [ -x "$ENV/bin/python" ] || { echo "no ROS 2 environment at $ENV: run $0 create" >&2; exit 1; }

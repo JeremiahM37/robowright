@@ -99,25 +99,61 @@ test asks it to.
 
 The whole stack can be someone else's. [`tests/test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)
 runs Universal Robots' own Gazebo simulation of a UR5e (`ur_simulation_gz`: UR's description,
-`gz_ros2_control`, UR's `scaled_joint_trajectory_controller`) and MoveIt (`ur_moveit_config`),
-all as shipped. A MoveIt client standing in for your code asks `move_group` for poses; robowright
-loads UR's description as it is (no gripper added), watches on Gazebo's clock without sending a
-command, and asserts where the tool ended up:
+`gz_ros2_control`, UR's `scaled_joint_trajectory_controller`) and MoveIt (`ur_moveit_config`).
+The code under test is other projects' too, run as published: [pymoveit2](https://github.com/AndrejOrsula/pymoveit2)'s
+`ex_pose_goal.py` asks `move_group` for poses, and UR's own `example_move.py` (from
+`ur_robot_driver`) sends trajectories straight to UR's controller. robowright loads UR's
+description as it is (no gripper added), watches on Gazebo's clock without sending a command,
+and asserts where the arm ended up:
 
 ```python
 ur = robots.load("ur_description/urdf/ur.urdf.xacro?ur_type=ur5e&name=ur", gripper=False, base_pos=(0, 0, 0))
 w = rw.launch(
     SceneSpec(robot=ur.name, objects=[]), backend="ros2", command=False, frame="base_link", gripper={"interface": "none"}, use_sim_time=True
 )
-with subprocess.Popen(["python", "reach.py", "0.4", "0.2", "0.4"]):  # your MoveIt code
+goal = ["-p", "position:=[0.4, 0.2, 0.4]", "-p", "quat_xyzw:=[1.0, 0.0, 0.0, 0.0]", "-p", "use_sim_time:=true"]
+with subprocess.Popen(["python", "pymoveit2/examples/ex_pose_goal.py", "--ros-args", *goal]):  # your MoveIt code
     expect(w.robot.tcp).to_be_near((0.4, 0.2, 0.4), tol=0.002, timeout=45, hold=0.5)
 ```
 
-A client off by 4 cm fails the test even though MoveIt reports success, and robowright's model of
-the arm agrees with the robot's own TF to under half a millimetre. Running it found two
-robowright bugs that its own simulation had hidden: the ROS clock read 0 until Gazebo's first
-`/clock`, so a test's timeout could expire before anything moved, and every arm was assumed to
-have a gripper.
+A target 4 cm off fails the test even though MoveIt reports success, and robowright's model of
+the arm agrees with the robot's own TF to under half a millimetre. Running it found problems
+in every layer:
+
+- **robowright:** the ROS clock read 0 until Gazebo's first `/clock`, so a test's timeout could
+  expire before anything moved; every arm was assumed to have a gripper; a Gazebo step
+  could return with the world still reported running (Gazebo unpauses it to step, and about a
+  third of the time the message with the last step says so); a model just removed could come
+  back from a pose message already in flight; and with DISPLAY set to an X server without GLX
+  (a virtual one), MuJoCo picked GLX and every render failed (robowright now uses EGL there).
+- **pymoveit2:** it reads the robot's URDF and SRDF from `move_group`'s parameters, and UR's
+  MoveIt configuration hands them over on topics instead, so none of its examples could start
+  ("Invalid response from 'move_group/get_parameters'"). Fixed in
+  [`scripts/patches/`](scripts/patches/pymoveit2-robot-description-topics.patch) (applied by
+  `scripts/ros2_env.sh`, with tests in pymoveit2's own suite).
+- **The cell, as UR ships it:** MoveIt failed 14 to 18 of every 40 plans for the test's poses,
+  each failure after its full 10 s. Every UR joint but the elbow is allowed two full turns, and
+  the simulated cell has a floor 1 cm under the base. KDL, MoveIt's IK solver here, returned shoulder angles a turn away
+  from the arm's, poses only reachable by swinging the upper arm through that floor, so no plan
+  existed (40 of 40 plans to one such goal failed). A floor-mounted cell holds the shoulder lift
+  above the floor, which UR's description takes as a joint-limits file; with it, no time-outs.
+  Of the plans left, 2.5% (15 of 600) failed MoveIt's own check of the finished path (the
+  forearm through the wrist), because OMPL checks motions at 0.5% of a joint space this large;
+  checked at 0.05%, 600 of 600 plans were found. And MoveIt's floor (UR's) is 1 cm below
+  Gazebo's, a centimetre MoveIt would move the arm through and Gazebo would not; pymoveit2's
+  collision example adds Gazebo's to MoveIt's scene. Moves were also started before UR's launch
+  had finished loading its controllers, and the controller manager skips the hardware while it
+  loads one; the rig now waits for every spawner. These settings are in
+  [`tests/ur_moveit_rig.py`](tests/ur_moveit_rig.py), through UR's, MoveIt's and pymoveit2's own
+  parameters, with UR's packages otherwise as shipped.
+- **Still open, in UR's stack:** now and then ros2_control stops writing the arm's command for a
+  quarter of a second while Gazebo runs on; the arm stops, the trajectory runs ahead, and UR's
+  controller aborts the move (its 0.2 rad path tolerance). It is UR's stack alone (no robowright
+  running), and not found yet. A large, fast wrist sweep makes it likelier: UR's own
+  `example_move.py` from a pose with the wrists most of a turn from UR's start was aborted 2 times
+  in 30, and from UR's start 0 in 40, so that test first moves the arm there (pymoveit2's
+  `ex_joint_goal.py`), as each test should start from a known state. In 13 runs of the UR tests
+  since, it aborted one MoveIt move.
 
 In Gazebo, robowright can also **drive the simulator**, the way Playwright drives a browser
 (`[ros2] gazebo = true`, [`robowright.gazebo`](src/robowright/gazebo.py)): objects' positions are
@@ -1197,9 +1233,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   on mock hardware, against robowright's simulation served over ROS 2, against an SO-101 in
   Gazebo, and against Universal Robots' own Gazebo simulation with MoveIt, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
-  those could not. The MoveIt client in the UR test is a stand-in written for it, not a stack
-  from a real project; MoveIt's OMPL sometimes finds no plan for its narrow pose goals, and it
-  plans again, as a MoveIt client has to.
+  those could not.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
