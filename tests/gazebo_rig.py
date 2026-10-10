@@ -182,7 +182,9 @@ def gazebo(robot: str = "so101", workdir: Path | None = None):
     (d / "robot.urdf").write_text(robot_urdf(robot, d / "controllers.yaml", initial))
     (d / "world.sdf").write_text(world_sdf(robot))
     env = {**os.environ, "GZ_SIM_RESOURCE_PATH": str(d)}
-    procs = [_start(["gz", "sim", "-s", "-r", "-v", "2", str(d / "world.sdf")], d / "gz.log", env)]
+    # Headless rendering (EGL): with DISPLAY set to an X server without GLX, Gazebo's renderer
+    # fails to make a window and the server crashes
+    procs = [_start(["gz", "sim", "-s", "-r", "--headless-rendering", "-v", "2", str(d / "world.sdf")], d / "gz.log", env)]
     try:
         procs.append(
             _start(

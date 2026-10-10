@@ -121,6 +121,7 @@ class Gazebo:
         self._poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._history: dict[str, list[tuple[float, np.ndarray, np.ndarray]]] = {}  # recent (time, position, orientation)
         self._stamp = 0.0
+        self._removing: set[str] = set()  # models removed that Gazebo's poses may still show
         self._stats: dict = {}
         self._images: dict[str, np.ndarray] = {}
         self._cameras: dict[str, str] = {}  # camera -> image topic
@@ -167,6 +168,11 @@ class Gazebo:
             if t < self._stamp:
                 return  # older than what is known (or from before a reset): not the world as it is
             self._stamp = t
+            # Poses published before a removal can arrive after it: the first message without the
+            # model shows it gone, and the topic is in order
+            self._removing &= set(got)
+            for name in self._removing:
+                got.pop(name)
             for name, (p, q) in got.items():
                 h = self._history.setdefault(name, [])
                 h.append((t, p, q))
@@ -301,7 +307,10 @@ class Gazebo:
             with self._lock:
                 ok = self._fresh.wait_for(lambda: name in self._images, timeout=timeout)
         if not ok:
-            raise TimeoutError(f"no image from Gazebo camera {name!r} within {timeout} s (can this Gazebo render? see its log)")
+            raise TimeoutError(
+                f"no image from Gazebo camera {name!r} within {timeout} s (can this Gazebo render? see its log: a server "
+                "started with DISPLAY set to an X server without GLX crashes; start it with --headless-rendering or without DISPLAY)"
+            )
         with self._lock:
             return self._images[name].copy()
 
@@ -352,7 +361,9 @@ class Gazebo:
             self.pause()
         target = self.iterations + int(iterations)
         self._control(f"step {iterations} iterations", pause=True, multi_step=int(iterations))
-        self._wait(lambda s: s["iterations"] >= target, f"step {iterations} iterations", timeout)
+        # Gazebo reports the world unpaused while it runs the steps, and a statistics message can
+        # show the last of them before the world is paused again: wait for both.
+        self._wait(lambda s: s["iterations"] >= target and s["paused"], f"step {iterations} iterations", timeout)
 
     def reset(self) -> None:
         """Put the world back as it was loaded (time, models, joints). Gazebo leaves models spawned
@@ -375,6 +386,8 @@ class Gazebo:
         req.pose.position.x, req.pose.position.y, req.pose.position.z = map(float, pos)
         w, x, y, z = (1.0, 0.0, 0.0, 0.0) if quat is None else map(float, quat)
         req.pose.orientation.w, req.pose.orientation.x, req.pose.orientation.y, req.pose.orientation.z = w, x, y, z
+        with self._lock:
+            self._removing.discard(name)
         self._call("create/blocking", req, self._Factory.EntityFactory, f"spawn {name!r}")
         self._placed(name, pos, (w, x, y, z))
 
@@ -392,12 +405,19 @@ class Gazebo:
         pos = (obj.pos[0], obj.pos[1], obj.half_height if obj.kind != "bin" else 0.0) if obj.pos[2] is None else obj.pos
         self.spawn(obj.name, model_sdf(obj), pos, (np.cos(obj.yaw / 2), 0.0, 0.0, np.sin(obj.yaw / 2)))
 
-    def remove(self, name: str) -> None:
+    def remove(self, name: str, timeout: float = 5.0) -> None:
+        """Remove model ``name``, and wait until Gazebo's poses show it gone (a paused world
+        publishes none)."""
         req = self._Entity.Entity(name=name, type=self._Entity.Entity.MODEL)
+        with self._lock:
+            self._removing.add(name)
         self._call("remove/blocking", req, self._Entity.Entity, f"remove {name!r}")
         with self._lock:
             self._poses.pop(name, None)
             self._history.pop(name, None)
+            if not self._stats.get("paused", False):
+                self._fresh.wait_for(lambda: name not in self._removing, timeout=timeout)
+            self._removing.discard(name)
 
     def close(self) -> None:
         for topic in list(self._node.subscribed_topics()):

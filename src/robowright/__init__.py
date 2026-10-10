@@ -13,10 +13,36 @@ import contextvars
 import os
 import sys
 
-# Headless Linux (CI, servers) has no display for GLFW; render offscreen via EGL.
-# Must happen before anything imports mujoco.
-if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
-    os.environ.setdefault("MUJOCO_GL", "egl")
+
+def _has_glx(display: str) -> bool:
+    """Whether the X server at ``display`` offers GLX (a virtual one, such as Xvfb, may not)."""
+    import ctypes
+    import ctypes.util
+
+    try:
+        x11 = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+    except OSError:
+        return False
+    x11.XOpenDisplay.argtypes, x11.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+    x11.XQueryExtension.argtypes = [ctypes.c_void_p, ctypes.c_char_p, *[ctypes.POINTER(ctypes.c_int)] * 3]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    handle = x11.XOpenDisplay(display.encode())
+    if not handle:
+        return False
+    codes = [ctypes.c_int() for _ in range(3)]
+    try:
+        return bool(x11.XQueryExtension(handle, b"GLX", *map(ctypes.byref, codes)))
+    finally:
+        x11.XCloseDisplay(handle)
+
+
+# Render offscreen via EGL on headless Linux (CI, servers), and where the display cannot do
+# OpenGL through GLX: MuJoCo picks GLFW whenever DISPLAY is set, which then fails with "GLX
+# extension not found". Must happen before anything imports mujoco.
+if sys.platform.startswith("linux") and "MUJOCO_GL" not in os.environ:
+    _display = os.environ.get("DISPLAY")
+    if not _display or not _has_glx(_display):
+        os.environ["MUJOCO_GL"] = "egl"
 
 __version__ = "0.1.0.dev0"
 
