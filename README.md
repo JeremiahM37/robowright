@@ -157,7 +157,9 @@ in every layer:
   aborted 7 times in 60. Given the step's time instead
   ([`scripts/patches/`](scripts/patches/ros2_control-sim-time-argument.patch), built and
   preloaded by `scripts/ros2_env.sh` and the rig), 0 in 60, through `/clock` stalls of up to
-  2.5 s. Not reported upstream yet.
+  2.5 s. Reported upstream
+  ([ros2_control#3683](https://github.com/ros-controls/ros2_control/issues/3683)), with the fix
+  proposed in [#3684](https://github.com/ros-controls/ros2_control/pull/3684).
 
 In Gazebo, robowright can also **drive the simulator**, the way Playwright drives a browser
 (`[ros2] gazebo = true`, [`robowright.gazebo`](src/robowright/gazebo.py)): objects' positions are
