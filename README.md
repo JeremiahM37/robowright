@@ -1050,11 +1050,17 @@ An agent can also attach to a simulation someone else built. `sim_attach` takes 
 a `module:callable` that returns an environment; `sim_subjects` lists the bodies, sites, joints
 and cameras to name; `sim_env_step` steps the environment's own step with a given, zero or
 sampled action. Snapshots, screenshots, `robot_expect`, `robot_push`, `robot_move_object` and
-traces work on it, and the calls that drive a robot robowright built say why they do not. On
-Gymnasium-Robotics' Fetch pick-and-place, a session that stepped the arm, shoved the block and
-checked where it was became, through `robot_generate_test`, a test that passes in a fresh
-process. Time moves only when the environment is stepped, so an expectation there is checked
-once and says so.
+traces work on it, and the calls that drive a robot robowright built say why they do not. Time
+moves only when the environment is stepped, so an expectation there is checked once and says so.
+
+Told only that a gymnasium environment called "FetchPickAndPlace" exists, a headless Claude
+Haiku agent with these tools attached to it, found the block and the gripper, moved the gripper
+towards the block (knocking it on the way, and waiting for it to settle), checked that the block
+was at rest on the table and saved a test that passes on each of 3 runs: 12 turns, $0.005. Its
+first two attempts failed and each found something: an install of the suite broken by a newer
+MuJoCo, reported as an empty `AssertionError` (a failure inside an environment's own code now
+names the line), and a saved test that could not pass because "at rest" waited 0.1 s where no
+time passes (it no longer does there).
 
 ### Cross-check on another engine
 
