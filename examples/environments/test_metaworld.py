@@ -27,15 +27,18 @@ SEEDS = [0, 1, 2, 3, 4]
 TABLE = "tablelink"
 ARM_LINKS = ["right_l1", "right_l2", "right_l3", "right_l4", "right_l5", "right_l6", "right_l1_2", "right_l2_2", "right_l4_2"]
 
-# The physical outcome per task, as robowright reads it at the final step. The thresholds are the
-# ones written before the first run, except where a note says otherwise.
-#  - pick-place: the puck is within 0.07 m of the goal site, the radius of the env's own success line.
-#  - door-open: the hinge has swung at least 0.3 rad from closed (closed is 0).
-#  - drawer-open: the slide is at least 0.10 m out.
-#  - button-press: the button box is pressed at least 0.03 m in.
-# The slide and hinge bounds are one-sided. Each joint has a declared range, but the simulation lets
-# the slides go past it under the arm's force (drawer reached -0.20 m against a declared -0.16 m, and
-# the button box -0.09 m against -0.06 m), so the declared range is not used as a bound.
+# The physical outcome per task, as robowright reads it at the final step.
+#  - pick-place: the puck is within 0.07 m of the goal site, the radius in the env's own success line.
+#    The first draft used 0.05 m, the radius in the reward's in-place bounds. Seed 0 then disagreed:
+#    the flag was raised at 0.068 m (measured at step 59). The success line is the criterion the env
+#    itself applies, so it is used here. Changed after one measured disagreement, and reported as such.
+#  - door-open: the hinge has swung at least 0.3 rad from closed (closed is 0). Fixed before any run.
+#  - drawer-open: the slide is at least 0.10 m out. Fixed before any run.
+#  - button-press: the button box is pressed at least 0.03 m in. Fixed before any run.
+# The slide and hinge bounds are one-sided. The first draft used each joint's declared range as the
+# window. The simulation lets the slides go past it under the arm's force (drawer reached -0.20 m
+# against a declared -0.16 m, button box -0.09 m against -0.06 m), so the window was replaced by a
+# one-sided threshold after that was measured.
 OUTCOMES = {
     "pick-place-v3": lambda w: condition(w.body("obj"), "to_be_near", w.body("goal"), tol=0.07)(),
     "door-open-v3": lambda w: condition(w.joint("doorjoint"), "to_be_between", -np.inf, -0.3)(),
