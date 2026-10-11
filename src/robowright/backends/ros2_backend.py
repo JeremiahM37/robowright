@@ -820,12 +820,19 @@ class Ros2Backend(Backend):
 
         if self._nav is None:
             name = self.topic_name((self.cfg["base"] or {}).get("navigate", "navigate_to_pose"))
-            actions = {n: list(t) for n, t in rclpy_action.get_action_names_and_types(self.node)}
+            # As the command topic above: a server that is running can still be missing from this node's view of the
+            # graph for a moment (one look, under load, missed Nav2's and refused a goal it would have taken).
+            deadline = _time.monotonic() + self.cfg["timeout"]
+            while True:
+                actions = {n: list(t) for n, t in rclpy_action.get_action_names_and_types(self.node)}
+                if find_navigate(actions, name) is not None or _time.monotonic() > deadline:
+                    break
+                _time.sleep(0.05)
             if find_navigate(actions, name) is None:
                 raise CapabilityError(
-                    f"no navigation action {name} (nav2_msgs/action/NavigateToPose) in the ROS graph, so the base cannot be sent "
-                    "anywhere: the robot's navigation stack is not running. Name it with [ros2] base = {navigate = ...}, or drive it "
-                    "with robot.base.drive."
+                    f"no navigation action {name} (nav2_msgs/action/NavigateToPose) in the ROS graph within "
+                    f"{self.cfg['timeout']} s, so the base cannot be sent anywhere: the robot's navigation stack is not running. "
+                    "Name it with [ros2] base = {navigate = ...}, or drive it with robot.base.drive."
                 )
             self._nav = (ActionClient(self.node, NavigateToPose, name), name)
         client, name = self._nav
