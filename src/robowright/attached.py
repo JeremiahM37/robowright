@@ -214,6 +214,7 @@ class AttachedWorld(World):
         self.controls: list[tuple[int, str, np.ndarray | None]] = []  # (step, "action" | "observe", action)
         self.controls_note: str | None = None  # why the run cannot be stepped again, if it cannot
         self._action_shape: tuple | None = None
+        self._own_step: Callable[[], object] | None = None  # a wrapped Genesis scene's step as its own code made it
 
     # --- what the simulation is -------------------------------------------------
     @property
@@ -299,6 +300,21 @@ class AttachedWorld(World):
     def observe(self) -> None:
         """Record one physics step that the environment's own loop took below ``env.step``."""
         self._physics_step(None, pushes=False)
+
+    def replay_step(self, advance: Callable[[], object] | None, forces: dict) -> None:
+        """One step of a replayed run whose own code takes its steps (a Drake Simulator, a Genesis scene).
+
+        The forces are the ones the recorded step had, applied as the trace kept them: they are not re-derived from
+        the faults, because a step the recorded loop took without ``world.step`` had none. ``advance`` is the step
+        itself, not the wrapped one, so it is observed once; None means the scene's own step (Genesis).
+        """
+        if advance is None:
+            advance = self._own_step
+        if advance is None:
+            raise CapabilityError("this simulation has no step of its own to replay")
+        for name, f in forces.items():
+            self.backend.apply_force(name, f)
+        self._physics_step(advance, pushes=False)
 
     # --- what a trace needs to run the environment again ----------------------------
     def _note_unreplayable(self, reason: str) -> None:
@@ -505,9 +521,11 @@ def attach(
     if drake:
         # Drake's Simulator cannot be wrapped: advance (or nothing) is the control step, and the loop observes the rest.
         world = AttachedWorld(backend, None, name=_safe(name), seed=seed, settings=settings)
+        # Drake has no reset that starts a trace, and a loop may step before its first observe(): the trace begins
+        # where the simulation is now, so its first sample is the start state and not the state after a step.
+        world._begin()
         if advance is not None:
             world._advance = lambda: world._physics_step(advance)
-        world._note_unreplayable("the simulation was stepped by a Drake Simulator, which robowright does not wrap")
         _current.set(world)
         return world
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
@@ -642,6 +660,7 @@ def _wrap_scene(scene, world: AttachedWorld) -> None:
 
     scene.step = step
     scene.reset = reset
+    world._own_step = orig_step  # replay steps the scene through this, as its own code did, and is observed once
 
     def restore() -> None:  # on close, the scene is the one its code built again: the wrappers come off
         scene.__dict__.pop("step", None)

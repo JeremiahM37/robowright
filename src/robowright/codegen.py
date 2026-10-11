@@ -315,6 +315,9 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) 
     env_rec = m.get("env") or {}
     if not env_rec.get("actions_recorded", True):
         raise ValueError(f"this run cannot be turned into a test: {env_rec.get('note')}")
+    if (m.get("attached") or {}).get("engine") in ("drake", "genesis"):
+        # replay rebuilds these from a factory; a generated test would need that factory too, which is not written yet
+        raise ValueError(f"a test cannot be generated for a {m['attached']['engine']} run yet: replay it with make_env=...")
     name = _test_name(m, test_name)
     spec = env_rec.get("spec")
     rebuilt = bool(spec and spec.get("reproducible"))

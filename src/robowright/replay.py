@@ -76,6 +76,13 @@ def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1
 
     An attached run is rebuilt by calling ``make_env()`` (default: ``gymnasium.make`` with the recorded id and kwargs),
     then its recorded resets, actions and the calls the test made are repeated on it. ``backend`` does not apply.
+
+    Two engines take their steps in their own code, so ``make_env`` returns the simulation for them: a Drake
+    ``Simulator`` (or a ``(Simulator, plant)`` pair), or a built ``genesis.Scene``. Replay steps it with the recorded
+    clock (Drake: ``AdvanceTo`` at each recorded time; Genesis: ``scene.step()``), resets, moves, joint edits and the
+    forces each step had. What it cannot rebuild is whatever the run's own code set on the simulation between steps
+    (Drake actuation inputs, controllers wired outside the diagram, Genesis joint targets): those are not in the trace,
+    so ``make_env`` must set the same ones, or the replay diverges and says where.
     """
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     meta = tr.meta
@@ -153,21 +160,41 @@ def schedule(tr: Trace) -> list[dict]:
         elif e["type"] in ("expect", "invariant", "edit", "fault"):
             items.append(((e["step"], 0, i), {"kind": "event", "event": e}))
     for s, kind, row in tr.controls:
-        items.append(((s - 1, 1, s), {"kind": "control", "observe": kind == "observe", "action": row}))
+        items.append(((s - 1, 1, s), {"kind": "control", "step": s, "observe": kind == "observe", "action": row}))
     return [item for _, item in sorted(items, key=lambda kv: kv[0])]
 
 
+# Engines whose own code takes the steps (a Drake Simulator, a Genesis scene): replayed by stepping the rebuilt
+# simulation, with the forces the trace kept, instead of env.step(action) for a gymnasium-style environment.
+STEPPED = ("drake", "genesis")
+
+
 def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
-    from .attached import attach, model_bytes
+    from .attached import _is_drake_simulator, attach, model_bytes
     from .world import Settings
 
     if not (tr.meta.get("env") or {}).get("actions_recorded", True):
         raise ValueError(f"this run cannot be replayed: {tr.meta['env']['note']}")
     if make_env is None:
         make_env = _make_from_spec(tr)
-    env = make_env()
-    world = attach(env, seed=tr.meta["seed"], settings=Settings(trace="off"))
+    recorded = tr.meta["attached"].get("engine")
+    built = make_env()
+    plant = None
+    if isinstance(built, tuple):  # a Drake simulation may come with its plant, when its diagram holds more than one
+        built, plant = built
+    if recorded == "drake":
+        if not _is_drake_simulator(built):
+            raise ValueError("this run is a Drake simulation: make_env must return its Simulator, or (Simulator, plant)")
+        world = attach(simulator=built, plant=plant, seed=tr.meta["seed"], settings=Settings(trace="off"))
+    else:
+        world = attach(built, seed=tr.meta["seed"], settings=Settings(trace="off"))
+    env = built
+    stepped = recorded in STEPPED
+    if stepped and world.backend.engine != recorded:
+        raise ValueError(f"this run was recorded on {recorded}, but make_env built a {world.backend.engine} simulation")
     notes: list[str] = []
+    if not tr.meta["attached"].get("inputs_recorded", True):
+        notes.append("the inputs the simulation's own code sets between steps are not in the trace: make_env must rebuild the same ones")
     skipped: set[str] = set()
     names = tr.meta["object_names"]
     a = tr.arrays
@@ -180,7 +207,9 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
     def compare(i: int) -> None:
         if i >= n:
             return
-        qerr[i] = float(np.max(np.abs(world.backend.qpos() - a["qpos"][i])))
+        q = world.backend.qpos()
+        if q.size:  # a simulation with no joints (a table and a block) has no joint values to compare
+            qerr[i] = float(np.max(np.abs(q - a["qpos"][i])))
         if names and backends.GROUND_TRUTH in world.backend.capabilities:
             pos = np.array([world.backend.object_pose(nm)[0] for nm in names])
             oerr[i] = float(np.max(np.linalg.norm(pos - a["obj_pos"][i], axis=1)))
@@ -197,18 +226,31 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         if stored is not None and model_bytes(world.backend.model) != stored:
             notes.append("the environment as rebuilt has a different MuJoCo model from the recorded one (another version or options)")
         rows = iter([row for _, kind, row in tr.controls if kind == "action"])
-        compared_start = False
-        for item in schedule(tr):
+        items = schedule(tr)
+        compared_start = stepped  # a simulation with its own steps starts from the state make_env built, before any reset
+        if stepped:
+            compare(world.step_count)
+        for item in items:
             if item["kind"] == "reset":
-                kw = {"seed": item["args"].get("seed")}
-                if "options" in item["args"]:
-                    kw["options"] = item["args"]["options"]
-                env.reset(**kw)
+                if recorded == "genesis":
+                    env.reset()  # a Genesis scene resets to its built state; it takes no seed
+                else:
+                    kw = {"seed": item["args"].get("seed")}
+                    if "options" in item["args"]:
+                        kw["options"] = item["args"]["options"]
+                    env.reset(**kw)
                 if not compared_start:
                     compare(world.step_count)  # the start state, before any step
                     compared_start = True
             elif item["kind"] == "control":
-                if item["observe"]:
+                if stepped:
+                    s = item["step"]
+                    if recorded == "drake":
+                        t = float(a["t"][s])  # the recorded clock, so each AdvanceTo lands on the recorded time
+                        world.replay_step(lambda t=t: env.AdvanceTo(t), _recorded_forces(tr, s))
+                    else:
+                        world.replay_step(None, _recorded_forces(tr, s))  # the scene's own step
+                elif item["observe"]:
                     world.observe()
                 else:
                     env.step(next(rows))
@@ -219,6 +261,8 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
                     world.move_object(e["args"]["object"], e["args"]["pos"], e["args"]["quat"])
                 elif e["type"] == "edit" and e["name"] == "set_joint":
                     world.set_joint(e["args"]["joint"], e["args"]["value"])
+                elif stepped and e["type"] == "fault" and e["name"] == "Push":
+                    pass  # a push was applied to its steps and those steps' forces are in the trace
                 elif e["type"] == "fault" and e["name"] == "Push":
                     world.faults.push(e["args"]["object"], e["args"]["force"], at=e["args"]["at"], duration=e["args"]["duration"])
                 elif e["type"] == "fault" or (e["type"] == "edit"):
@@ -241,6 +285,13 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         )
     finally:
         world.close(failed=False)
+
+
+def _recorded_forces(tr: Trace, step: int) -> dict:
+    """The external forces the trace kept for one step, by the body they were applied to; zero forces are left out."""
+    names = tr.meta.get("force_names", tr.meta["object_names"])
+    f = tr.arrays["forces"][step]
+    return {name: f[k] for k, name in enumerate(names) if np.any(f[k])}
 
 
 def _quat_angle(q: np.ndarray, r: np.ndarray) -> np.ndarray:
