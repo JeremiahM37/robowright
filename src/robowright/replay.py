@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import zipfile
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -28,17 +29,33 @@ class ReplayResult:
     qpos_error: np.ndarray = field(repr=False)
     object_error: np.ndarray = field(repr=False)
     notes: list[str] = field(default_factory=list)  # what was not replayed, or differs, besides the states
+    max_body_error: float = 0.0  # metres, over every body's position, for an attached run whose engine cannot save its state
+    max_body_angle: float = 0.0  # radians, over every body's orientation, the same way
+    engine: str | None = None  # the engine an attached run was replayed on; None for a robowright-built run
 
     @property
     def identical(self) -> bool:
-        return self.max_qpos_error == 0.0 and self.max_object_error == 0.0
+        return self.max_qpos_error == 0.0 and self.max_object_error == 0.0 and self.max_body_error == 0.0 and self.max_body_angle == 0.0
 
     @property
     def matches(self) -> bool:
         return self.first_divergent_step is None
 
     def summary(self) -> str:
-        if self.identical:
+        if self.engine is not None and self.engine != "mujoco":
+            # Such an engine is rebuilt and stepped again, not restored: its replay is stated as "within", never "identical".
+            worst = (
+                f"joints {self.max_qpos_error:.2e} rad, bodies {self.max_body_error:.2e} m, "
+                f"orientations {self.max_body_angle:.2e} rad, objects {self.max_object_error:.2e} m"
+            )
+            if self.first_divergent_step is None:
+                text = f"replayed {self.steps} steps on {self.engine}: the run agrees with the recorded one within tolerance ({worst})"
+            else:
+                text = (
+                    f"replayed {self.steps} steps on {self.engine}: differs from the recorded run, first above tolerance at "
+                    f"step {self.first_divergent_step} ({worst})"
+                )
+        elif self.identical:
             text = f"replayed {self.steps} steps: bit-identical"
         else:
             div = "" if self.first_divergent_step is None else f", first divergence above tolerance at step {self.first_divergent_step}"
@@ -156,6 +173,9 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
     a = tr.arrays
     n = len(a["t"])
     qerr, oerr = np.zeros(n), np.zeros(n)
+    bodies = _stored_bodies(tr)  # recorded for an engine that cannot be restored: every body, every step
+    berr, bang = np.zeros(n), np.zeros(n)
+    engine = world.backend.engine
 
     def compare(i: int) -> None:
         if i >= n:
@@ -164,6 +184,13 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         if names and backends.GROUND_TRUTH in world.backend.capabilities:
             pos = np.array([world.backend.object_pose(nm)[0] for nm in names])
             oerr[i] = float(np.max(np.linalg.norm(pos - a["obj_pos"][i], axis=1)))
+        if bodies is not None:
+            b = world.backend
+            poses = [b.pose(b.resolve(nm)) for nm in bodies["names"]]
+            pos = np.array([p for p, _ in poses])
+            quat = np.array([q for _, q in poses])
+            berr[i] = float(np.max(np.linalg.norm(pos - bodies["pos"][i], axis=1)))
+            bang[i] = float(np.max(_quat_angle(quat, bodies["quat"][i])))
 
     try:
         stored = _stored_model(tr)
@@ -199,10 +226,40 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         if skipped:
             notes.append("not replayed: " + ", ".join(sorted(skipped)))
         notes.append("expectations and invariants are not checked again: only the states are compared")
-        bad = np.nonzero((qerr > tol) | (oerr > tol))[0]
-        return ReplayResult(n - 1, float(qerr.max()), float(oerr.max()), int(bad[0]) if bad.size else None, qerr, oerr, notes)
+        bad = np.nonzero((qerr > tol) | (oerr > tol) | (berr > tol) | (bang > tol))[0]
+        return ReplayResult(
+            n - 1,
+            float(qerr.max()),
+            float(oerr.max()),
+            int(bad[0]) if bad.size else None,
+            qerr,
+            oerr,
+            notes,
+            max_body_error=float(berr.max()),
+            max_body_angle=float(bang.max()),
+            engine=engine,
+        )
     finally:
         world.close(failed=False)
+
+
+def _quat_angle(q: np.ndarray, r: np.ndarray) -> np.ndarray:
+    """The rotation angle between each wxyz quaternion in ``q`` and its partner in ``r`` (rows), in radians.
+
+    Taken from the chord |q - r| rather than from arccos of the dot product: near identity arccos turns a
+    rounding error of 1e-16 in the dot product into an angle of about 4e-8 rad, which would read as a difference.
+    """
+    sign = np.where(np.sum(q * r, axis=1) < 0.0, -1.0, 1.0)  # q and -q are the same rotation
+    chord = np.linalg.norm(q - sign[:, None] * r, axis=1)
+    return 2.0 * np.arcsin(np.clip(chord / 2.0, 0.0, 1.0))
+
+
+def _stored_bodies(tr: Trace) -> dict | None:
+    with zipfile.ZipFile(tr.path) as z:
+        if "bodies.npz" not in z.namelist():
+            return None
+        with np.load(BytesIO(z.read("bodies.npz"))) as f:
+            return {"names": [str(x) for x in f["names"]], "pos": f["pos"], "quat": f["quat"]}
 
 
 def make_spec_call(spec: dict) -> tuple[str, dict]:
@@ -218,8 +275,9 @@ def make_spec_call(spec: dict) -> tuple[str, dict]:
         if module != "gymnasium":
             env_id = f"{module}:{env_id}"
     kwargs = dict(spec.get("kwargs") or {})
-    if spec.get("max_episode_steps") != spec.get("registered_max_episode_steps"):
-        kwargs["max_episode_steps"] = spec.get("max_episode_steps")  # the make() passed a limit other than the default
+    limit = spec.get("max_episode_steps")
+    if limit is not None and limit != spec.get("registered_max_episode_steps"):
+        kwargs["max_episode_steps"] = limit  # the make() passed a limit other than the default (None: no limit was recorded)
     return env_id, kwargs
 
 

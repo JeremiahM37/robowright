@@ -135,7 +135,26 @@ _OBSERVE = object()
 
 class AttachedRecorder(Recorder):
     """The standard trace, plus what the engine keeps so a trace can be redrawn from its state (a MuJoCo model),
-    and what the environment needs to be rebuilt and stepped again (its spec, its actions)."""
+    and what the environment needs to be rebuilt and stepped again (its spec, its actions).
+
+    An engine that cannot save its full state (PyBullet, SAPIEN) cannot be restored to a recorded step, so replay
+    rebuilds the run from its start and compares where every body is at each step: those poses are recorded here.
+    """
+
+    def __init__(self, world, *args, **kwargs):
+        super().__init__(world, *args, **kwargs)
+        b = world.backend
+        self.body_names: list[str] | None = None if backends.STATE in b.capabilities else b.names("body")
+        self.body_pos: list[np.ndarray] = []
+        self.body_quat: list[np.ndarray] = []
+
+    def _snapshot(self, step: int):
+        super()._snapshot(step)
+        if self.body_names:
+            b = self.world.backend
+            poses = [b.pose(b.resolve(n)) for n in self.body_names]
+            self.body_pos.append(np.array([p for p, _ in poses], dtype=float))
+            self.body_quat.append(np.array([q for _, q in poses], dtype=float))
 
     def meta(self) -> dict:
         return {**super().meta(), "attached": self.world.backend.trace_meta(), "env": self.world.env_record()}
@@ -143,6 +162,15 @@ class AttachedRecorder(Recorder):
     def save(self, path: str | Path) -> Path:
         path = super().save(path)
         files = {**self.world.backend.trace_files(), **self.world.controls_files()}
+        if self.body_names:
+            buf = io.BytesIO()
+            np.savez_compressed(
+                buf,
+                names=np.array(self.body_names),
+                pos=np.array(self.body_pos),
+                quat=np.array(self.body_quat),
+            )
+            files["bodies.npz"] = buf.getvalue()
         if files:
             with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as z:
                 for name, data in files.items():
@@ -574,7 +602,8 @@ def _env_spec(env) -> dict | None:
         return None
     entry = getattr(spec, "entry_point", None)
     if not isinstance(entry, str) and callable(entry):  # a class object: the module and name it can be imported by
-        entry = f"{entry.__module__}:{entry.__qualname__}"
+        target = getattr(entry, "func", entry)  # ManiSkill's entry point is functools.partial(make, env_id=...)
+        entry = f"{target.__module__}:{getattr(target, '__qualname__', type(target).__name__)}"
     record = {
         "id": env_id,
         "kwargs": dict(getattr(spec, "kwargs", None) or {}),
