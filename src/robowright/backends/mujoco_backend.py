@@ -185,7 +185,7 @@ class MujocoBackend(Backend):
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)))
             self.set_joint_positions(rm.stand_q())
         if rm.family == "mobile":
-            self.wheels = self._measure_wheels()
+            self.wheels = self._measure_wheels() if self.n_arm == 2 else self._measure_rollers()
             self.set_ctrl(np.zeros(self.n_arm))
         else:
             self.set_ctrl(self.qpos())
@@ -231,6 +231,63 @@ class MujocoBackend(Backend):
         if abs(left["radius"] - right["radius"]) > 1e-9 or left["y"] <= 0 or right["y"] >= 0:
             raise CapabilityError(f"{rm.title}: the two wheels must be equal and on either side of the base's centre line")
         return {"radius": left["radius"], "track": left["y"] - right["y"], "wheels": (left, right)}
+
+    def _measure_rollers(self) -> dict:
+        """A holonomic base's wheels (omni or mecanum: each wheel carries passive rollers, hinges on its
+        own bodies), read from the model at rest. Each wheel is a rolling constraint: the floor under the
+        roller that touches it takes no sideways slip along the roller's axis, so the wheel's speed is set by
+        that roller's direction, its hub's distance to the ground, and where the wheel sits. Returns the
+        matrix ``M`` with wheel speeds (rad/s) = M @ (vx, vy, wz) for the base's velocity in its own frame.
+        A wheel whose rollers do not fit this (no roller under it, or its roller axis at right angles to
+        its rolling direction) is refused, not guessed at."""
+        m, d = self.model, self.data
+        rm = self.robot_model
+        base = self._base
+        R = d.xmat[base].reshape(3, 3)
+        z = np.array([0.0, 0.0, 1.0])
+        rows, radii = [], []
+        for name in rm.arm_joints:
+            j = m.joint(PREFIX + name)
+            body = int(m.jnt_bodyid[j.id])
+            axis = d.xmat[body].reshape(3, 3) @ m.jnt_axis[j.id]  # the wheel's axle, in the world
+            hub = d.xanchor[j.id]
+            rollers = []
+            for k in range(m.njnt):
+                rb = int(m.jnt_bodyid[k])
+                if k == j.id or m.jnt_type[k] != mujoco.mjtJoint.mjJNT_HINGE or rb == body:
+                    continue
+                c = rb
+                while c > 0 and c != body:
+                    c = int(m.body_parentid[c])
+                if c == body:
+                    rollers.append(k)
+            if not rollers:
+                raise CapabilityError(f"{rm.title}: wheel {name} has no passive rollers, so it is not an omni or mecanum wheel")
+            low = min(rollers, key=lambda k: d.xanchor[k][2])  # the roller on the floor
+            roller_axis = d.xmat[m.jnt_bodyid[low]].reshape(3, 3) @ m.jnt_axis[low]
+            geoms = [
+                g for g in range(m.ngeom) if m.geom_bodyid[g] == m.jnt_bodyid[low] and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER
+            ]
+            if not geoms:
+                raise CapabilityError(f"{rm.title}: roller {m.joint(low).name} has no cylinder geom, so its radius is unknown")
+            roller_r = float(m.geom_size[geoms[0]][0])
+            axis_w = axis / np.linalg.norm(axis)
+            off = d.xanchor[low] - hub
+            rho = float(np.linalg.norm(off - np.dot(off, axis_w) * axis_w))  # the roller's centre from the axle
+            radius = rho + roller_r  # the axle to the floor under the roller: the wheel's rolling radius
+            n = roller_axis - np.dot(roller_axis, z) * z  # the roller's axis on the floor: its drive direction
+            if np.linalg.norm(n) < 1e-6:
+                raise CapabilityError(f"{rm.title}: roller {m.joint(low).name} stands on its end, so its drive direction is not measurable")
+            n = n / np.linalg.norm(n)
+            # No slip along n: n.(v_hub + w_base z x p) + radius * w_wheel * ((z x axle).n) = 0, all in the base's frame.
+            nb, pb, ab = R.T @ n, R.T @ (hub - d.xpos[base]), R.T @ axis_w
+            e = float(np.cross(z, ab) @ nb)  # how the wheel's spin turns its contact along n
+            if abs(e) < 0.5:
+                raise CapabilityError(f"{rm.title}: wheel {name}'s rollers do not drive it (its axle is along its drive direction)")
+            coeff = -1.0 / (radius * e)
+            rows.append(coeff * np.array([nb[0], nb[1], -nb[0] * pb[1] + nb[1] * pb[0]]))
+            radii.append(radius)
+        return {"radius": float(np.mean(radii)), "matrix": np.array(rows), "wheels": tuple(radii)}
 
     def _opening(self, q):
         return (q - self._g_closed) / (self._g_open - self._g_closed)
@@ -306,10 +363,16 @@ class MujocoBackend(Backend):
     def wheel_command(self):
         return self._wheel_u.copy()
 
-    def drive_base(self, linear: float, angular: float) -> None:
-        """Wheel speeds for a base moving at ``linear`` m/s forward and turning at ``angular`` rad/s
-        (about +z, counter-clockwise): a wheel at lateral offset y must roll at (v - w*y) forward."""
+    def drive_base(self, linear: float, angular: float, lateral: float = 0.0) -> None:
+        """Wheel speeds for a base moving at ``linear`` m/s forward, ``lateral`` m/s sideways and turning
+        at ``angular`` rad/s (about +z, counter-clockwise). A differential base has two wheels and no
+        sideways motion; an omni or mecanum base takes its wheel speeds from its measured rollers."""
         w = self.wheels
+        if "matrix" in w:
+            self.set_ctrl(w["matrix"] @ np.array([linear, lateral, angular]))
+            return
+        if lateral:
+            raise CapabilityError(f"{self.robot_model.title}: a differential-drive base cannot move sideways (lateral {lateral} m/s)")
         u = []
         for wh in w["wheels"]:
             forward = linear - angular * wh["y"]
