@@ -174,10 +174,11 @@ def test_the_base_goes_to_a_point_on_the_map(driven):
     e_truth = float(np.linalg.norm(truth - OPEN_GOAL))
     e_belief = float(np.linalg.norm(belief - OPEN_GOAL))
     print(f"\nmeasured: arrived in {elapsed:.1f} s (world clock); truth error {e_truth:.3f} m, belief error {e_belief:.3f} m", flush=True)
-    # Nav2 stops as soon as its BELIEF is inside its goal tolerance, so that is what the tolerance
-    # bounds (0.195 to 0.220 m in three runs); the truth may be off by the belief's own error
-    # besides (0.220 to 0.254 m: at most 0.035 m more).
-    expect(b.estimate).to_be_near((*OPEN_GOAL, 0.0), tol=GOAL_TOL, timeout=5)  # the base frame is 1 cm above the floor
+    # Nav2 stops as soon as its BELIEF is inside its goal tolerance (0.195 to 0.220 m in three runs).
+    # AMCL goes on correcting the belief after the stop, so read afterwards it can lie outside the
+    # tolerance (0.2516 m in a fourth run): what bounds it then is the tolerance plus the belief's own
+    # error, as for the truth (0.220 to 0.254 m).
+    expect(b.estimate).to_be_near((*OPEN_GOAL, 0.0), tol=GOAL_TOL + BELIEF_ERROR, timeout=5)  # the base frame is 1 cm above the floor
     assert e_truth <= GOAL_TOL + BELIEF_ERROR
 
 

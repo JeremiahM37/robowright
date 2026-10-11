@@ -139,7 +139,11 @@ def _split_mesh(file: Path, meshes: Path) -> list[Path]:
         part = mesh.submesh([list(range(start, min(start + _PART_FACES, len(mesh.faces))))], append=True)
         target = meshes / f"{file.stem}-{hashlib.sha1(str(file).encode()).hexdigest()[:8]}-part{i}.obj"
         target.parent.mkdir(parents=True, exist_ok=True)
-        part.export(str(target))
+        # written whole, then put in place: another test worker converting the same robot reads it meanwhile
+        fd, tmp = tempfile.mkstemp(dir=target.parent, suffix=".obj")
+        os.close(fd)
+        part.export(tmp)
+        os.replace(tmp, target)
         out.append(target)
     return out
 
