@@ -148,6 +148,8 @@ class AttachedWorld(World):
         self.seed = seed
         self.settings = settings or Settings()
         self.rng = np.random.default_rng(seed)
+        self.backend_options: dict = {}
+        self.source: str | None = None
         self.fidelity = None  # there is no robowright fidelity mode: the model is theirs, as it is
         self.model_changes: list = []  # robowright changes nothing in the simulation unless asked
         self.object_names = list(backend.free_bodies)

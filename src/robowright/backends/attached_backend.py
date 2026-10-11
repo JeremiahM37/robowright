@@ -26,6 +26,7 @@ class _UnknownRobot:
 
     floating = False
     arm_joints: tuple = ()
+    extra: dict = {}  # (not loaded from a file by robowright: nothing to record for a trace to reload)
     title = "attached"
     family = "attached"
     n_arm = 0
