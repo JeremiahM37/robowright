@@ -82,6 +82,13 @@ def _built_only(reason: str):
     return wrap
 
 
+def _close_env(env) -> None:
+    """Close an environment robowright made, if it can be closed (a bare reset-and-step env may not have close)."""
+    close = getattr(env, "close", None)
+    if callable(close):
+        close()
+
+
 def _registered_like(query: str) -> str:
     """The registered gymnasium ids that look like ``query``, so an agent can pick one that exists."""
     try:
@@ -213,8 +220,7 @@ class Session:
         self.world = None
         env, self.env = self.env, None
         self.last_trace = w.close(failed=w.status == "failed")
-        if env is not None:
-            env.close()
+        _close_env(env)
         return f"closed; trace saved to {self.last_trace}"
 
     def _w(self) -> World:
@@ -246,7 +252,7 @@ class Session:
             settings = Settings(trace="on", trace_dir=str(self.trace_dir), trace_cameras=[])
             world = attach(env, name=f"session_{self._n}", seed=seed or 0, settings=settings)
         except Exception as e:
-            env.close()
+            _close_env(env)
             hint = (
                 " robowright reads MuJoCo (gymnasium, dm_control, robosuite), SAPIEN (ManiSkill 3) and PyBullet (panda-gym) environments."
                 if isinstance(e, ValueError)
@@ -687,7 +693,7 @@ class Session:
             [
                 f"bodies (* = free body, an object): {_listing(w.bodies(), set(w.object_names))}",
                 f"sites: {_listing(named('site'))}",
-                f"joints: {_listing(list(b.joint_names()))}",
+                f"joints (hinge and slide): {_listing(list(b.named_joints()))}",
                 f"cameras (robot_screenshot camera=): {_listing(cameras)}",
             ]
         )
@@ -833,7 +839,7 @@ class Session:
     def _subject(self, name: str):
         if self.env is not None:  # an attached simulation: its named bodies and joints are the only subjects
             w = self._w()
-            if name in w.backend.joint_names():
+            if name in w.backend.named_joints():
                 return w.joint(name)
             try:
                 return w.body(name)

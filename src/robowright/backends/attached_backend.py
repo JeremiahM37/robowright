@@ -143,8 +143,13 @@ class AttachedBackend(AttachedEngine):
         return sorted(out)
 
     # --- joints -------------------------------------------------------------------------
-    def joint_names(self) -> list[str]:
-        out = [mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)]
+    def named_joints(self) -> list[str]:
+        """Hinge and slide joints by name: the ones ``world.joint`` takes a value from."""
+        out = [
+            mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            for i in range(self.model.njnt)
+            if int(self.model.jnt_type[i]) in (int(_HINGE), int(_SLIDE))
+        ]
         return [n for n in out if n]
 
     def joint_qadr(self, name: str) -> int:

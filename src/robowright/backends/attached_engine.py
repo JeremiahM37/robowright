@@ -83,8 +83,8 @@ class AttachedEngine(Backend):
     def joint_value(self, name: str) -> float:
         raise NotImplementedError
 
-    def joint_names(self) -> list[str]:
-        """The hinge and slide joints an agent can name; an engine that lists none returns []."""
+    def named_joints(self) -> list[str]:
+        """The joints an agent can name with ``world.joint``; an engine that names none returns []."""
         return []
 
     def set_joint(self, name: str, value: float) -> None:
