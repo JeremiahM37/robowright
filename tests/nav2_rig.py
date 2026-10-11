@@ -54,6 +54,19 @@ def _environment() -> dict:
     return {k: v for k, v in os.environ.items() if k != "DISPLAY"}
 
 
+def _first_message(topic: str, timeout: float) -> bool:
+    """Whether the robot's sensor has published (the robot is spawned and its simulation runs).
+    An example started before this lost its first service call to Nav2's AMCL once (measured: the
+    example waited forever for AMCL's get_state), so the rig does not hand the stack over earlier."""
+    try:
+        done = subprocess.run(
+            ["ros2", "topic", "echo", topic, "--once"], capture_output=True, timeout=timeout, env=_environment(), check=False
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 0
+
+
 def _read(path: Path) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", path.read_text(errors="replace")) if path.exists() else ""
 
@@ -147,7 +160,7 @@ def nav2_stack(workdir: Path | None = None, timeout: float = 240.0, spawn: tuple
     )
     stack = Nav2Stack(d, launch)
     try:
-        if not stack.wait_for(LOCALIZED, timeout):
+        if not stack.wait_for(LOCALIZED, timeout) or not _first_message("/scan", timeout):
             state = "exited" if launch.poll() is not None else "timed out"
             raise RuntimeError(f"Nav2's simulation did not come up ({state}):\n{stack.log[-4000:]}")
         yield stack
