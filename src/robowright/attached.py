@@ -208,7 +208,11 @@ class AttachedWorld(World):
         """A body, site or geom by name, as a subject for ``expect``."""
         found = self.backend.resolve(name)
         if found is None:
-            raise KeyError(f"no body, site or geom named {name!r}; bodies: {', '.join(self.bodies()) or 'none'}")
+            try:
+                sites = ", ".join(self.backend.names("site")) or "none"
+            except (NotImplementedError, KeyError, ValueError):
+                sites = "none"
+            raise KeyError(f"no body, site or geom named {name!r}; bodies: {', '.join(self.bodies()) or 'none'}; sites: {sites}")
         return AttachedSubject(self, found, name)
 
     def joint(self, name: str) -> AttachedJoint:
@@ -231,8 +235,18 @@ class AttachedWorld(World):
     def run_until(self, predicate: Callable[[], bool], timeout: float, hold: float = 0.0) -> bool:
         """World.run_until, except that without an advance callable nothing can pass: the state is checked once."""
         if self._advance is None:
-            return bool(predicate()) and hold <= 1e-9
+            if hold > 1e-9:
+                raise CapabilityError(
+                    f"a hold of {hold:g} s needs time to pass, and only your loop steps this simulation: "
+                    "pass advance=... to attach(), or check without a hold after your own steps"
+                )
+            return bool(predicate())
         return super().run_until(predicate, timeout, hold)
+
+    @property
+    def can_wait(self) -> bool:
+        """Whether robowright can let time pass here (it was given ``advance``, or is inside ``world.run``)."""
+        return self._advance is not None
 
     def run(self, step_fn: Callable[[], object], until: Callable[[], bool], timeout: float) -> bool:
         """Drive ``step_fn`` (one control step of their loop) until ``until()`` holds or ``timeout`` passes."""

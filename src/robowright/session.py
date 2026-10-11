@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from . import robots
-from .errors import RobowrightError
+from .errors import CapabilityError, RobowrightError
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene
 from .world import Settings, World, launch
 
@@ -347,6 +347,12 @@ class Session:
                 return gymnasium.make(env_id, **kwargs)
             except Exception as e:
                 reason = f"{type(e).__name__}: {str(e).rstrip('.')}"
+                # gymnasium's own errors are about the id; anything else was raised while building a registered one
+                lookup = getattr(getattr(gymnasium, "error", None), "Error", None)
+                found = lookup is not None and not isinstance(e, lookup)
+                if found:
+                    # The id was found and the environment's own code raised: where, since an assert says nothing
+                    raise RobowrightError(f"{env_id!r} is registered, but building it failed in its own code: {_where(e)}") from e
                 raise RobowrightError(f"cannot make {env_id!r}: {reason}. {_registered_like(env_id)}. {_suite_note(loaded, failed)}") from e
 
     # --- observation -----------------------------------------------------------
@@ -423,7 +429,16 @@ class Session:
             lines.append(s)
         if not w.object_names:
             lines.append("  (none)")
-        lines.append("other named bodies, sites and joints: sim_subjects")
+        try:  # sites are where a simulation marks its gripper and its targets: named here with where they are
+            sites = list(w.backend.names("site"))
+        except (NotImplementedError, KeyError, ValueError, AttributeError):
+            sites = []
+        if sites:
+            lines.append("sites (points the simulation names, refs too):")
+            lines += [f"  - {n}: at {_f(w.body(n).position)}" for n in sites[:12]]
+            if len(sites) > 12:
+                lines.append(f"  (+{len(sites) - 12} more: sim_subjects)")
+        lines.append("other named bodies and joints: sim_subjects")
         return "\n".join(lines)
 
     def _describe(self, o: ObjectSpec) -> str:
@@ -896,6 +911,8 @@ class Session:
             self._attempt(getattr(e, matcher), **kw)
         except ExpectationError as err:
             return f"FAIL: {err}{note}"
+        except CapabilityError as err:  # a hold where time cannot pass: not checked, and why
+            return f"FAIL: expect({subject}).{matcher} was not checked: {err}"
         shown = ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
         return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({shown}){note}"
 
@@ -952,6 +969,16 @@ class Session:
         w = self._w()
         p = w.trace.save(path or self.trace_dir / f"{w.name}.zip")
         return str(p)
+
+
+def _where(e: BaseException) -> str:
+    """An exception with the line that raised it: ``AssertionError at pkg/file.py:142 in fn: `assert ...```."""
+    import traceback
+
+    last = traceback.extract_tb(e.__traceback__)[-1]
+    file = "/".join(Path(last.filename).parts[-3:])
+    text = f": {e}" if str(e) else ""
+    return f"{type(e).__name__}{text} at {file}:{last.lineno} in {last.name}: `{last.line}`"
 
 
 def _listing(names, mark=()) -> str:

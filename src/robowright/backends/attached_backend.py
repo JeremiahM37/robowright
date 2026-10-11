@@ -216,6 +216,9 @@ class AttachedBackend(AttachedEngine):
 
     # --- rendering, state ------------------------------------------------------------------
     def render(self, camera: str, width: int, height: int) -> np.ndarray:
+        # Their model sets the offscreen buffer; a larger picture is drawn at the size that fits, same shape
+        fit = min(1.0, self.model.vis.global_.offwidth / width, self.model.vis.global_.offheight / height)
+        width, height = max(1, int(width * fit)), max(1, int(height * fit))
         r = self._renderers.get((width, height))
         if r is None:
             r = self._renderers[(width, height)] = mujoco.Renderer(self.model, height, width)

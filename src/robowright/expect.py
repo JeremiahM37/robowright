@@ -185,8 +185,11 @@ class Expectation:
         return self._run("to_publish", check, timeout, hold, {"hz": hz, "tol": tol})
 
     # state matchers -------------------------------------------------------------
-    def to_be_at_rest(self, lin_tol: float = 0.01, ang_tol: float = 0.1, *, timeout=None, hold=0.1):
-        """Linear speed below ``lin_tol`` m/s and angular below ``ang_tol`` rad/s."""
+    def to_be_at_rest(self, lin_tol: float = 0.01, ang_tol: float = 0.1, *, timeout=None, hold=None):
+        """Linear speed below ``lin_tol`` m/s and angular below ``ang_tol`` rad/s, for ``hold`` seconds (0.1 unless
+        given; none where robowright cannot let time pass, an attached simulation with no ``advance``)."""
+        if hold is None:
+            hold = 0.1 if getattr(self.world, "can_wait", True) else 0.0
 
         def check():
             if isinstance(self.subject, Robot):

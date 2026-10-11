@@ -41,7 +41,7 @@ def test_fetch_subjects_steps_expect_push_and_trace(session, tmp_path):
     text = session.expect("object0", "to_be_at_rest", timeout=1)
     assert text.startswith("PASS") and "checked once" in text, text  # resting, and no advance so no wait
     text = session.expect("object0", "to_be_at_rest", {"hold": 0.5})
-    assert text.startswith("FAIL") and "checked once" in text, text  # a hold cannot pass without time
+    assert text.startswith("FAIL") and "needs time to pass" in text, text  # a hold cannot pass without time
     before = session.world.body("object0").position.copy()
     assert "queued a push" in session.push("object0", [0.0, 0.0, 40.0], duration=0.2)
     session.sim_env_step(None, 10)
@@ -83,6 +83,6 @@ def test_an_agents_fetch_session_becomes_a_test_that_passes_by_itself(session, t
     assert "gymnasium_robotics:FetchPickAndPlace-v4" in code and "env.reset(seed=3)" in code, code
     src = os.path.dirname(os.path.dirname(os.path.abspath(__import__("robowright").__file__)))
     env = {**os.environ, "PYTHONPATH": src}
-    cmd = [sys.executable, "-m", "pytest", str(test), "-q", "-p", "robowright.pytest_plugin", "-p", "no:cacheprovider"]
+    cmd = [sys.executable, "-m", "pytest", str(test), "-q", "-p", "no:cacheprovider"]
     out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     assert out.returncode == 0, out.stdout[-2000:]
