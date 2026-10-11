@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -45,7 +46,7 @@ from . import _current
 from .backends import base as backends
 from .backends.attached_backend import AttachedBackend
 from .backends.attached_engine import AttachedEngine
-from .errors import CapabilityError
+from .errors import CapabilityError, ExpectationError, InvariantViolation
 from .faults import Faults
 from .locators import Subject
 from .scene import ObjectSpec, SceneSpec
@@ -211,6 +212,7 @@ class AttachedWorld(World):
         self._dt_known = False
         # How the environment was made, and what its loop did each step, so codegen and replay can do it again.
         self.env_spec: dict | None = None
+        self.index: int | None = None  # which sub-environment of a vector env this world is (None: not one)
         self.controls: list[tuple[int, str, np.ndarray | None]] = []  # (step, "action" | "observe", action)
         self.controls_note: str | None = None  # why the run cannot be stepped again, if it cannot
         self._action_shape: tuple | None = None
@@ -384,6 +386,14 @@ class AttachedWorld(World):
         self.backend = AttachedBackend(model, data, seed=self.seed)
         self.backend.set_control_dt(old.control_dt)
 
+    def _check_invariants(self):
+        if self.index is None:
+            return super()._check_invariants()
+        try:
+            super()._check_invariants()
+        except InvariantViolation as e:  # the vector step stops here, so the message must say which index broke
+            raise InvariantViolation(f"sub-environment {self.index}: {e}") from e
+
     def _physics_step(self, fn, pushes: bool = True, action=_OBSERVE):
         """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
         self._begin()
@@ -479,6 +489,11 @@ def attach(
     no Simulator. Drake's ``Simulator`` cannot be wrapped, so the environment's loop must go through
     ``world.step()`` or call ``world.observe()`` after each ``simulator.AdvanceTo``; ``advance`` is the
     one control step (``world.step`` calls it, and robowright observes it).
+
+    A vector environment (``gymnasium.make_vec(..., vectorization_mode="sync")`` or a ``SyncVectorEnv``) is
+    ``attach(vec_env)``, which returns one world per sub-environment: ``worlds[i]`` is index ``i``, and each is
+    an ordinary world, so its subjects, expectations, invariants and trace are its own. ``advance`` then steps the
+    whole vector. An ``AsyncVectorEnv`` is refused: its sub-environments run in other processes.
     """
     diagram = None
     if env is not None and _is_drake_system(env):
@@ -486,6 +501,13 @@ def attach(
             simulator, env = env, None  # a Simulator, passed by position
         else:
             diagram, env = env, None  # a Diagram, which needs context=
+    vector = _vector_of(env) if env is not None else None
+    if vector is not None:
+        if any(x is not None for x in (model, data, client, step, simulator, diagram, plant, context)):
+            raise ValueError(
+                "a vector environment is attached by itself: attach(vec_env, advance=...), not with model, data, client or step"
+            )
+        return _attach_vector(vector, advance=advance, engine=engine, dt=dt, name=name, seed=seed, settings=settings)
     if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis", "webots"):
         raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake', 'genesis' or 'webots', not {engine!r}")
     if simulator is not None or diagram is not None or context is not None or plant is not None:
@@ -539,6 +561,88 @@ def attach(
         world._note_unreplayable("the steps were taken by a bare stepper (step=), not by an environment's step")
     _current.set(world)
     return world
+
+
+def _vector_of(env):
+    """The vector environment ``env`` is, or wraps (gymnasium's vector wrappers pass ``unwrapped`` through), or None.
+
+    gymnasium is optional, and a vector environment can only exist if it is already imported, so it is not imported here.
+    """
+    vec_mod = sys.modules.get("gymnasium.vector")
+    if vec_mod is None or not isinstance(env, vec_mod.VectorEnv):
+        return None
+    return getattr(env, "unwrapped", env)
+
+
+def _attach_vector(vec, *, advance, engine, dt, name: str, seed: int, settings) -> AttachedVectorWorlds:
+    """One world per sub-environment of a SyncVectorEnv, each through the single-environment path."""
+    from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
+
+    if isinstance(vec, AsyncVectorEnv):
+        raise CapabilityError(
+            "cannot attach to the sub-environments of an AsyncVectorEnv: each one runs in its own worker process, "
+            "and robowright reads the simulation from this process, so its state would have to be fetched or faked. "
+            "Use gymnasium.make_vec(..., vectorization_mode='sync') (a SyncVectorEnv) to attach to every index, "
+            "or attach to one environment built in this process: rw.attach(gymnasium.make(env_id))."
+        )
+    if not isinstance(vec, SyncVectorEnv):
+        raise CapabilityError(
+            f"cannot attach to {type(vec).__name__}: robowright reaches the sub-environments of a SyncVectorEnv only; "
+            "attach to one environment built in this process instead: rw.attach(env)."
+        )
+    worlds: list[AttachedWorld] = []
+    try:
+        for i, sub in enumerate(vec.envs):
+            # Each index keeps its own seed stream, so faults that draw from the rng differ between indices.
+            w = attach(sub, advance=advance, engine=engine, dt=dt, name=f"{name}[{i}]", seed=seed + i, settings=settings)
+            w.index = i
+            worlds.append(w)
+    except BaseException:
+        for w in worlds:  # what was attached so far is released, not left wrapping the sub-environments
+            w.close(failed=True)
+        raise
+    _current.set(worlds[0])
+    return AttachedVectorWorlds(worlds)
+
+
+class AttachedVectorWorlds:
+    """Every sub-environment of a SyncVectorEnv, each an :class:`AttachedWorld`: ``worlds[i]`` is index ``i``.
+
+    The vector env's ``step`` steps every index once, so each index records one trace step per vector step. An
+    autoreset (a sub-environment that ended resets inside the vector ``step``) is not a physics step: it appears on
+    that index's trace as an ``env.reset`` event at the step it happened, and no invariant is checked on the reset.
+    """
+
+    def __init__(self, worlds: list[AttachedWorld]):
+        self.worlds = worlds
+
+    def __len__(self) -> int:
+        return len(self.worlds)
+
+    def __getitem__(self, index: int) -> AttachedWorld:
+        return self.worlds[index]
+
+    def __iter__(self):
+        return iter(self.worlds)
+
+    def close(self, failed: bool | None = None) -> list:
+        """Close every index. A soft-failure error from one index is raised after all are closed."""
+        saved, error = [], None
+        for w in self.worlds:
+            try:
+                saved.append(w.close(failed=failed))
+            except ExpectationError as e:
+                error = error or e
+        if error is not None:
+            raise error
+        return saved
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close(failed=exc_type is not None)
+        return False
 
 
 def _is_drake_system(obj) -> bool:
