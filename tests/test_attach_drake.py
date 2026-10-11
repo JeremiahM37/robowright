@@ -11,10 +11,9 @@ example does before it simulates; the files themselves say nothing about where a
 import os
 
 import numpy as np
-import pydrake
 import pytest
 
-pytest.importorskip("pydrake")
+pydrake = pytest.importorskip("pydrake")
 
 from pydrake.math import RigidTransform  # noqa: E402
 from pydrake.multibody.parsing import Parser  # noqa: E402
