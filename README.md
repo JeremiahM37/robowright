@@ -344,8 +344,11 @@ replay trace.zip` runs it again and compares the state at every step (a Fetch pi
 of 80 steps replays bit-identical), and `robowright codegen trace.zip -o test_run.py` writes it as
 a test, with a long run's actions in a file beside it. An environment built by hand has no id to
 record: its test is written with a `make_env()` for you to fill in, and says so. Replay compares
-states and does not check expectations again; PyBullet and SAPIEN runs are recorded but not yet
-replayed.
+states and does not check expectations again. PyBullet (panda-gym) and SAPIEN (ManiSkill 3) runs
+replay and become tests too: those engines save no full state, so every body's pose is recorded
+and compared at every step, and the result is reported as within a tolerance (1e-6 m or rad), not
+as identical. Measured on one seed each (panda-gym pick-and-place, 300 steps; ManiSkill PickCube,
+120 steps), fresh-process replays differed by zero, and a changed action was caught one step later.
 
 ### What a passing test tells you
 
@@ -1472,7 +1475,8 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   those could not.
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis and Webots simulations (one
   environment at a time, on the CPU). Isaac Lab and GPU-batched environments are not attached
-  to yet. Only MuJoCo runs are replayed and turned into tests.
+  to yet. MuJoCo, PyBullet and SAPIEN runs are replayed and turned into tests; Drake, Genesis and
+  Webots runs are not.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
