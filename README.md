@@ -250,6 +250,26 @@ With Nav2's examples run as Nav2 launches them, the TurtleBot 4 arrives 0.17 m f
 goal tolerance is 0.25 m, and the example reports success at 0.35), and Nav2's belief stays
 within 0.26 m of where Gazebo has the robot.
 
+A wheeled robot also runs in robowright's own MuJoCo simulation, from its model file. The wheels
+are driven as wheels, on the floor, with the wheel radius and track measured from the model
+(TurtleBot 3 burger: 0.033 m and 0.160 m, its published figures):
+
+```python
+world = rw.launch(robot="turtlebot3_burger.urdf")  # ROBOTIS's URDF, as published
+robot = world.robot
+robot.base.drive(0.2, 0.0, 2.0)  # 0.39 m travelled: it accelerates, and wheels slip
+robot.base.go_to((1.0, 0.5), yaw=0.0, timeout=60)  # turn, drive, turn, on the true pose
+expect(robot.base).to_be_near((1.0, 0.5, 0.0), tol=0.05, timeout=3)
+```
+
+Here `go_to` is a turn-drive-turn controller on the simulation's true pose: it plans no path and
+avoids nothing, and raises when it does not arrive in time. Commanded against travelled, over
+2 s: the TurtleBot 3 burger and waffle drive 98 to 101% of a straight line and turn 92 to 99% of
+a pivot; the TurtleBot 4 drives 89% at 0.1 m/s and 76% at 0.2 m/s, which is not yet explained
+(its caster sits 0.6 mm below its wheels in the published model and carries much of its
+weight). `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
+for tests that need no particular robot.
+
 ### Test in a simulation someone else built
 
 Most robot-learning code runs in an environment its authors built: a Gymnasium, dm_control or
@@ -299,6 +319,15 @@ every body's pose and say that they cannot be redrawn. Holding is judged by forc
 contact existing: SAPIEN keeps zero-force contacts after a gripper lets go, which first read as
 "still held" on every seed. These suites pin different versions of their engines, so each runs
 in its own environment; the examples skip where a suite is not installed.
+
+A trace of an attached MuJoCo run keeps what made the environment (its gymnasium id, keyword
+arguments and episode limit), every reset and action, and the calls the test made. `robowright
+replay trace.zip` runs it again and compares the state at every step (a Fetch pick-and-place run
+of 80 steps replays bit-identical), and `robowright codegen trace.zip -o test_run.py` writes it as
+a test, with a long run's actions in a file beside it. An environment built by hand has no id to
+record: its test is written with a `make_env()` for you to fill in, and says so. Replay compares
+states and does not check expectations again; PyBullet and SAPIEN runs are recorded but not yet
+replayed.
 
 ### What a passing test tells you
 
@@ -1016,6 +1045,17 @@ a point inside a bin was carried at table height and caught on the rim. Points n
 whatever they lie over.) A session costs what MuJoCo
 costs: about 1 second of wall time for a launch, pick, place, check and screenshot.
 
+An agent can also attach to a simulation someone else built. `sim_attach` takes a gymnasium id
+(installed suites are registered for it, and a near miss is answered with the ids that exist), or
+a `module:callable` that returns an environment; `sim_subjects` lists the bodies, sites, joints
+and cameras to name; `sim_env_step` steps the environment's own step with a given, zero or
+sampled action. Snapshots, screenshots, `robot_expect`, `robot_push`, `robot_move_object` and
+traces work on it, and the calls that drive a robot robowright built say why they do not. On
+Gymnasium-Robotics' Fetch pick-and-place, a session that stepped the arm, shoved the block and
+checked where it was became, through `robot_generate_test`, a test that passes in a fresh
+process. Time moves only when the environment is stepped, so an expectation there is checked
+once and says so.
+
 ### Cross-check on another engine
 
 A run that passes on one engine may only pass because of that engine's contact model.
@@ -1408,7 +1448,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   those could not.
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet and SAPIEN simulations (one
   environment at a time, on the CPU). Isaac Lab and GPU-batched environments are not attached
-  to yet, and a trace of an attached run is not replayed or turned into a test.
+  to yet. Only MuJoCo runs are replayed and turned into tests.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
@@ -1418,9 +1458,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   (no grasp that rolls the hand); plain moves interpolate joints without checking for
   collisions (pass `plan=True`). A mobile base drives only where the arm cannot reach
   otherwise, as two idealised joints (no wheel slip).
-- **Mobile robots are behind ROS 2 only:** robowright watches and drives a wheeled robot through
-  its own stack (velocity commands, Nav2 goals) and plans nothing for it itself. There is no
-  wheeled robot in robowright's own engines.
+- **Mobile robots:** behind ROS 2, robowright watches and drives a wheeled robot through its
+  own stack (velocity commands, Nav2 goals). In its own simulation it drives differential-drive
+  bases on MuJoCo only, with no path planning and no obstacle avoidance; mecanum, omni and
+  caster-only bases are not driven, and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at a published or measured force (Franka Hand, xArm
