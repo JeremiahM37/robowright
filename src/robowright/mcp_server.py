@@ -273,6 +273,17 @@ def build_server(session: Session | None = None):
         return await run(s.crouch, depth)
 
     @tool
+    async def robot_drive(linear: float, angular: float, duration: float) -> str:
+        """Mobile: drive the base at linear m/s and angular rad/s (turning left is positive) for duration seconds, then stop."""
+        return await run(s.drive, linear, angular, duration)
+
+    @tool
+    async def robot_go_to(x: float, y: float, yaw: float | None = None) -> str:
+        """Mobile: send the base to map-frame (x, y) with heading yaw (radians, default 0). Its own navigation
+        stack plans and drives; the reply says where it ended up, or why the stack could not get it there."""
+        return await run(s.go_to, x, y, yaw)
+
+    @tool
     async def robot_wait(seconds: float) -> str:
         """Let simulated time pass with the robot holding its targets."""
         return await run(s.wait, seconds)

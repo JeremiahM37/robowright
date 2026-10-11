@@ -204,8 +204,14 @@ class Session:
                 "robot (mobile):",
                 f"  base: position {_f(base.position)}, yaw {math.degrees(base.yaw):.1f} deg",
                 f"  base velocity: {_f(base.velocity[:3])} m/s",
-                f"  wheels: {', '.join(f'{k} {v:.3f}' for k, v in r.joints.items())}",
             ]
+            try:  # the localizer's belief: a robot with no [ros2] base frames has none to show
+                est = base.estimate
+                lines.append(f"  belief (estimate): position {_f(est.position)}, yaw {math.degrees(est.yaw):.1f} deg")
+            except Exception as e:
+                lines.append(f"  belief (estimate): unavailable ({e})")
+            if r.joints:
+                lines.append(f"  wheels: {', '.join(f'{k} {v:.3f}' for k, v in r.joints.items())}")
         else:
             g = r.gripper
             lines += ["robot (arm):", f"  tcp: {_f(r.tcp.position)}"]
@@ -346,6 +352,20 @@ class Session:
 
     def crouch(self, depth: float = 0.5) -> str:
         return self._act(self._legged().crouch, depth)
+
+    def _mobile(self):
+        w = self._w()
+        if w.backend.robot_model.family != "mobile":
+            raise RobowrightError(f"{w.backend.robot_model.title} is not a mobile robot: use pick, place, move_to or gripper")
+        return w.robot.base
+
+    def drive(self, linear: float, angular: float, duration: float) -> str:
+        """Mobile: drive the base at ``linear`` m/s and ``angular`` rad/s for ``duration`` seconds, then stop."""
+        return self._act(self._mobile().drive, linear, angular, duration)
+
+    def go_to(self, x: float, y: float, yaw: float | None = None) -> str:
+        """Mobile: send the base to (x, y) in the map frame, with heading ``yaw``, and wait for its navigation stack."""
+        return self._act(self._mobile().go_to, (x, y), yaw=yaw)
 
     def _legged(self):
         w = self._w()

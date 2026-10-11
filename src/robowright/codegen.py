@@ -169,7 +169,7 @@ def generate(
             }[e["name"]]
             body.append(f"world.faults.{fn}({_kwargs(f)})")
         elif t == "action":
-            target = {"robot": "robot", "arm": "robot.arm", "gripper": "robot.gripper"}[e["name"].split(".")[0]]
+            target = {"robot": "robot", "arm": "robot.arm", "gripper": "robot.gripper", "base": "robot.base"}[e["name"].split(".")[0]]
             method = e["name"].split(".", 1)[1]
             if method == "run_policy":
                 body.extend(_policy_lines(a, imports))

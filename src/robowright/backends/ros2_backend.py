@@ -77,8 +77,10 @@ _DEFAULTS = {
     # The robot is in Gazebo, and robowright may drive Gazebo too: true, or {world = "name"} (and
     # model = "name" for the robot's model, where more than one could be it: default, its own name).
     "gazebo": False,
-    # Where the robot's base is in the ROS graph: {frame = "base_footprint", in = "map"} reads its
-    # pose from TF (``in`` -> ``frame``), the estimate a localizer such as AMCL publishes.
+    # A mobile robot's base. {frame = "base_footprint", in = "map"} reads where it is from TF (``in``
+    # -> ``frame``), the estimate a localizer such as AMCL publishes. cmd_vel and navigate name its
+    # velocity command topic and its navigation action when the ROS graph's own are not the names
+    # (found from the graph by default: a topic cmd_vel with a subscriber, and a NavigateToPose server).
     "base": None,
     # The topic a robot's own description is on (std_msgs/String, transient local), read when
     # the robot is not named.
@@ -101,8 +103,11 @@ def settings(options: dict | None = None) -> dict:
             if k in ("arm", "gripper") and not isinstance(v, dict):
                 raise ValueError(f"ros2 {k} is a table, e.g. {k} = {{controller = 'name', interface = '{_INTERFACES[k][1]}'}}, not {v!r}")
             out[k] = {**out[k], **v} if k in ("arm", "gripper") else v
-    if out["base"] is not None and set(out["base"]) - {"frame", "in"}:
-        raise ValueError("ros2 base takes frame and in, e.g. base = {frame = 'base_footprint', in = 'map'}")
+    if out["base"] is not None and set(out["base"]) - {"frame", "in", "cmd_vel", "navigate"}:
+        raise ValueError(
+            "ros2 base takes frame and in (where it is), and cmd_vel and navigate (its command topic and navigation action), "
+            "e.g. base = {frame = 'base_footprint', in = 'map'}"
+        )
     for part, allowed in _INTERFACES.items():
         if out[part].get("interface") not in (None, *allowed):
             raise ValueError(f"ros2 {part} interface is one of {', '.join(allowed)}, not {out[part].get('interface')!r}")
@@ -179,6 +184,9 @@ class Ros2Backend(Backend):
             self.capabilities = frozenset({RENDER})
         self._tf = None  # made on first use (see _tf_buffer)
         self._graph = None
+        self._base_pub = self._base_msg = None  # the base's velocity command, found and made on first drive (_cmd_vel_publisher)
+        self._base_cmd = None  # (linear, angular) every control step publishes while a drive runs
+        self._nav = None  # the navigation action client, made on first go_to
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
         self._spin = threading.Thread(target=self._executor.spin, daemon=True, name="robowright-ros2")
@@ -435,6 +443,8 @@ class Ros2Backend(Backend):
         from std_msgs.msg import Float64MultiArray
         from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
+        if self._arm_pub is None:
+            return  # a mobile base: its commands are its own (drive_base), not joint targets
         arm = list(map(float, target[: self.n_arm]))
         grip = self._grip_q(target[-1]) if self.has_gripper else None
         gi = self.cfg["gripper"]["interface"]  # "none": the gripper is read, never driven
@@ -560,6 +570,8 @@ class Ros2Backend(Backend):
         """Send this step's targets, then wait out the control period (on the ROS clock)."""
         if self.commands:
             self._send(self._ctrl)
+            if self._base_cmd is not None:
+                self._publish_twist(*self._base_cmd)
         self._tick += self.control_dt
         if self.cfg["use_sim_time"]:
             while self._now() < self._tick - 1e-9:
@@ -687,9 +699,137 @@ class Ros2Backend(Backend):
 
     def base_estimate(self) -> tuple[np.ndarray, np.ndarray]:
         """Where the robot THINKS its base is: TF from ``base.in`` to ``base.frame``."""
-        if self.cfg["base"] is None:
+        base = self.cfg["base"] or {}
+        if "frame" not in base or "in" not in base:
             raise ValueError("a mobile robot's base needs [ros2] base = {frame = ..., in = ...}, e.g. base_footprint in map")
-        return self._lookup(self.cfg["base"]["in"], self.cfg["base"]["frame"])
+        return self._lookup(base["in"], base["frame"])
+
+    # --- a mobile base's commands ----------------------------------------------------------
+    def drive_base(self, linear: float, angular: float) -> None:
+        """Command the base's velocity (m/s, rad/s) from now until :meth:`stop_base`: every control
+        step publishes it, so the stack's own timeouts on the command never see it go stale."""
+        self._base_cmd = (float(linear), float(angular))
+        self._publish_twist(*self._base_cmd)
+
+    def stop_base(self) -> None:
+        """Zero the base's velocity, once, and stop commanding it: whatever drives it after is its stack."""
+        self._base_cmd = None
+        if self._base_pub is not None:
+            self._publish_twist(0.0, 0.0)
+
+    def _publish_twist(self, linear: float, angular: float) -> None:
+        self._cmd_vel_publisher()
+        msg = self._base_msg()
+        twist = msg
+        if hasattr(msg, "twist"):  # TwistStamped: stamped in the base's frame
+            msg.header.stamp = self.node.get_clock().now().to_msg()
+            msg.header.frame_id = (self.cfg["base"] or {}).get("frame", "base_link")
+            twist = msg.twist
+        twist.linear.x, twist.angular.z = linear, angular
+        self._base_pub.publish(msg)
+
+    def _cmd_vel_publisher(self):
+        """The publisher on the base's command topic: found in the graph (a subscriber and a Twist
+        or TwistStamped type), made the first time a drive is asked for, and refused if nothing is
+        there to receive it."""
+        if self._base_pub is not None:
+            return self._base_pub
+        from ..errors import CapabilityError
+        from ..ros2_discover import find_cmd_vel
+
+        name = self.topic_name((self.cfg["base"] or {}).get("cmd_vel", "cmd_vel"))
+        deadline = _time.monotonic() + self.cfg["timeout"]
+        found = None
+        while found is None:
+            topics = {n: list(t) for n, t in self.node.get_topic_names_and_types()}
+            found = find_cmd_vel(topics, {name: self.node.count_subscribers(name)}, name)
+            if found is None:
+                if _time.monotonic() > deadline:
+                    shown = sorted(n for n, t in topics.items() if any(x.startswith("geometry_msgs/msg/Twist") for x in t))
+                    raise CapabilityError(
+                        f"nothing subscribes to {name} (a Twist or TwistStamped command topic) within {self.cfg['timeout']} s, so "
+                        f"the base cannot be driven. Command topics in the graph: {shown or 'none'}. Name the base's topic with "
+                        "[ros2] base = {cmd_vel = ...}, or set command = false to observe only."
+                    )
+                _time.sleep(0.05)
+        from rosidl_runtime_py.utilities import get_message
+
+        self._base_msg = get_message(found[1])
+        self._base_pub = self.node.create_publisher(self._base_msg, name, 10)
+        return self._base_pub
+
+    # --- a mobile base's navigation (Nav2's NavigateToPose) --------------------------------
+    def start_navigation(self, x: float, y: float, yaw: float) -> None:
+        """Send a goal to the robot's own navigation stack: the pose (x, y, yaw) in the frame the
+        stack plans in (``[ros2] base.in``, else ``map``). Nothing is planned here: Nav2 does that,
+        and :meth:`navigation_done` and :meth:`end_navigation` say how it went."""
+        from nav2_msgs.action import NavigateToPose
+        from rclpy.action import ActionClient
+
+        from ..errors import CapabilityError
+        from ..ros2_discover import find_navigate
+
+        if self._nav is None:
+            name = self.topic_name((self.cfg["base"] or {}).get("navigate", "navigate_to_pose"))
+            actions = {n: list(t) for n, t in self.node.get_action_names_and_types()}
+            if find_navigate(actions, name) is None:
+                raise CapabilityError(
+                    f"no navigation action {name} (nav2_msgs/action/NavigateToPose) in the ROS graph, so the base cannot be sent "
+                    "anywhere: the robot's navigation stack is not running. Name it with [ros2] base = {navigate = ...}, or drive it "
+                    "with robot.base.drive."
+                )
+            self._nav = (ActionClient(self.node, NavigateToPose, name), name)
+        client, name = self._nav
+        if not client.wait_for_server(timeout_sec=self.cfg["timeout"]):
+            raise TimeoutError(f"no action server {name} within {self.cfg['timeout']} s")
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = (self.cfg["base"] or {}).get("in", "map")
+        goal.pose.header.stamp = self.node.get_clock().now().to_msg()
+        goal.pose.pose.position.x, goal.pose.pose.position.y = float(x), float(y)
+        goal.pose.pose.orientation.z, goal.pose.pose.orientation.w = float(np.sin(yaw / 2)), float(np.cos(yaw / 2))
+        self._nav_move = move = {"handle": None, "done": None}
+
+        def answered(future):
+            result = future.result()
+            move["done"] = (result.status, result.result.error_code, result.result.error_msg)
+
+        def accepted(future):
+            move["handle"] = handle = future.result()
+            if handle.accepted:
+                handle.get_result_async().add_done_callback(answered)
+            else:
+                move["done"] = (None, None, "the navigation stack rejected the goal")
+
+        client.send_goal_async(goal).add_done_callback(accepted)
+
+    def navigation_done(self) -> bool:
+        return self._nav_move["done"] is not None
+
+    def end_navigation(self) -> None:
+        """Close the goal sent by :meth:`start_navigation`: ``ActionError`` with Nav2's own reason
+        unless it reached the goal."""
+        from action_msgs.msg import GoalStatus
+
+        from ..errors import ActionError
+
+        move = self._nav_move
+        if move["done"] is None:
+            if move["handle"] is not None and move["handle"].accepted:
+                move["handle"].cancel_goal_async()
+            return
+        status, code, text = move["done"]
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            return
+        if status is None:
+            raise ActionError(f"navigate_to_pose: {text}")
+        word = {GoalStatus.STATUS_ABORTED: "aborted", GoalStatus.STATUS_CANCELED: "canceled"}.get(status, f"ended with status {status}")
+        detail = f"error_code {code}: {text}" if code else (text or "no reason in the result")
+        raise ActionError(f"navigate_to_pose {word} ({detail})")
+
+    def cancel_navigation(self) -> None:
+        move = self._nav_move
+        if move["handle"] is not None and move["handle"].accepted:
+            move["handle"].cancel_goal_async()
 
     def base_velocity(self) -> np.ndarray:
         """Linear then angular velocity of the base. With Gazebo, its own; without, the change in
