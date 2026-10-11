@@ -311,11 +311,15 @@ measurement). [`examples/environments`](examples/environments) attaches the same
 | ManiSkill 3 (SAPIEN) | its own motion-planning solutions (pick, stack, push) | agrees with the environment's `success` on 15 of 15; with the cube moved 3 cm after reset, pick and push still succeed 5 of 5 and stack 4 of 5 |
 | panda-gym 3 (PyBullet) | none ships: a reach written in the test | PandaReach agrees with `is_success` 5 of 5; pick-and-place attaches |
 | gym-pybullet-drones (PyBullet) | its own `DSLPIDControl` | the drone hovers 5.4 mm from its target, and robowright's reading agrees with the environment's state to 1 mm |
+| Drake 1.57 (MultibodyPlant) | none ships an arm in this install: Drake's own table, block and Acrobot models | the block rests on the table with a contact force equal to its weight, and a 0.5 N push slides it 14 cm |
+| Genesis 1.4 (CPU) | none: the package's own Franka scene from its `play()` demo, plus a box | the box rests with a contact force equal to its weight, and a 6 N push moves it 16 mm |
 
-Attach reads MuJoCo, PyBullet and SAPIEN simulations through one small adapter each
+Attach reads MuJoCo, PyBullet, SAPIEN, Drake and Genesis simulations through one small adapter each
 ([`attached_engine.py`](src/robowright/backends/attached_engine.py) is the contract for another).
-A MuJoCo trace is redrawn frame by frame from their model; PyBullet and SAPIEN traces keep
-every body's pose and say that they cannot be redrawn. Holding is judged by force, not by a
+A MuJoCo trace is redrawn frame by frame from their model; the other engines' traces keep
+every body's pose and say that they cannot be redrawn. A Drake `Simulator` cannot be wrapped, so
+a loop around one steps through `world.step()` or calls `world.observe()`; Drake's hydroelastic
+contacts are not read. Holding is judged by force, not by a
 contact existing: SAPIEN keeps zero-force contacts after a gripper lets go, which first read as
 "still held" on every seed. These suites pin different versions of their engines, so each runs
 in its own environment; the examples skip where a suite is not installed.
@@ -1452,7 +1456,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   Gazebo, and against Universal Robots', MoveIt's, Kinova's and Nav2's own stacks, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
-- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet and SAPIEN simulations (one
+- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake and Genesis simulations (one
   environment at a time, on the CPU). Isaac Lab and GPU-batched environments are not attached
   to yet. Only MuJoCo runs are replayed and turned into tests.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
