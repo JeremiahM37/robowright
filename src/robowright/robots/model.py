@@ -268,6 +268,16 @@ class RobotModel:
         _copy_options(robot, world)
         world.attach(robot, prefix=PREFIX, frame=frame)
 
+    def ground_friction(self) -> dict[str, float]:
+        """Each link's sliding friction on the floor, from the model file's own Gazebo block (see
+        :func:`.from_urdf._keep_ground_friction`), by link name. Empty for a model that gives none."""
+        s = self.robot_spec()
+        return {
+            n[len("ground_friction:") :]: float(s.numeric(n).data[0])
+            for n in (k.name for k in s.numerics)
+            if n.startswith("ground_friction:")
+        }
+
     def keyframe_q(self) -> np.ndarray | None:
         s = mujoco.MjSpec.from_file(str(self.mjcf()))
         keys = {k.name: k for k in s.keys}
@@ -1077,3 +1087,29 @@ class Kinematics:
 
 def _skew(v):
     return np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+
+
+def add_ground_friction(world: mujoco.MjSpec, rm: RobotModel) -> None:
+    """Contact pairs between a wheeled robot's links and the floor, at the friction its own file gives them.
+
+    MuJoCo takes the larger of two geoms' friction coefficients, so a caster geom at 0.1 against the
+    floor's 1.0 still slides at 1.0. The file's Gazebo ``mu1`` is the maker's friction for that link on
+    the ground, and only a contact pair (which overrides both geoms) can set it. Only a wheeled base
+    gets this; the other families keep the scene's contact rules."""
+    if rm.family != "mobile":
+        return
+    for link, mu in sorted(rm.ground_friction().items()):
+        body = next((b for b in world.bodies if b.name == PREFIX + link), None)
+        if body is None:
+            continue
+        for i, g in enumerate(body.geoms):
+            if not (g.contype or g.conaffinity):
+                continue
+            g.name = g.name or f"{body.name}/ground{i}"
+            world.add_pair(geomname1="floor", geomname2=g.name, condim=4, friction=[mu, mu, 0.005, 0.0001, 0.0001])
+        fidelity.record(
+            "sourced",
+            f"{link} on the floor",
+            f"sliding friction {mu:g} as a contact pair with the floor (MuJoCo's default 1.0 otherwise)",
+            source="the model file's own <gazebo> mu1 for this link",
+        )

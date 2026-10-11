@@ -186,7 +186,7 @@ class Ros2Backend(Backend):
         self._tf = None  # made on first use (see _tf_buffer)
         self._graph = None
         self._base_pub = self._base_msg = None  # the base's velocity command, found and made on first drive (_cmd_vel_publisher)
-        self._base_cmd = None  # (linear, angular) every control step publishes while a drive runs
+        self._base_cmd = None  # (linear, angular, lateral) every control step publishes while a drive runs
         self._nav = None  # the navigation action client, made on first go_to
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
@@ -753,10 +753,10 @@ class Ros2Backend(Backend):
         return self._lookup(base["in"], base["frame"])
 
     # --- a mobile base's commands ----------------------------------------------------------
-    def drive_base(self, linear: float, angular: float) -> None:
-        """Command the base's velocity (m/s, rad/s) from now until :meth:`stop_base`: every control
-        step publishes it, so the stack's own timeouts on the command never see it go stale."""
-        self._base_cmd = (float(linear), float(angular))
+    def drive_base(self, linear: float, angular: float, lateral: float = 0.0) -> None:
+        """Command the base's velocity (m/s forward and sideways, rad/s) from now until :meth:`stop_base`:
+        every control step publishes it, so the stack's own timeouts on the command never see it go stale."""
+        self._base_cmd = (float(linear), float(angular), float(lateral))
         self._publish_twist(*self._base_cmd)
 
     def stop_base(self) -> None:
@@ -765,7 +765,7 @@ class Ros2Backend(Backend):
         if self._base_pub is not None:
             self._publish_twist(0.0, 0.0)
 
-    def _publish_twist(self, linear: float, angular: float) -> None:
+    def _publish_twist(self, linear: float, angular: float, lateral: float = 0.0) -> None:
         self._cmd_vel_publisher()
         msg = self._base_msg()
         twist = msg
@@ -773,7 +773,7 @@ class Ros2Backend(Backend):
             msg.header.stamp = self.node.get_clock().now().to_msg()
             msg.header.frame_id = (self.cfg["base"] or {}).get("frame", "base_link")
             twist = msg.twist
-        twist.linear.x, twist.angular.z = linear, angular
+        twist.linear.x, twist.linear.y, twist.angular.z = linear, lateral, angular
         self._base_pub.publish(msg)
 
     def _cmd_vel_publisher(self):

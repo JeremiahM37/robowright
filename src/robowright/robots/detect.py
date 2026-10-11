@@ -295,6 +295,8 @@ def _hold_mobile_base(path: Path) -> tuple[Path, list[str]]:
     moved = _moved_joints(m)
     if not free or not any(_is_gripper(m, a, j) for a, j in moved.items()) or _legs(m, int(m.jnt_bodyid[free[0]]), moved) >= 2:
         return path, []  # fixed already, nothing to hold, or a legged robot (a humanoid's hands are not a mobile base)
+    if free and _rolling_wheels(m, moved) is not None:
+        return path, []  # an omni base: its "gripper" is a kicker, and its wheels are what drives it
     base = m.body(int(m.jnt_bodyid[free[0]])).name
     qa, va = int(m.jnt_qposadr[free[0]]), int(m.jnt_dofadr[free[0]])
     for key in spec.keys:  # keyframes lose the free joint's position and velocity
@@ -415,6 +417,10 @@ def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | Non
         notes.append(f"armature: motor inertia added to {[j for j, _ in floor]} so their force-limited servos do not shake")
     if free:
         moved = _moved_joints(m)
+        if (rolling := _rolling_wheels(m, moved)) is not None:
+            # Omni or mecanum wheels on a free base: a holonomic base, its rollers driving it sideways as well.
+            out.update(_mobile(m, notes, int(m.jnt_bodyid[free[0]]), rolling))
+            return Detection(out, notes)
         if any(_is_gripper(m, a, j) for a, j in moved.items()) and _legs(m, int(m.jnt_bodyid[free[0]]), moved) < 2:
             # (build() holds such a base still first; this is detect() called on the model as it is.)
             raise DetectionError("a free-floating base with a gripper and no legs is a mobile manipulator: load it with robots.load")
@@ -1174,13 +1180,40 @@ def _wheeled(m: mujoco.MjModel) -> bool:
     return not any(b != c and c in _ancestors(m, b)[1:] for b in bodies for c in bodies)
 
 
-def _mobile(m: mujoco.MjModel, notes, base_body: int = 1) -> dict:
+def _mobile(m: mujoco.MjModel, notes, base_body: int = 1, wheels: list[int] | None = None) -> dict:
     """A mobile robot: its wheels are its controlled joints, and its base is the root body (or the
     body with the free joint, when it rolls on the floor)."""
-    joints = [next(iter(js)) for js in _moved_joints(m).values()]
+    joints = wheels or [next(iter(js)) for js in _moved_joints(m).values()]
     base = m.body(base_body).name  # the first body under the world: where the description's base is
     notes.append(f"family: mobile (no arm: {len(joints)} wheel joint(s) {[m.joint(j).name for j in joints]}, base {base!r})")
+    if wheels:
+        accessories = [j for js in _moved_joints(m).values() for j in js if j not in wheels]
+        notes.append(
+            f"wheels: omni or mecanum, driven through their passive rollers; {[m.joint(j).name for j in accessories]} "
+            "is not a wheel, held by its own actuator and not moved by drive()"
+        )
     return {"family": "mobile", "base_body": base, "arm_joints": tuple(m.joint(j).name for j in joints)}
+
+
+def _rolling_wheels(m: mujoco.MjModel, moved: dict[int, set[int]]) -> list[int] | None:
+    """The wheels of an omni or mecanum base: three or more actuated, unlimited hinges, each with passive
+    rollers (hinges on bodies beneath it), hanging off the base one each. At most one other actuated joint
+    is allowed (a kicker, say): an arm is a chain, and a base with an arm is not this. None otherwise."""
+    hinges, others = [], []
+    for js in moved.values():
+        for j in js:
+            b = int(m.jnt_bodyid[j])
+            rollers = [k for k in range(m.njnt) if m.jnt_type[k] == _HINGE and k != j and b in _ancestors(m, int(m.jnt_bodyid[k]))[1:]]
+            if m.jnt_type[j] == _HINGE and not m.jnt_limited[j] and rollers:
+                hinges.append(j)
+            else:
+                others.append(j)
+    if len(hinges) < 3 or len(others) > 1:
+        return None
+    bodies = [int(m.jnt_bodyid[j]) for j in hinges]
+    if any(b != c and c in _ancestors(m, b)[1:] for b in bodies for c in bodies):
+        return None  # a wheel on another wheel: an arm, not wheels
+    return hinges
 
 
 def _legged(m: mujoco.MjModel, free: int, notes) -> dict:

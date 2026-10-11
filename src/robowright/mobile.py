@@ -52,14 +52,17 @@ class MobileBase(Base):
         self.estimate = Estimate(robot)
 
     @action
-    def drive(self, linear: float, angular: float, duration: float):
-        """Command the base's velocity (m/s forward, rad/s turning) for ``duration`` seconds, then stop."""
-        linear, angular, duration = float(linear), float(angular), float(duration)
-        if not np.isfinite([linear, angular, duration]).all() or duration <= 0:
-            raise ValueError(f"drive takes finite velocities and a duration above zero, not {linear}, {angular}, {duration}")
+    def drive(self, linear: float, angular: float, duration: float, lateral: float = 0.0):
+        """Command the base's velocity (m/s forward, rad/s turning, and m/s sideways for an omni or mecanum
+        base) for ``duration`` seconds, then stop. ``lateral`` is the base's own +y, as a Twist's linear.y is."""
+        linear, angular, duration, lateral = float(linear), float(angular), float(duration), float(lateral)
+        if not np.isfinite([linear, angular, duration, lateral]).all() or duration <= 0:
+            raise ValueError(
+                f"drive takes finite velocities and a duration above zero, not {linear}, {angular}, {duration}, lateral {lateral}"
+            )
         b = self.world.backend
         try:
-            b.drive_base(linear, angular)
+            b.drive_base(linear, angular, lateral)
             self.world.step(max(1, round(duration / self.world.dt)))  # not world.wait: the trace has this action, not a wait
         finally:
             b.stop_base()
