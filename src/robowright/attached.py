@@ -1,4 +1,9 @@
-"""Attach robowright to a MuJoCo simulation someone else built, and test it as it is.
+"""Attach robowright to a simulation someone else built, and test it as it is.
+
+The engine is found from the environment: MuJoCo (gymnasium, dm_control, robosuite), or PyBullet
+(panda-gym, gym-pybullet-drones, or a bare client with ``engine="pybullet", client=...``). Each engine is one
+adapter on the contract in :mod:`robowright.backends.attached_engine`; nothing here reads an engine directly.
+
 
     env = gym.make("gym_aloha/AlohaTransferCube-v0", obs_type="pixels_agent_pos")
     world = rw.attach(env, advance=lambda: advance_one_step())   # advance is optional
