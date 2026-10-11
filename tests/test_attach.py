@@ -222,3 +222,13 @@ def test_trace_saved_with_model_and_redrawn_from_state(toy):
     finally:
         r.close()
     assert "box" in tr.summary()
+
+
+def test_run_drives_their_step_until_a_condition_then_gives_back_the_loop(toy):
+    env, w = toy()
+    env.reset(seed=0)
+    ok = w.run(lambda: env.step(np.zeros(1)), until=lambda: w.body("box").position[2] < 0.25, timeout=3.0)
+    assert ok and 0 < w.time < 3.0
+    assert w.step_count == round(w.time / w.dt)
+    with pytest.raises(CapabilityError):  # the run was for that call only: nothing waits afterwards
+        w.step(1)
