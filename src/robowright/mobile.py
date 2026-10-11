@@ -84,7 +84,14 @@ class MobileBase(Base):
             self.world.step()
         if not b.navigation_done():
             b.cancel_navigation()
-            raise ActionTimeoutError(f"the base did not reach ({x}, {y}) within {timeout} s of the world's clock")
+            # Where the base is when the stack gives up is the answer to "did it stall, or is it still coming":
+            # Nav2 counts a goal reached within its own xy_goal_tolerance, which is wider than an expectation's.
+            pos, _ = b.base_pose()
+            left = float(np.hypot(x - float(pos[0]), y - float(pos[1])))
+            raise ActionTimeoutError(
+                f"the base did not reach ({x}, {y}) within {timeout} s of the world's clock: it is at "
+                f"({float(pos[0]):.3f}, {float(pos[1]):.3f}), {left:.3f} m from the goal"
+            )
         b.end_navigation()
 
     # Arrival tolerances: a goal counts as reached within these, in metres and radians.

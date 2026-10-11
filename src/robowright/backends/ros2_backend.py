@@ -577,6 +577,13 @@ class Ros2Backend(Backend):
             self._send(self._ctrl)
             if self._base_cmd is not None:
                 self._publish_twist(*self._base_cmd)
+        if self.cfg["use_sim_time"]:
+            # Between two calls the simulator keeps running, so the clock can be well past this schedule. Stepping on
+            # from the old schedule would wait for nothing and send the targets in a burst the simulator never runs
+            # (measured: a drive after 6 s of idle took 0 s of sim time and moved the base 0 m, and so did every drive
+            # after it). Carry on from the clock instead, as the wall-clock branch below does when it runs behind.
+            if self._now() > self._tick + self.control_dt:
+                self._tick = self._now()
         self._tick += self.control_dt
         if self.cfg["use_sim_time"]:
             while self._now() < self._tick - 1e-9:
