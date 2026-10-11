@@ -61,6 +61,22 @@ if [ "${1:-}" = "nav2" ]; then
     "$ENV-nav2/bin/uv" pip install --python "$ENV-nav2/bin/python" -e "$REPO[dev]"
     exit 0
 fi
+if [ "${1:-}" = "xarm" ]; then
+    # UFACTORY's xarm_ros2 (jazzy) at a pinned commit, for the xArm Gazebo rig (tests/xarm_gz_rig.py):
+    # its launch files, descriptions and controller configs are used as shipped; the rig makes them
+    # visible to ROS 2 through an ament index of its own. The one library built here is xarm_gazebo's
+    # mimic-joint plugin, which the gripper's joints need, into $XARM_WS/lib (not the env).
+    XARM_WS="${ROBOWRIGHT_XARM_WS:-/mnt/bulk/rw-ext/xarm-ws}"
+    rm -rf "$ENV/src/xarm_ros2"
+    git init -q "$ENV/src/xarm_ros2"
+    git -C "$ENV/src/xarm_ros2" fetch -q --depth 1 https://github.com/xArm-Developer/xarm_ros2.git 3dc2b5e8294758d96b54b15fa5920d581b7cbb3d
+    git -C "$ENV/src/xarm_ros2" checkout -q FETCH_HEAD
+    V="$ENV/src/xarm_ros2"
+    mkdir -p "$XARM_WS/lib"
+    "$MM" run -p "$ENV" bash -c "x86_64-conda-linux-gnu-g++ -shared -fPIC -std=c++17 -O2 -I$V/xarm_gazebo/include \$(pkg-config --cflags gz-sim8 sdformat14) $V/xarm_gazebo/src/mimic_joint_plugin.cpp \$(pkg-config --libs gz-sim8 sdformat14) -o $XARM_WS/lib/libgazebo_mimic_joint_plugin.so -w" \
+        || { echo "mimic plugin build failed" >&2; exit 1; }
+    exit 0
+fi
 if [ "${1:-}" = "kortex" ]; then
     # Kinova's ros2_kortex, for kortex_bringup's simulation launch (tests/kinova_gz_rig.py), and
     # the Robotiq 2F-85 description its main branch expects: RoboStack's robotiq_description is
