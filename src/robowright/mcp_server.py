@@ -196,12 +196,16 @@ def build_server(session: Session | None = None):
 
     @tool
     async def sim_attach(env_id: str = "", kwargs: dict | None = None, seed: int | None = 0, entry_point: str | None = None) -> str:
-        """Attach to a simulation someone else built, and watch and drive it: a gymnasium environment by
-        env_id (e.g. "gym_aloha/AlohaTransferCube-v0"; kwargs as gymnasium.make takes them), or entry_point
-        "module:callable" that returns an environment (called with kwargs). It is reset with seed (None: not
-        seeded). Closes any open world. Time moves only when sim_env_step steps the environment: their own
-        loop is not robowright's. Returns the snapshot, or why it could not attach, with the registered ids
-        that look like env_id."""
+        """Attach to a simulation someone else built, and watch and drive it. env_id: a registered gymnasium id
+        (e.g. "FetchPickAndPlace-v4", "gym_aloha/AlohaTransferCube-v0"; kwargs as gymnasium.make takes them), or
+        gymnasium's own "module:EnvId" form, which imports the module first. If the id is not registered yet,
+        the installed environment packages (gymnasium-robotics, ManiSkill, panda-gym, gym-aloha, ...) are
+        imported to register theirs, then it is retried. entry_point: "module:callable" that returns an
+        environment, called with kwargs (Meta-World: entry_point="metaworld:make_mt_envs",
+        kwargs={"name": "pick-place-v3", "seed": 0}). It is reset with seed (None: not seeded). Closes any open
+        world. Time moves only when sim_env_step steps the environment: their own loop is not robowright's.
+        Returns the snapshot, or why it could not attach: the ids that look like env_id, which packages were
+        registered, and which imports failed."""
         return await run(s.sim_attach, env_id, kwargs, seed, entry_point)
 
     @tool

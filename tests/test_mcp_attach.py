@@ -350,3 +350,12 @@ def test_an_unknown_env_id_lists_the_registered_ids_that_look_like_it(session, m
         assert "registered ids that look like it: gym_aloha/AlohaTransferCube-v0" in text, text
 
     drive(session, scenario)
+
+
+def test_suite_note_names_what_registered_and_what_failed():
+    from robowright.session import _suite_note
+
+    assert _suite_note(["gymnasium_robotics"], {"panda_gym": "ImportError: no module named pybullet"}) == (
+        "packages registered: gymnasium_robotics; failed to import: panda_gym (ImportError: no module named pybullet)"
+    )
+    assert "none (no known environment package is installed)" in _suite_note([], {})

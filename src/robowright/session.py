@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import difflib
 import functools
+import inspect
 import io
 import math
 import re
@@ -89,6 +90,42 @@ def _close_env(env) -> None:
         close()
 
 
+# Environment packages whose ids gymnasium only knows once their module is handed to gymnasium or imported.
+# How each one registers follows its own examples in examples/environments/. Only gymnasium-robotics is
+# verified against the real package; the others register on import and are not installed here.
+_ENV_PACKAGES = (
+    ("gymnasium_robotics", "register"),  # gymnasium.register_envs(module), as its examples do
+    ("mani_skill", "import"),  # ManiSkill registers its ids when mani_skill is imported
+    ("panda_gym", "import"),
+    ("pybullet_envs_gymnasium", "import"),
+    ("gym_aloha", "import"),
+)
+_suites: tuple[list[str], dict[str, str]] | None = None  # per process: packages registered, and imports that failed
+
+
+def _register_installed_suites(gymnasium) -> tuple[list[str], dict[str, str]]:
+    """Import every installed environment package once, so its ids are registered. A package that fails to import
+    is reported and does not stop the others."""
+    global _suites
+    if _suites is None:
+        import importlib
+        import importlib.util
+
+        loaded, failed = [], {}
+        for name, how in _ENV_PACKAGES:
+            if importlib.util.find_spec(name) is None:
+                continue
+            try:
+                module = importlib.import_module(name)
+                if how == "register":
+                    gymnasium.register_envs(module)
+                loaded.append(name)
+            except Exception as e:
+                failed[name] = f"{type(e).__name__}: {e}"
+        _suites = (loaded, failed)
+    return _suites
+
+
 def _registered_like(query: str) -> str:
     """The registered gymnasium ids that look like ``query``, so an agent can pick one that exists."""
     try:
@@ -103,6 +140,14 @@ def _registered_like(query: str) -> str:
     if not found:
         return f"{len(ids)} environment ids are registered; none looks like it"
     return "registered ids that look like it: " + ", ".join(found)
+
+
+def _suite_note(loaded: list[str], failed: dict[str, str]) -> str:
+    """What was registered from installed packages, and which imports failed."""
+    text = "packages registered: " + (", ".join(loaded) or "none (no known environment package is installed)")
+    if failed:
+        text += "; failed to import: " + "; ".join(f"{k} ({v})" for k, v in failed.items())
+    return text
 
 
 def _views(cam: CameraSpec, objects) -> list[CameraSpec]:
@@ -260,7 +305,9 @@ class Session:
             )
             raise RobowrightError(f"cannot attach to {label}: {type(e).__name__}: {e}.{hint}") from e
         world.source = "session"
-        self.world, self.env, self.env_label = world, env, label
+        spec_id = getattr(getattr(env, "spec", None), "id", None)  # the id gymnasium resolved, e.g. FetchPickAndPlace -> -v4
+        self.world, self.env = world, env
+        self.env_label = f"{spec_id}, {label}" if spec_id else label
         return self.snapshot()
 
     @staticmethod
@@ -289,9 +336,15 @@ class Session:
                 "or pass entry_point='module:callable'"
             ) from e
         try:
-            return gymnasium.make(env_id, **kwargs)
-        except Exception as e:
-            raise RobowrightError(f"cannot make {env_id!r}: {type(e).__name__}: {e}. {_registered_like(env_id)}") from e
+            return gymnasium.make(env_id, **kwargs)  # also "module:EnvId": gymnasium imports the module first
+        except Exception:
+            # Not registered yet: the installed suites register their ids, then the lookup is retried.
+            loaded, failed = _register_installed_suites(gymnasium)
+            try:
+                return gymnasium.make(env_id, **kwargs)
+            except Exception as e:
+                reason = f"{type(e).__name__}: {str(e).rstrip('.')}"
+                raise RobowrightError(f"cannot make {env_id!r}: {reason}. {_registered_like(env_id)}. {_suite_note(loaded, failed)}") from e
 
     # --- observation -----------------------------------------------------------
     def snapshot(self) -> str:
@@ -830,11 +883,18 @@ class Session:
         e = expect(subj, timeout=timeout, world=w)
         if negate:
             e = e.not_
+        # With no advance callable nothing steps the world: the state is checked once, and a hold (time the
+        # state must stay true) cannot pass, so it is not waited for.
+        once = getattr(w, "_advance", 1) is None
+        note = " (checked once: this simulation has no advance callable, so time did not pass and no hold was waited for)" if once else ""
+        if once and "hold" in inspect.signature(getattr(e, matcher)).parameters:
+            kw.setdefault("hold", 0.0)
         try:
             self._attempt(getattr(e, matcher), **kw)
         except ExpectationError as err:
-            return f"FAIL: {err}"
-        return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({', '.join(f'{k}={v!r}' for k, v in (args or {}).items())})"
+            return f"FAIL: {err}{note}"
+        shown = ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
+        return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({shown}){note}"
 
     def _subject(self, name: str):
         if self.env is not None:  # an attached simulation: its named bodies and joints are the only subjects
