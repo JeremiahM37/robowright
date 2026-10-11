@@ -12,6 +12,7 @@
 #   scripts/ros2_env.sh create                  # once (about 2 GB)
 #   scripts/ros2_env.sh kortex                  # Kinova's ros2_kortex and Robotiq's descriptions, for the Kinova Gazebo rig
 #   scripts/ros2_env.sh nav2                    # a second environment with Nav2 and its TurtleBot simulations
+#   scripts/ros2_env.sh franka                  # Franka's franka_ros2 and franka_description, built, for the Franka Gazebo tests
 #   scripts/ros2_env.sh pytest tests/test_ros2.py
 #
 # The environment lives in $ROBOWRIGHT_ROS2_ENV (default ~/.cache/robowright/ros2-jazzy).
@@ -92,6 +93,72 @@ if [ "${1:-}" = "ros2_control" ]; then
         || { tail -20 "$ENV/overlay/build.log" >&2; exit 1; }
     cp "$ENV/overlay/build/libcontroller_manager.so" "$ENV/overlay/lib/"
     rm -rf "$ENV/overlay/build"
+    exit 0
+fi
+if [ "${1:-}" = "franka" ]; then
+    # Franka Robotics' own stack for tests/test_franka_gazebo.py: franka_ros2 (jazzy, 4acc05c) and
+    # franka_description (2.9.0, 7aeeddc), built with colcon into $FRANKA_WS, in an environment of their
+    # own ($FRANKA_ENV, default $ENV-franka). libfranka is built from its 0.20.5 source, which is Franka's
+    # pin, against Pinocchio 4.1.0 and Eigen 5.0.1 from conda-forge: those two are conda-forge's current
+    # versions, not Franka's pins (libfranka 0.20.5 declares no version for them here). The 0.20.5 package
+    # on conda-forge conflicts with the Gazebo vendor's Poco, so it is built instead. Nothing is installed
+    # into $ENV. On this machine: ROBOWRIGHT_FRANKA_ENV=/mnt/bulk/ros2-env/jazzy-franka
+    # ROBOWRIGHT_FRANKA_WS=/mnt/bulk/rw-ext/franka-ws, and the tests run with ROBOWRIGHT_ROS2_ENV set to the same env.
+    FRANKA_ENV="${ROBOWRIGHT_FRANKA_ENV:-$ENV-franka}"
+    FRANKA_WS="${ROBOWRIGHT_FRANKA_WS:-$FRANKA_ENV-ws}"  # tests/franka_gz_rig.py finds it at the same place
+    [ -x "$MM" ] || { echo "run $0 create first (it fetches micromamba)" >&2; exit 1; }
+    if [ ! -x "$FRANKA_ENV/bin/python" ]; then
+        MAMBA_ROOT_PREFIX="$TOOLS/root" "$MM" create -y -p "$FRANKA_ENV" -c conda-forge -c robostack-jazzy \
+            python=3.12 ros-jazzy-ros-base ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
+            ros-jazzy-controller-manager ros-jazzy-gz-ros2-control ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge \
+            ros-jazzy-robot-state-publisher ros-jazzy-joint-state-publisher-gui ros-jazzy-sdformat-urdf \
+            ros-jazzy-realsense2-description ros-jazzy-ros2controlcli ros-jazzy-xacro ros-jazzy-realtime-tools \
+            ros-jazzy-hardware-interface ros-jazzy-ament-cmake-gmock ros-jazzy-rclcpp-action \
+            ros-jazzy-rclcpp-components ros-jazzy-pluginlib ros-jazzy-tf2-ros-py ros-jazzy-control-msgs \
+            ros-jazzy-trajectory-msgs ros-jazzy-test-msgs ros-jazzy-moveit-core \
+            ros-jazzy-ament-cmake-clang-format ros-jazzy-ament-cmake-copyright ros-jazzy-ament-cmake-cppcheck \
+            ros-jazzy-ament-cmake-flake8 ros-jazzy-ament-cmake-lint-cmake ros-jazzy-ament-cmake-pep257 \
+            ros-jazzy-ament-cmake-xmllint ros-jazzy-ament-lint-auto ros-jazzy-ament-cmake-clang-tidy \
+            pinocchio gxx_linux-64 make cmake pkg-config uv
+    fi
+    "$FRANKA_ENV/bin/uv" pip install --python "$FRANKA_ENV/bin/python" -q colcon-core colcon-common-extensions
+    "$FRANKA_ENV/bin/uv" pip install --python "$FRANKA_ENV/bin/python" -q -e "$REPO[dev]"
+    mkdir -p "$FRANKA_WS/src"
+    fetch() {  # fetch URL COMMIT DIR (as the kortex block)
+        rm -rf "$3"
+        git init -q "$3"
+        git -C "$3" fetch -q --depth 1 "$1" "$2"
+        git -C "$3" checkout -q FETCH_HEAD
+    }
+    if [ ! -f "$FRANKA_WS/libfranka-install/lib/cmake/Franka/FrankaConfig.cmake" ] && [ ! -f "$FRANKA_WS/libfranka-install/lib/cmake/Franka/FrankaTargets.cmake" ]; then
+        rm -rf "$FRANKA_WS/libfranka-src" "$FRANKA_WS/libfranka-build"
+        git -c advice.detachedHead=false clone -q --depth 1 --branch 0.20.5 --recurse-submodules --shallow-submodules \
+            https://github.com/frankarobotics/libfranka.git "$FRANKA_WS/libfranka-src"
+        "$MM" run -p "$FRANKA_ENV" cmake -S "$FRANKA_WS/libfranka-src" -B "$FRANKA_WS/libfranka-build" \
+            -DEigen3_DIR="$FRANKA_ENV/share/eigen3/cmake" -DEIGEN3_INCLUDE_DIRS="$FRANKA_ENV/include/eigen3" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$FRANKA_WS/libfranka-install" \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_DOCUMENTATION=OFF \
+            -DCMAKE_C_COMPILER="$FRANKA_ENV/bin/x86_64-conda-linux-gnu-cc" \
+            -DCMAKE_CXX_COMPILER="$FRANKA_ENV/bin/x86_64-conda-linux-gnu-c++" > "$FRANKA_WS/libfranka-cmake.log" 2>&1
+        "$MM" run -p "$FRANKA_ENV" cmake --build "$FRANKA_WS/libfranka-build" -j"$(nproc)" >> "$FRANKA_WS/libfranka-cmake.log" 2>&1
+        "$MM" run -p "$FRANKA_ENV" cmake --install "$FRANKA_WS/libfranka-build" >> "$FRANKA_WS/libfranka-cmake.log" 2>&1
+    fi
+    fetch https://github.com/frankarobotics/franka_ros2.git 4acc05c01ebfcdf916ee6b3df966df0ad7b2f9ec "$FRANKA_WS/src/franka_ros2"
+    fetch https://github.com/frankarobotics/franka_description.git 7aeeddc449edf8d62b594f9e36a81da53e7796f9 "$FRANKA_WS/src/franka_description"
+    # conda-forge's pinocchio exports sdformat::requested in its link interface, but no target by that name
+    # exists in the env's sdformat configs, so every consumer fails with "-lsdformat::requested" at link
+    # time. Only the name is dropped: pinocchio's own libraries are unchanged. This edits a file in
+    # $FRANKA_ENV, which is ours; it is not Franka's code, and the original is kept beside it as .orig.
+    P="$FRANKA_ENV/lib/cmake/pinocchio/pinocchioTargets.cmake"
+    if grep -q ";sdformat::requested" "$P"; then
+        cp -n "$P" "$P.orig"
+        sed -i 's/;sdformat::requested//' "$P"
+    fi
+    cd "$FRANKA_WS" && CMAKE_PREFIX_PATH="$FRANKA_WS/libfranka-install" "$MM" run -p "$FRANKA_ENV" \
+        colcon build --base-paths src --symlink-install --packages-up-to franka_gazebo_bringup \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+        "-DCMAKE_PREFIX_PATH=$FRANKA_WS/libfranka-install;$FRANKA_ENV" > "$FRANKA_WS/colcon.log" 2>&1 \
+        || { grep -n "Failed\|Aborted" "$FRANKA_WS/colcon.log" >&2; exit 1; }
     exit 0
 fi
 [ -x "$ENV/bin/python" ] || { echo "no ROS 2 environment at $ENV: run $0 create" >&2; exit 1; }
