@@ -827,8 +827,8 @@ class Ros2Backend(Backend):
         if status is None:
             raise ActionError(f"navigate_to_pose: {text}")
         word = {GoalStatus.STATUS_ABORTED: "aborted", GoalStatus.STATUS_CANCELED: "canceled"}.get(status, f"ended with status {status}")
-        detail = f"error_code {code}: {text}" if code else (text or "no reason in the result")
-        raise ActionError(f"navigate_to_pose {word} ({detail})")
+        reason = [NAV2_ERRORS.get(code, f"error_code {code}")] if code else []
+        raise ActionError(f"navigate_to_pose {word}: {', '.join([*reason, text] if text else reason) or 'Nav2 gave no reason'}")
 
     def cancel_navigation(self) -> None:
         move = self._nav_move
@@ -915,6 +915,20 @@ def _resize(img: np.ndarray, width: int, height: int) -> np.ndarray:
         img = img[ys][:, xs]
     return np.ascontiguousarray(img)
 
+
+# nav2_msgs/action/ComputePathToPose.action: the planner's error codes, which the navigation action's
+# result carries too (its own result has the code and no message of its own, as measured on Nav2 Jazzy)
+NAV2_ERRORS = {
+    200: "UNKNOWN",
+    201: "INVALID_PLANNER",
+    202: "TF_ERROR",
+    203: "START_OUTSIDE_MAP",
+    204: "GOAL_OUTSIDE_MAP",
+    205: "START_OCCUPIED",
+    206: "GOAL_OCCUPIED",
+    207: "TIMEOUT",
+    208: "NO_VALID_PATH",
+}
 
 _SPAWNED: dict[str, set[str]] = {}  # Gazebo world -> the models robowright spawned into it
 

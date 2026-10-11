@@ -47,9 +47,9 @@ os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
 SPAWN = (-2.0, -0.5, 0.0)  # where nav2_bringup's launch file puts the robot in the sandbox world (z: on the floor)
 SCAN_HZ = 5.0  # the lidar's update_rate in nav2_minimal_tb3_sim's waffle description
 # The sandbox map (nav2_bringup's tb3_sandbox.pgm, 0.05 m cells): (0.5, -0.5) is open floor in the room
-# the robot starts in; (-1.0, 0.0) is one of its occupied poles; (30.0, 0.0) is off the map.
+# the robot starts in; (0.0, -2.6) is an occupied cell of the room's south wall; (30.0, 0.0) is off the map.
 OPEN_GOAL = (0.5, -0.5)
-POLE = (-1.0, 0.0)
+WALL = (0.0, -2.6)
 OFF_MAP = (30.0, 0.0)
 GOAL_TOL = 0.25  # xy_goal_tolerance in nav2_bringup's nav2_params.yaml: where Nav2 itself counts a goal reached
 
@@ -174,12 +174,12 @@ def test_the_base_goes_to_a_point_on_the_map(driven):
     e_belief = float(np.linalg.norm(belief - OPEN_GOAL))
     print(f"\nmeasured: arrived in {elapsed:.1f} s (world clock); truth error {e_truth:.3f} m, belief error {e_belief:.3f} m", flush=True)
     assert e_truth <= GOAL_TOL
-    expect(b.estimate).to_be_near(OPEN_GOAL, tol=GOAL_TOL, timeout=5)
+    expect(b.estimate).to_be_near((*OPEN_GOAL, 0.0), tol=GOAL_TOL, timeout=5)  # the base frame is 1 cm above the floor
 
 
-def test_a_goal_inside_an_obstacle_is_refused_with_nav2s_reason(driven):
+def test_a_goal_inside_a_wall_is_refused_with_nav2s_reason(driven):
     with pytest.raises(ActionError) as e:
-        driven.robot.base.go_to(POLE, yaw=0.0, timeout=90)
+        driven.robot.base.go_to(WALL, yaw=0.0, timeout=90)
     print(f"\nmeasured: ActionError: {e.value}", flush=True)
     assert "navigate_to_pose" in str(e.value)
 
