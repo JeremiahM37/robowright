@@ -27,7 +27,8 @@ INSTRUCTIONS = """\
 Test robot software against a simulated robot (MuJoCo by default; deterministic physics),
 or a robot behind ROS 2 (robot_launch backend="ros2": Gazebo, Isaac Sim, a real arm).
 Start with robot_launch, then robot_snapshot to see the world: objects are named (those
-names are the refs other tools take).
+names are the refs other tools take). For a robot behind ROS 2, start with ros2_inspect: it
+says what is running and gives the settings robot_launch needs.
 
 The code under test is the user's: run their controller or policy with robot_run_policy
 ("package.module:name"), or serve the simulation as a ROS 2 robot with robot_serve_ros2 and
@@ -92,7 +93,7 @@ def build_server(session: Session | None = None):
 
     @tool
     async def robot_launch(
-        robot: str = "so101",
+        robot: str | None = None,
         backend: str = "mujoco",
         seed: int = 0,
         objects: list[dict] | None = None,
@@ -102,11 +103,14 @@ def build_server(session: Session | None = None):
     ) -> str:
         """Start a fresh world, closing any open one, and return its snapshot.
 
-        robot: a name from robot_list_robots, or a model file. backend: mujoco (default,
-        fastest), pybullet, drake, genesis or isaac, whichever are installed; or ros2 to
-        connect to a robot behind ROS 2, with ros2 its settings, e.g. {"frame": "base_link",
-        "objects": {"cube": "cube"}, "use_sim_time": true, "command": false (observe only),
-        "gazebo": true (the robot is in Gazebo: drive Gazebo too)}. robot_options: for a robot
+        robot: a name from robot_list_robots, or a model file (default: the SO-101). backend:
+        mujoco (default, fastest), pybullet, drake, genesis or isaac, whichever are installed; or
+        ros2 to connect to a robot behind ROS 2. There, call ros2_inspect first: it returns the
+        ros2 settings to pass here. Leave robot out and the robot is read from the description
+        its own stack publishes; leave the controllers out and they are found. ros2 settings,
+        e.g. {"frame": "base_link", "use_sim_time": true, "gazebo": true (the robot is in Gazebo:
+        drive Gazebo too), "command": false (observe only: the user's own code moves the robot),
+        "objects": {"cube": "cube"} (objects seen as TF frames)}. robot_options: for a robot
         given as a model file, e.g. {"gripper": false, "base_pos": [0, 0, 0]} (an arm with no
         gripper, standing at the world origin). fidelity: "published" (default:
         the model as its makers published it) or "adjusted" (robowright's tuning too). seed:
@@ -120,6 +124,13 @@ def build_server(session: Session | None = None):
         return await run(
             s.launch, robot=robot, backend=backend, seed=seed, objects=objects, fidelity=fidelity, ros2=ros2, robot_options=robot_options
         )
+
+    @tool
+    async def ros2_inspect(namespace: str = "", timeout: float = 5.0) -> str:
+        """What is running behind ROS 2 before connecting to it: the robot's description, its
+        joints, its controllers and how each is driven, whether it runs on simulation time,
+        whether Gazebo is there, and the ros2 settings to give robot_launch(backend="ros2")."""
+        return await run(s.ros2_inspect, namespace, timeout)
 
     @tool
     async def robot_run_policy(

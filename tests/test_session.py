@@ -275,7 +275,7 @@ def test_ros2_launch_has_no_objects_unless_asked_and_never_moves_the_robot(monke
 
     seen = {}
     monkeypatch.setattr(world_mod, "World", lambda spec, **kw: seen.update(spec=spec))
-    world_mod.launch(backend="ros2")
+    world_mod.launch(backend="ros2", robot="so101")
     assert seen["spec"].objects == []
     world_mod.launch(backend="mujoco")
     assert seen["spec"].objects  # the default tabletop, as before

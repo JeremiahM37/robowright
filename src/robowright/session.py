@@ -94,7 +94,7 @@ class Session:
     # --- lifecycle -------------------------------------------------------------
     def launch(
         self,
-        robot: str | None = "so101",
+        robot: str | None = None,
         backend: str = "mujoco",
         seed: int = 0,
         objects: list[dict] | None = None,
@@ -112,6 +112,8 @@ class Session:
         file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``)."""
         if self.world is not None:
             self.close()
+        if backend != "ros2":
+            robot = robot or "so101"
         if backend == "ros2":
             from .world import _ros_robot
 
@@ -150,6 +152,16 @@ class Session:
         if "size" in o:
             o["size"] = tuple(float(v) for v in o["size"])
         return ObjectSpec(**o)
+
+    def ros2_inspect(self, namespace: str = "", timeout: float = 5.0) -> str:
+        """What is running behind ROS 2, and the settings to connect to it with (as JSON for ``launch``)."""
+        import json
+
+        from . import ros2_discover as discover
+
+        graph = discover.inspect(namespace, timeout=timeout)
+        found = discover.suggest(graph)
+        return f"{discover.report(graph)}\n\nros2 settings for launch: {json.dumps(found)}"
 
     def close(self) -> str:
         """Close the world and keep its trace; returns where it was saved."""
