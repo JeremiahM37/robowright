@@ -282,7 +282,9 @@ def create(name: str, spec: SceneSpec, seed: int = 0, **kw) -> Backend:
     from .. import fidelity
 
     cls = engine(name)
-    key = (name, fidelity.mode(), repr(spec), repr(sorted(kw.items()))) if cls.reusable and _keep() else None
+    # id(model): a name registered again from another file is another robot, though the spec reads the same
+    robot = id(spec.robot_model)
+    key = (name, fidelity.mode(), repr(spec), robot, repr(sorted(kw.items()))) if cls.reusable and _keep() else None
     b = _KEPT.pop(key, None) if key else None
     if b is not None:
         try:
