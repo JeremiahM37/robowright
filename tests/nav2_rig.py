@@ -116,13 +116,30 @@ class Nav2Stack:
         return _read(self.workdir / f"{name}.log")
 
 
+def observed_world(workdir: Path) -> Path:
+    """The sandbox world as shipped, with Gazebo's SceneBroadcaster always on. The shipped world
+    leaves it out when headless (its comment: it is for the GUI), and without it Gazebo publishes
+    no model poses at all, so there is no ground truth to read. Nothing else changes."""
+    src = SHARE / "nav2_minimal_tb3_sim" / "worlds" / "tb3_sandbox.sdf.xacro"
+    text = src.read_text()
+    unless, end = '<xacro:unless value="$(arg headless)">', "</xacro:unless>"
+    if text.count(unless) != 1 or text.count(end) != 1:
+        raise RuntimeError(f"unexpected layout of {src}: the SceneBroadcaster block is not where it was")
+    dst = workdir / "tb3_sandbox_observed.sdf.xacro"
+    dst.write_text(text.replace(unless, '<xacro:if value="1">').replace(end, "</xacro:if>"))
+    return dst
+
+
 @contextlib.contextmanager
-def nav2_stack(workdir: Path | None = None, timeout: float = 240.0, spawn: tuple[float, float] | None = None):
+def nav2_stack(workdir: Path | None = None, timeout: float = 240.0, spawn: tuple[float, float] | None = None, poses: bool = True):
     """Nav2's TurtleBot3 simulation, started headless, until its localization is active. ``spawn``:
-    where the robot is put in the world (``x_pose``, ``y_pose``); default, as the launch file has it."""
+    where the robot is put in the world (``x_pose``, ``y_pose``); default, as the launch file has it.
+    ``poses``: the world with its SceneBroadcaster (:func:`observed_world`); False, as shipped."""
     d = Path(workdir or tempfile.mkdtemp(prefix="rw-nav2-"))
     d.mkdir(parents=True, exist_ok=True)
     args = [f"x_pose:={spawn[0]}", f"y_pose:={spawn[1]}"] if spawn is not None else []
+    if poses:
+        args.append(f"world:={observed_world(d)}")
     launch = _start(
         ["ros2", "launch", "nav2_bringup", "tb3_simulation_launch.py", "headless:=True", "use_rviz:=False", *args],
         d / "stack.log",

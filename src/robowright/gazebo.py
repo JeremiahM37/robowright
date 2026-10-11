@@ -148,6 +148,11 @@ class Gazebo:
                 raise TimeoutError(f"Gazebo world {self.world!r} offers no {', '.join(missing)} (does it load the UserCommands system?)")
             self._node.service_list()
             _time.sleep(0.1)
+        # A world can be started without the SceneBroadcaster system (Nav2's TurtleBot3 sandbox): then
+        # it publishes no poses at all. It only reports them; the world is otherwise as it was.
+        # (Looked for before subscribing: a subscription makes the topic show in the graph too.)
+        if f"{w}/pose/info" not in self._node.topic_list():
+            self._add_system("gz::sim::systems::SceneBroadcaster", "gz-sim-scene-broadcaster-system", "", "publish model poses")
         self._node.subscribe(PoseV.Pose_V, f"{w}/pose/info", self._on_poses)
         self._node.subscribe(Stats.WorldStatistics, f"{w}/stats", self._on_stats)
         with self._lock:
@@ -316,16 +321,21 @@ class Gazebo:
 
     def _add_sensors(self) -> None:
         """Gazebo's Sensors system, added to the running world (renders camera sensors)."""
+        self._add_system(
+            "gz::sim::systems::Sensors", "gz-sim-sensors-system", "<render_engine>ogre2</render_engine>", "add the Sensors system"
+        )
+        self._sensors = True
+
+    def _add_system(self, name: str, filename: str, innerxml: str, what: str) -> None:
+        """A Gazebo system (plugin) added to the running world."""
         from gz.msgs10 import entity_plugin_v_pb2
 
         req = entity_plugin_v_pb2.EntityPlugin_V()
         req.entity.name, req.entity.type = self.world, self._Entity.Entity.WORLD
         req.entity.id = 1  # the world is entity 1
         plugin = req.plugins.add()
-        plugin.name, plugin.filename = "gz::sim::systems::Sensors", "gz-sim-sensors-system"
-        plugin.innerxml = "<render_engine>ogre2</render_engine>"
-        self._call("entity/system/add", req, entity_plugin_v_pb2.EntityPlugin_V, "add the Sensors system")
-        self._sensors = True
+        plugin.name, plugin.filename, plugin.innerxml = name, filename, innerxml
+        self._call("entity/system/add", req, entity_plugin_v_pb2.EntityPlugin_V, what)
 
     # --- changing the world ----------------------------------------------------------------
     def _call(self, service: str, req, req_type, what: str) -> None:

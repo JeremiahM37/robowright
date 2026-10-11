@@ -67,8 +67,15 @@ _DEFAULTS = {
     "command": True,
     "reset_tolerance": 0.02,
     "node_name": None,
-    # The robot is in Gazebo, and robowright may drive Gazebo too: true, or {world = "name"}.
+    # The robot is in Gazebo, and robowright may drive Gazebo too: true, or {world = "name"} (and
+    # model = "name" for the robot's model, where more than one could be it: default, its own name).
     "gazebo": False,
+    # Where the robot's base is in the ROS graph: {frame = "base_footprint", in = "map"} reads its
+    # pose from TF (``in`` -> ``frame``), the estimate a localizer such as AMCL publishes.
+    "base": None,
+    # The topic a robot's own description is on (std_msgs/String, transient local), read when
+    # the robot is not named.
+    "description": "robot_description",
 }
 _INTERFACES = {"arm": ("position", "trajectory"), "gripper": ("with_arm", "position", "trajectory", "action", "none")}
 
@@ -85,10 +92,39 @@ def settings(options: dict | None = None) -> dict:
             if k not in _DEFAULTS:
                 raise ValueError(f"unknown ros2 setting {k!r}; settings: {', '.join(_DEFAULTS)}")
             out[k] = {**out[k], **v} if k in ("arm", "gripper") and isinstance(v, dict) else v
+    if out["base"] is not None and set(out["base"]) - {"frame", "in"}:
+        raise ValueError("ros2 base takes frame and in, e.g. base = {frame = 'base_footprint', in = 'map'}")
     for part, allowed in _INTERFACES.items():
         if out[part].get("interface") not in allowed:
             raise ValueError(f"ros2 {part} interface is one of {', '.join(allowed)}, not {out[part].get('interface')!r}")
     return out
+
+
+def robot_description(options: dict | None = None) -> str:
+    """The URDF the stack publishes on its description topic (``[ros2] description``): the robot as
+    the stack runs it, with the frames and joints its own state publishers use. Read once, at start."""
+    import rclpy
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from std_msgs.msg import String
+
+    cfg = settings(options)
+    if not rclpy.ok():
+        rclpy.init()
+    node = rclpy.create_node(f"robowright_description_{os.getpid()}")
+    got: list[str] = []
+    # Latched, as a robot_state_publisher publishes it: a subscriber that starts late still gets it.
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    topic = _topic(cfg["namespace"], cfg["description"])
+    node.create_subscription(String, topic, lambda msg: got.append(msg.data), latched)
+    deadline = _time.monotonic() + cfg["timeout"]
+    try:
+        while not got and _time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.1)
+    finally:
+        node.destroy_node()
+    if not got:
+        raise TimeoutError(f"no robot description on {topic} within {cfg['timeout']} s: is the robot's stack running?")
+    return got[0]
 
 
 def _topic(ns: str, name: str) -> str:
@@ -133,12 +169,8 @@ class Ros2Backend(Backend):
         if cfg["cameras"]:
             self._subscribe_cameras()
             self.capabilities = frozenset({RENDER})
-        self._tf = None
-        if cfg["objects"]:
-            from tf2_ros import Buffer, TransformListener
-
-            self._tf = Buffer()
-            self._tf_listener = TransformListener(self._tf, self.node)
+        self._tf = None  # made on first use (see _tf_buffer)
+        self._graph = None
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self.node)
         self._spin = threading.Thread(target=self._executor.spin, daemon=True, name="robowright-ros2")
@@ -404,6 +436,25 @@ class Ros2Backend(Backend):
         return {name: (lambda f=frame: self._tf_pose(f)) for name, frame in self.cfg["objects"].items()}
 
     def _tf_pose(self, frame: str):
+
+        p, quat = self._lookup(self.cfg["frame"], frame)
+        # Relative to the robot's base, which robowright mounts at base_pos, turned base_yaw.
+        m = self.robot_model
+        c, s = np.cos(m.base_yaw), np.sin(m.base_yaw)
+        p = np.array([c * p[0] - s * p[1], s * p[0] + c * p[1], p[2]]) + np.asarray(m.base_pos, float)
+        yaw = np.array([np.cos(m.base_yaw / 2), 0.0, 0.0, np.sin(m.base_yaw / 2)])
+        return p, _qmul(yaw, quat)
+
+    def _tf_buffer(self):
+        if self._tf is None:
+            from tf2_ros import Buffer, TransformListener
+
+            self._tf = Buffer()
+            self._tf_listener = TransformListener(self._tf, self.node)
+        return self._tf
+
+    def _lookup(self, parent: str, child: str) -> tuple[np.ndarray, np.ndarray]:
+        """``child``'s pose in ``parent`` from TF, as (position, (w, x, y, z))."""
         from rclpy.duration import Duration
         from rclpy.time import Time
 
@@ -411,17 +462,73 @@ class Ros2Backend(Backend):
         # at a time (robot_state_publisher, a perception node), and asked a moment too early the
         # base frame "does not exist". Once seen, a frame that stops arriving fails within a second.
         seen = self.__dict__.setdefault("_tf_seen", set())
-        wait = 1.0 if frame in seen else float(self.cfg["timeout"])
-        t = self._tf.lookup_transform(self.cfg["frame"], frame, Time(), timeout=Duration(seconds=wait)).transform
-        seen.add(frame)
+        wait = 1.0 if (parent, child) in seen else float(self.cfg["timeout"])
+        t = self._tf_buffer().lookup_transform(parent, child, Time(), timeout=Duration(seconds=wait)).transform
+        seen.add((parent, child))
         p = np.array([t.translation.x, t.translation.y, t.translation.z])
-        quat = np.array([t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z])
-        # Relative to the robot's base, which robowright mounts at base_pos, turned base_yaw.
-        m = self.robot_model
-        c, s = np.cos(m.base_yaw), np.sin(m.base_yaw)
-        p = np.array([c * p[0] - s * p[1], s * p[0] + c * p[1], p[2]]) + np.asarray(m.base_pos, float)
-        yaw = np.array([np.cos(m.base_yaw / 2), 0.0, 0.0, np.sin(m.base_yaw / 2)])
-        return p, _qmul(yaw, quat)
+        return p, np.array([t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z])
+
+    def frame_pose(self, parent: str, child: str) -> tuple[np.ndarray, np.ndarray]:
+        """Any TF frame's pose in another frame (for ``world.ros.frame``)."""
+        return self._lookup(parent, child)
+
+    # --- the robot's base (a mobile robot) -------------------------------------------------
+    def base_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """Where the base IS: Gazebo's pose of the robot's model when Gazebo is on (ground truth),
+        else the TF estimate. The pose is in Gazebo's world frame, or the ``base`` frame's."""
+        if self.gazebo is None:
+            return self.base_estimate()
+        p, q = self.gazebo.pose(self._gazebo_model())
+        return p, q
+
+    def base_estimate(self) -> tuple[np.ndarray, np.ndarray]:
+        """Where the robot THINKS its base is: TF from ``base.in`` to ``base.frame``."""
+        if self.cfg["base"] is None:
+            raise ValueError("a mobile robot's base needs [ros2] base = {frame = ..., in = ...}, e.g. base_footprint in map")
+        return self._lookup(self.cfg["base"]["in"], self.cfg["base"]["frame"])
+
+    def base_velocity(self) -> np.ndarray:
+        """Linear then angular velocity of the base. With Gazebo, its own; without, the change in
+        the base's pose between reads of it, over the world's clock."""
+        if self.gazebo is not None:
+            return self.gazebo.velocity(self._gazebo_model())
+        t = self.time
+        p, q = self.base_pose()
+        last = self.__dict__.get("_base_last")
+        self._base_last = (t, p, q)
+        if last is None or t - last[0] <= 1e-9:
+            return np.zeros(6)
+        dt = t - last[0]
+        dq = q if np.dot(q, last[2]) >= 0 else -q
+        ang = 2 * np.arccos(np.clip(abs(float(np.dot(dq, last[2]))), 0.0, 1.0)) / dt
+        return np.concatenate([(p - last[1]) / dt, [ang, 0.0, 0.0]])
+
+    def _gazebo_model(self) -> str:
+        """The Gazebo model that is the robot: ``[ros2] gazebo = {model = ...}``, else the one named
+        as the robot is (its URDF name, which is the spawned name in the stack's own launch)."""
+        if "_gazebo_name" in self.__dict__:
+            return self._gazebo_name
+        opts = self.cfg["gazebo"] if isinstance(self.cfg["gazebo"], dict) else {}
+        models = self.gazebo.models()
+        name = opts.get("model") or self.robot_model.name
+        if name not in models:
+            raise KeyError(
+                f"Gazebo world {self.gazebo.world!r} has no model {name!r} for the robot; "
+                f"set [ros2] gazebo = {{model = ...}} to one of {models}"
+            )
+        self._gazebo_name = name
+        return name
+
+    def graph(self):
+        """The ROS graph this backend's node sees (``world.ros``)."""
+        if self._graph is None:
+            from ..ros2_graph import RosGraph
+
+            self._graph = RosGraph(self)
+        return self._graph
+
+    def topic_name(self, name: str) -> str:
+        return _topic(self.cfg["namespace"], name)
 
     def render(self, camera: str, width: int, height: int) -> np.ndarray:
         if self.gazebo is not None and camera not in self.cfg["cameras"] and any(c.name == camera for c in self._gz_cameras):
