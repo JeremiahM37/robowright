@@ -27,6 +27,7 @@ import mujoco
 import numpy as np
 
 from .. import fidelity
+from ..errors import CapabilityError
 
 PREFIX = "robot/"
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
@@ -251,6 +252,8 @@ class RobotModel:
         for j, v in zip(self.arm_joints, self.stand_q()):
             d.qpos[m.joint(j).qposadr[0]] = v
         free = m.body(self.base_body).jntadr[0]
+        if free < 0:
+            raise CapabilityError(f"{self.title}: a mobile robot rolls on a free base, and this model's base is fixed")
         d.qpos[m.jnt_qposadr[free] : m.jnt_qposadr[free] + 7] = [0, 0, 0, 1, 0, 0, 0]
         mujoco.mj_forward(m, d)
         geoms = [g for g in range(m.ngeom) if m.geom_contype[g] or m.geom_conaffinity[g]]

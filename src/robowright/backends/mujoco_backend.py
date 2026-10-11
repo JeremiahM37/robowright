@@ -10,6 +10,7 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
+from ..errors import CapabilityError
 from ..robots import PREFIX, body_labels
 from ..robots.model import joint_followers, reset_data
 from ..scene import SceneSpec
@@ -158,7 +159,10 @@ class MujocoBackend(Backend):
         if rm.floating:
             self._base = m.body(PREFIX + rm.base_body).id
             free = m.body_jntadr[self._base]
+            if free < 0:
+                raise CapabilityError(f"{rm.title}: a wheeled robot here rolls on a free base; this model's base is fixed")
             self._base_q, self._base_v = m.jnt_qposadr[free], m.jnt_dofadr[free]
+        self._wheel_u = np.zeros(self.n_arm)  # the wheels' angular velocity setpoints (rad/s)
         self._substeps = max(1, round((1.0 / spec.control_hz) / m.opt.timestep))
         self._body = {o.name: m.body(o.name).id for o in spec.objects}
         self._free = {o.name: m.joint(f"{o.name}/free") for o in spec.objects if not o.static}
@@ -179,9 +183,44 @@ class MujocoBackend(Backend):
             yaw = rm.base_yaw
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)))
             self.set_joint_positions(rm.stand_q())
-        self.set_ctrl(self.qpos())
+        if rm.family == "mobile":
+            self.wheels = self._measure_wheels()
+            self.set_ctrl(np.zeros(self.n_arm))
+        else:
+            self.set_ctrl(self.qpos())
 
     # robot
+    def _measure_wheels(self) -> dict:
+        """The differential drive's geometry, read from the model at rest: each wheel's radius (from
+        its cylinder), its lateral position on the base, and which way its axis turns it forward.
+        Nothing here is typed in; a wheel that does not fit the model is refused, not guessed at."""
+        m, d = self.model, self.data
+        rm = self.robot_model
+        if self.n_arm != 2:
+            raise CapabilityError(f"{rm.title}: the wheeled drive is differential (two wheels), and this model has {self.n_arm}")
+        base = self._base
+        R = d.xmat[base].reshape(3, 3)
+        wheels = []
+        for name in rm.arm_joints:
+            j = m.joint(PREFIX + name)
+            body = int(m.jnt_bodyid[j.id])
+            if m.body_parentid[body] != base:
+                raise CapabilityError(f"{rm.title}: wheel {name} is not on the base's body, so the drive cannot be measured")
+            axis = d.xmat[body].reshape(3, 3) @ m.jnt_axis[j.id]  # the joint's axis, in the world
+            geoms = [g for g in range(m.ngeom) if m.geom_bodyid[g] == body and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER]
+            if len(geoms) != 1:
+                raise CapabilityError(f"{rm.title}: wheel {name} needs exactly one cylinder geom for its radius, found {len(geoms)}")
+            g = geoms[0]
+            if abs(float(d.geom_xmat[g].reshape(3, 3)[:, 2] @ axis)) < 0.99:
+                raise CapabilityError(f"{rm.title}: wheel {name}'s cylinder is not along its axle, so its radius is not measurable")
+            lateral = float((R.T @ (d.xpos[body] - d.xpos[base]))[1])
+            forward = float((R.T @ axis)[1])  # rolling on the floor, a wheel turns the base's +x way when this is positive
+            wheels.append({"joint": PREFIX + name, "radius": float(m.geom_size[g][0]), "y": lateral, "sign": 1.0 if forward > 0 else -1.0})
+        left, right = sorted(wheels, key=lambda w: -w["y"])
+        if abs(left["radius"] - right["radius"]) > 1e-9 or left["y"] <= 0 or right["y"] >= 0:
+            raise CapabilityError(f"{rm.title}: the two wheels must be equal and on either side of the base's centre line")
+        return {"radius": left["radius"], "track": left["y"] - right["y"], "wheels": (left, right)}
+
     def _opening(self, q):
         return (q - self._g_closed) / (self._g_open - self._g_closed)
 
@@ -196,6 +235,12 @@ class MujocoBackend(Backend):
     def set_ctrl(self, target):
         m, rm = self.model, self.robot_model
         target = np.asarray(target, float)
+        if rm.family == "mobile":
+            # The wheels' velocity setpoints: what drive_base computes, or what a trace recorded.
+            lo, hi = m.actuator_ctrlrange[self._act].T
+            self._wheel_u = np.clip(target[: self.n_arm], lo, hi)
+            self.data.ctrl[self._act] = self._wheel_u
+            return
         arm = target[: self.n_arm]
         lim = m.actuator_ctrllimited[self._act].astype(bool)
         lo, hi = m.actuator_ctrlrange[self._act].T
@@ -242,6 +287,26 @@ class MujocoBackend(Backend):
 
     def base_pose(self):
         return self.data.xpos[self._base].copy(), self.data.xquat[self._base].copy()
+
+    def base_estimate(self):
+        # A simulator has no localizer: the base's estimate of itself is where it is.
+        return self.base_pose()
+
+    def wheel_command(self):
+        return self._wheel_u.copy()
+
+    def drive_base(self, linear: float, angular: float) -> None:
+        """Wheel speeds for a base moving at ``linear`` m/s forward and turning at ``angular`` rad/s
+        (about +z, counter-clockwise): a wheel at lateral offset y must roll at (v - w*y) forward."""
+        w = self.wheels
+        u = []
+        for wh in w["wheels"]:
+            forward = linear - angular * wh["y"]
+            u.append(wh["sign"] * forward / w["radius"])
+        self.set_ctrl(np.array(u))
+
+    def stop_base(self) -> None:
+        self.set_ctrl(np.zeros(self.n_arm))
 
     def current_base_quat(self):
         # xquat is computed before the last step integrates, so base_pose lags the joints by a step.

@@ -12,3 +12,8 @@ ROOT = Path(__file__).parent
 
 def so101_mjcf() -> Path:
     return ROOT / "so101" / "so101.xml"
+
+
+def diffdrive_mjcf() -> Path:
+    """A minimal differential-drive base (two driven wheels and a caster), written for robowright."""
+    return ROOT / "diffdrive" / "diffdrive.xml"

@@ -1,0 +1,37 @@
+<mujoco model="diffdrive">
+  <!-- A minimal differential-drive base: a chassis on two driven wheels and a passive caster.
+       Written for robowright, not taken from a maker: no Menagerie model is a purely wheeled
+       diff-drive base (TIAGo and Stretch carry arms, the Robot Soccer Kit is omnidirectional).
+       Units are SI. The wheel radius and track width are not typed anywhere the backend reads:
+       it measures them from these geoms and joints when the robot is launched. -->
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <default>
+    <joint damping="0.001" armature="0.0005"/>
+    <geom contype="1" conaffinity="1" condim="3"/>
+  </default>
+  <worldbody>
+    <body name="base" pos="0 0 0">
+      <freejoint name="base_free"/>
+      <inertial pos="0 0 0" mass="5" diaginertia="0.05 0.06 0.08"/>
+      <geom name="chassis" type="box" size="0.12 0.10 0.03" pos="0 0 0" mass="4.0" rgba="0.2 0.4 0.8 1"/>
+      <!-- A passive ball caster at the back, on the floor with the wheels. Its low friction is
+           what lets the chassis pivot on it: it does not swivel the way a real caster does. -->
+      <geom name="caster" type="sphere" size="0.02" pos="-0.10 0 -0.02" mass="0.05" friction="0.05 0.001 0.001" rgba="0.3 0.3 0.3 1"/>
+      <body name="wheel_left" pos="0 0.12 0">
+        <joint name="wheel_left_joint" type="hinge" axis="0 1 0"/>
+        <geom name="wheel_left_geom" type="cylinder" size="0.04 0.02" euler="1.5708 0 0" mass="0.4" friction="1.0 0.005 0.0001" rgba="0.1 0.1 0.1 1"/>
+      </body>
+      <body name="wheel_right" pos="0 -0.12 0">
+        <joint name="wheel_right_joint" type="hinge" axis="0 1 0"/>
+        <geom name="wheel_right_geom" type="cylinder" size="0.04 0.02" euler="1.5708 0 0" mass="0.4" friction="1.0 0.005 0.0001" rgba="0.1 0.1 0.1 1"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <!-- Velocity servos: ctrl is the wheel's angular velocity (rad/s). The force limit is what a
+         small motor gives; at 0 it holds the wheel still, as a driven wheel does. -->
+    <velocity name="wheel_left_motor" joint="wheel_left_joint" kv="0.5" ctrlrange="-30 30" forcerange="-1.5 1.5"/>
+    <velocity name="wheel_right_motor" joint="wheel_right_joint" kv="0.5" ctrlrange="-30 30" forcerange="-1.5 1.5"/>
+  </actuator>
+</mujoco>

@@ -155,6 +155,15 @@ class Backend(ABC):
         """World-frame linear then angular velocity of the floating base."""
         raise NotImplementedError(f"{self.name} does not support floating-base robots")
 
+    def base_estimate(self) -> tuple[np.ndarray, np.ndarray]:
+        """Where the robot believes its base is, as (position, quaternion). Only a robot with a
+        localizer has one that can differ from :meth:`base_pose`."""
+        return self.base_pose()
+
+    def wheel_command(self) -> np.ndarray:
+        """The wheels' velocity setpoints (rad/s) a mobile robot's control applies each step."""
+        return np.zeros(self.robot_model.n_arm)
+
     def set_base_pose(self, pos, quat) -> None:
         """Teleport the floating base (setup only), at rest."""
         raise NotImplementedError(f"{self.name} does not support floating-base robots")
