@@ -44,6 +44,12 @@ import mani_skill.envs  # noqa: E402, F401 - registers the task ids
 
 SEEDS = [0, 1, 2, 3, 4]
 FINGERS = ["panda_leftfinger", "panda_rightfinger"]  # the link names the fingers' contacts are reported under
+GRASPED_TASKS = {"PickCube-v1", "StackCube-v1"}  # the solutions close the gripper on the object in these
+# A grasp is a finger pushing the object with force. A contact that touches without pushing is not a grasp: PhysX
+# keeps the record with zero force after the gripper opens. Measured: about 28 N per finger while held (the strongest
+# reading in each solve), and exactly 0.0 N after release on every seed. The verdict is read after release, so any
+# threshold above zero gives the same answer. 0.5 N is ManiSkill's own min_force for is_grasping; it was not tuned.
+GRIP_N = 0.5
 FAULT_OFFSET = np.array([0.0, 0.03, 0.0])  # the fault: the object moved 3 cm in y right after reset
 
 
@@ -81,6 +87,29 @@ def _move_after_reset(env, world, name: str, record: dict) -> None:
     env.reset = moved_reset
 
 
+def _grip_n(world, name: str) -> float:
+    """The smaller of the two finger forces on the object, in newtons: what both fingers push with, at the weaker."""
+    push = {f: 0.0 for f in FINGERS}
+    for a, b, force in world.backend.contact_pairs():
+        for finger in FINGERS:
+            if {a, b} == {finger, name}:
+                push[finger] += force
+    return min(push.values())
+
+
+def _watch_grasp(env, world, name: str, seen: dict) -> None:
+    """Record, after every step, the strongest grip on the object (N). Without a grasp seen during the solve the
+    "not held" check could hold for the wrong reason, so the outcome test asserts that one was seen."""
+    step = env.step
+
+    def watched_step(*args, **kwargs):
+        out = step(*args, **kwargs)
+        seen["grip_max_n"] = max(seen.get("grip_max_n", 0.0), _grip_n(world, name))
+        return out
+
+    env.step = watched_step
+
+
 def _pick(env, world) -> dict:
     core = env.unwrapped
     cube, goal = world.body("cube"), world.body("goal_site")
@@ -95,9 +124,9 @@ def _stack(env, world) -> dict:
     offset = a.position - b.position
     on_top = np.linalg.norm(offset[:2]) <= np.linalg.norm(half[:2]) + 0.005 and abs(offset[2] - 2 * half[2]) <= 0.005
     at_rest = np.linalg.norm(a.velocity[:3]) <= 1e-2 and np.linalg.norm(a.velocity[3:]) <= 0.5
-    touching = set(a.contacts())
-    held = all(f in touching for f in FINGERS)
-    return dict(robowright=bool(on_top and at_rest and not held), held=held, on_top=bool(on_top), at_rest=bool(at_rest))
+    grip = _grip_n(world, "cubeA")
+    held = grip >= GRIP_N
+    return dict(robowright=bool(on_top and at_rest and not held), held=bool(held), grip_n=grip, on_top=bool(on_top), at_rest=bool(at_rest))
 
 
 def _push(env, world) -> dict:
@@ -121,9 +150,12 @@ def rollout(task: str, seed: int, trace_dir: Path, tag: str = "run", fault: bool
     env = _make(task)
     world = rw.attach(env, name=f"ms_{task}_{tag}_seed{seed}", settings=rw.Settings(trace_dir=str(trace_dir)))
     moved: dict = {}
+    seen: dict = {}
     try:
         if fault:
             _move_after_reset(env, world, spec["obj"], moved)
+        if task in GRASPED_TASKS:
+            _watch_grasp(env, world, spec["obj"], seen)
         expect(world.body(spec["obj"])).always.to_satisfy(lambda s: s.position[2] > 0.0, "the object stays above the table (z > 0)")
         spec["solve"](env, seed=seed, debug=False, vis=False)
         env_success = _env_success(env)
@@ -131,7 +163,7 @@ def rollout(task: str, seed: int, trace_dir: Path, tag: str = "run", fault: bool
     except BaseException:
         world.close(failed=True)
         raise
-    return dict(task=task, seed=seed, env_success=env_success, world=world, moved=moved, **reading)
+    return dict(task=task, seed=seed, env_success=env_success, world=world, moved=moved, **reading, **seen)
 
 
 @pytest.mark.parametrize(("task", "seed"), [(t, s) for t in TASKS for s in SEEDS], ids=lambda v: str(v))
@@ -143,6 +175,8 @@ def test_solution_outcome_matches_the_environment(task, seed, tmp_path_factory):
     print(f"\n{task} seed={seed} {res}")
     failure = None
     try:
+        if task in GRASPED_TASKS:
+            assert res.get("grip_max_n", 0.0) >= GRIP_N, "no finger pushed the object with GRIP_N during a solution that grasps"
         assert res["robowright"] == res["env_success"], "robowright's reading disagrees with the environment's success"
     except AssertionError as e:
         failure = e
