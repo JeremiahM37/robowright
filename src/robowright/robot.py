@@ -514,6 +514,8 @@ class Robot:
     def _speed_limits(self) -> np.ndarray:
         """Each arm joint's speed limit, where the robot's description gives one (a URDF's
         ``<limit velocity>``), else infinite."""
+        if self.model.family != "arm":  # (their descriptions are MJCF, which has no place for one)
+            return np.full(self.n_arm, np.inf)
         m = self.kin.m
         given = {m.numeric(i).name.removeprefix(PREFIX): float(m.numeric(i).data[0]) for i in range(m.nnumeric)}
         return np.array([given.get(f"speed_limit:{j}", np.inf) for j in self.model.arm_joints])
