@@ -262,11 +262,11 @@ def _safe(name: str) -> str:
 def _ros_robot(robot: str | None, options: dict) -> str:
     """The robot a ROS 2 world runs: ``robot`` (a name or a model file), else the description the
     stack publishes, written to robowright's cache as the URDF it is (named for the robot)."""
+    if robot is not None:
+        return robot
     from .backends.ros2_backend import robot_description
     from .robots.urdf import cache_root
 
-    if robot is not None:
-        return robot
     text = robot_description(options)
     name = re.search(r'<robot[^>]*\sname="([^"]+)"', text)
     if name is None:

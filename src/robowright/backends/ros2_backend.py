@@ -57,8 +57,11 @@ _DEFAULTS = {
     "namespace": "",
     "joint_states": "joint_states",
     "joints": {},
-    "arm": {"controller": "forward_position_controller", "interface": "position"},
-    "gripper": {"interface": "with_arm"},
+    # The controllers robowright drives the robot through. What is left out is read from the
+    # robot's own controller manager (robowright.ros2_discover): the active controller that claims
+    # the arm's joints, the gripper's, and how each is driven.
+    "arm": {"controller": None, "interface": None},
+    "gripper": {"interface": None},
     "frame": "base_link",
     "objects": {},
     "cameras": {},
@@ -90,16 +93,18 @@ def settings(options: dict | None = None) -> dict:
 
     found = find_config()
     project = dict(found[1].get("ros2") or {}) if found else {}
-    out = {**_DEFAULTS}
+    out = {k: dict(v) if isinstance(v, dict) else v for k, v in _DEFAULTS.items()}  # (its tables are filled in later)
     for src in (project, options or {}):
         for k, v in src.items():
             if k not in _DEFAULTS:
                 raise ValueError(f"unknown ros2 setting {k!r}; settings: {', '.join(_DEFAULTS)}")
-            out[k] = {**out[k], **v} if k in ("arm", "gripper") and isinstance(v, dict) else v
+            if k in ("arm", "gripper") and not isinstance(v, dict):
+                raise ValueError(f"ros2 {k} is a table, e.g. {k} = {{controller = 'name', interface = '{_INTERFACES[k][1]}'}}, not {v!r}")
+            out[k] = {**out[k], **v} if k in ("arm", "gripper") else v
     if out["base"] is not None and set(out["base"]) - {"frame", "in"}:
         raise ValueError("ros2 base takes frame and in, e.g. base = {frame = 'base_footprint', in = 'map'}")
     for part, allowed in _INTERFACES.items():
-        if out[part].get("interface") not in allowed:
+        if out[part].get("interface") not in (None, *allowed):
             raise ValueError(f"ros2 {part} interface is one of {', '.join(allowed)}, not {out[part].get('interface')!r}")
     return out
 
@@ -168,7 +173,6 @@ class Ros2Backend(Backend):
         self._fresh = threading.Event()
         ns = cfg["namespace"]
         self.node.create_subscription(JointState, _topic(ns, cfg["joint_states"]), self._on_joints, 50)
-        self._publishers()
         self._cameras = {}
         if cfg["cameras"]:
             self._subscribe_cameras()
@@ -199,6 +203,12 @@ class Ros2Backend(Backend):
                     self.close()
                     raise TimeoutError(f"no /clock within {cfg['timeout']} s: use_sim_time is set, so the simulator must publish it")
                 _time.sleep(0.005)
+        try:
+            self._controllers()
+            self._publishers()
+        except Exception:
+            self.close()
+            raise
         self._t0 = self._now()
         self._tick = self._t0
         self.moves_sent = 0  # whole moves sent as one goal (start_trajectory)
@@ -210,12 +220,105 @@ class Ros2Backend(Backend):
         self._last_q, self._last_t = q, self._t0
 
     # --- wiring ----------------------------------------------------------------------------
+    def _controllers(self) -> None:
+        """Fill in what ``[ros2] arm`` and ``gripper`` leave out from the robot's controller
+        manager, and refuse settings nothing in the ROS graph answers to: a command sent to a
+        topic no controller reads moves nothing and says nothing."""
+        from .. import ros2_discover as discover
+
+        cfg, ns = self.cfg, self.cfg["namespace"]
+        arm, grip = cfg["arm"], cfg["gripper"]
+        self._grip_pub = self._grip_action = self._traj_action = self._traj = self._arm_pub = None
+        if not self.commands or self.robot_model.family == "mobile":
+            arm["interface"] = arm["interface"] or "position"
+            grip["interface"] = grip["interface"] or "none"
+            return
+        if arm["controller"] and arm["interface"] and grip["interface"]:
+            return self._heard(arm)
+        graph = discover.Graph(namespace=ns)
+        deadline = _time.monotonic() + cfg["timeout"]
+        while _time.monotonic() < deadline and not graph.controllers:
+            graph.manager = graph.manager or discover._manager(self.node, ns)
+            if graph.manager:
+                graph.controllers = discover._controllers(self.node, graph.manager, deadline)
+            _time.sleep(0.05)
+        found = {c.name: c for c in graph.controllers}
+        if not graph.controllers:
+            # No controller manager (a driver of its own, or robowright's simulation served over
+            # ROS 2): the command topics something subscribes to say as much.
+            heard = self._command_topics()
+            name = arm["controller"] or next(iter(heard), None)
+            if name in heard:
+                arm.update(controller=name, interface=arm["interface"] or heard[name])
+        if arm["controller"] is None:
+            arm.update(discover.suggest(graph, self.ros_names).get("arm") or {})
+            if arm["controller"] is None:
+                seen = (
+                    discover.report(graph)
+                    if graph.controllers
+                    else "no controller manager answered, and nothing subscribes to a command topic"
+                )
+                raise RuntimeError(
+                    "robowright found no active controller it can drive this robot's arm through (a joint trajectory "
+                    f"controller or a forward position controller claiming {self.ros_names}).\n{seen}\n"
+                    "Name one with [ros2] arm = {controller = ..., interface = ...}, or set command = false to observe only."
+                )
+        elif arm["interface"] is None:
+            known = found.get(arm["controller"])
+            if known is None or not known.interface or known.interface[0] != "arm":
+                have = ", ".join(f"{c.name} ({c.type}, {c.state})" for c in graph.controllers) or "none found"
+                raise RuntimeError(
+                    f"[ros2] arm.controller {arm['controller']!r} is not a controller robowright can drive; controllers: {have}"
+                )
+            arm["interface"] = known.interface[1]
+        if grip["interface"] is None:
+            claimed = set(found[arm["controller"]].joints) if arm["controller"] in found else set()
+            hands = [c for c in graph.controllers if c.active and c.interface and c.interface[0] == "gripper"]
+            if not self.has_gripper:
+                grip["interface"] = "none"
+            elif self._grip_joint in claimed or not graph.controllers:
+                grip["interface"] = "with_arm"
+            elif hands:
+                grip.update(controller=hands[0].name, interface=hands[0].interface[1])
+            else:
+                grip["interface"] = "none"  # read, never driven: nothing in the stack drives it
+        self._heard(arm)
+
+    def _command_topics(self) -> dict:
+        """``{controller: interface}`` for the command topics in the namespace that have a subscriber."""
+        kinds = {
+            "/joint_trajectory": ("trajectory_msgs/msg/JointTrajectory", "trajectory"),
+            "/commands": ("std_msgs/msg/Float64MultiArray", "position"),
+        }
+        prefix = self.cfg["namespace"].rstrip("/") + "/"
+        out = {}
+        for topic, types in self.node.get_topic_names_and_types():
+            for suffix, (typ, interface) in kinds.items():
+                if topic.startswith(prefix) and topic.endswith(suffix) and typ in types and self.node.count_subscribers(topic):
+                    out[topic[len(prefix) : -len(suffix)]] = interface
+        return out
+
+    def _heard(self, arm: dict) -> None:
+        """Raise unless something subscribes to the arm's command topic (or serves its action)."""
+        suffix = {"position": "commands", "trajectory": "joint_trajectory"}[arm["interface"]]
+        topic = _topic(self.cfg["namespace"], arm.get("topic") or f"{arm['controller']}/{suffix}")
+        deadline = _time.monotonic() + self.cfg["timeout"]
+        while self.node.count_subscribers(topic) == 0:
+            if _time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"nothing subscribes to {topic}: is [ros2] arm.controller {arm['controller']!r} active, and is "
+                    f"{arm['interface']!r} how it is driven? (`robowright ros2 inspect` lists the robot's controllers)"
+                )
+            _time.sleep(0.05)
+
     def _publishers(self):
         from std_msgs.msg import Float64MultiArray
         from trajectory_msgs.msg import JointTrajectory
 
         cfg, ns = self.cfg, self.cfg["namespace"]
         arm, grip = cfg["arm"], cfg["gripper"]
+        if arm["controller"] is None:  # observe-only, with no controller named: nothing to publish to
+            return
         msg = {"position": (Float64MultiArray, "commands"), "trajectory": (JointTrajectory, "joint_trajectory")}
         typ, suffix = msg[arm["interface"]]
         self._arm_pub = self.node.create_publisher(typ, _topic(ns, arm.get("topic") or f"{arm['controller']}/{suffix}"), 10)

@@ -260,3 +260,33 @@ def test_robowright_moves_the_panda_through_the_stacks_own_controllers(driven_wo
     expect(r.gripper).to_be_open(timeout=5)
     assert w.backend.moves_sent - sent == len(goals)
     assert errors() == before
+
+
+def test_robowright_finds_the_stacks_controllers_by_itself(stack):
+    """Nothing named: the robot from the description the stack publishes, and the arm's and hand's
+    controllers from its controller manager (what ``robowright ros2 inspect`` prints)."""
+    with rw.launch(backend="ros2", frame=BASE, settings=rw.Settings(trace="off")) as w:
+        cfg = w.backend.cfg
+        assert cfg["arm"] == {"controller": "panda_arm_controller", "interface": "trajectory"}
+        assert (cfg["gripper"]["controller"], cfg["gripper"]["interface"]) == ("panda_hand_controller", "action")
+        assert w.spec.objects == []  # someone else's world: nothing of robowright's put into it
+        q = w.robot.true_qpos()[: w.robot.n_arm]
+        goal = q + (0.2, 0, 0, 0, 0, 0, 0)
+        w.robot.arm.move_joints(goal)
+        assert np.abs(w.robot.true_qpos()[: w.robot.n_arm] - goal).max() < 0.01
+
+
+def test_a_controller_that_is_not_there_is_said_at_once(stack):
+    with pytest.raises(RuntimeError, match="not a controller robowright can drive; controllers: .*panda_arm_controller"):
+        rw.launch(backend="ros2", frame=BASE, arm={"controller": "arm_controller"}, settings=rw.Settings(trace="off"))
+    with pytest.raises(RuntimeError, match="nothing subscribes to /panda_arm_controller/commands"):
+        rw.launch(
+            backend="ros2",
+            frame=BASE,
+            arm={"controller": "panda_arm_controller", "interface": "position"},
+            gripper={"interface": "none"},
+            timeout=3.0,
+            settings=rw.Settings(trace="off"),
+        )
+    with pytest.raises(ValueError, match="ros2 arm is a table"):
+        rw.launch(backend="ros2", frame=BASE, arm="panda_arm_controller")

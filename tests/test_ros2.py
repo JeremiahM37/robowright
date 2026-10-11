@@ -58,7 +58,11 @@ def test_settings_come_from_the_project_and_are_checked(tmp_path, monkeypatch):
     (tmp_path / "robowright.toml").write_text('[ros2]\nnamespace = "/arm1"\narm = { controller = "my_controller" }\n')
     monkeypatch.chdir(tmp_path)
     s = settings({"timeout": 3.0})
-    assert (s["namespace"], s["arm"], s["timeout"]) == ("/arm1", {"controller": "my_controller", "interface": "position"}, 3.0)
+    assert (s["namespace"], s["arm"], s["timeout"]) == (
+        "/arm1",
+        {"controller": "my_controller", "interface": None},
+        3.0,
+    )  # how it is driven: read from the robot
     with pytest.raises(ValueError, match="unknown ros2 setting 'topic'"):
         settings({"topic": "x"})
     with pytest.raises(ValueError, match="ros2 gripper interface is one of with_arm, position, trajectory, action, none, not 'effort'"):
