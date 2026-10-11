@@ -61,23 +61,32 @@ _last_scan_check = ""
 
 
 def _scan_publishes(timeout: float) -> bool:
-    """Whether the lidar publishes, as :func:`nav2_rig._first_message` asks, with what ``ros2`` said
-    kept for the error message (a failure returns at once, so it is not visible otherwise)."""
+    """Whether the lidar publishes within ``timeout``, with what ``ros2`` last said kept for the
+    error message. Asked until it does: ``ros2 topic echo`` gives up at once on a topic nobody
+    advertises yet, and Nav2 can be active a moment before Gazebo's bridge has advertised /scan
+    (a single try failed the whole module in two runs of four)."""
     global _last_scan_check
-    try:
-        done = subprocess.run(
-            ["ros2", "topic", "echo", "--no-daemon", "/scan", "--once"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=_environment(),
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        _last_scan_check = "ros2 topic echo /scan timed out"
-        return False
-    _last_scan_check = f"ros2 topic echo /scan exit {done.returncode}: {done.stderr.strip()[-500:]}"
-    return done.returncode == 0
+    deadline = time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        try:
+            done = subprocess.run(
+                ["ros2", "topic", "echo", "--no-daemon", "/scan", "--once"],
+                capture_output=True,
+                text=True,
+                timeout=max(left, 1.0),
+                env=_environment(),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            _last_scan_check = "ros2 topic echo /scan timed out"
+            return False
+        _last_scan_check = f"ros2 topic echo /scan exit {done.returncode}: {done.stderr.strip()[-500:]}"
+        if done.returncode == 0:
+            return True
+        if time.monotonic() + 1.0 > deadline:
+            return False
+        time.sleep(1.0)
 
 
 def installed() -> bool:

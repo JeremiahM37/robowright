@@ -58,13 +58,18 @@ def _first_message(topic: str, timeout: float) -> bool:
     """Whether the robot's sensor has published (the robot is spawned and its simulation runs).
     An example started before this lost its first service call to Nav2's AMCL once (measured: the
     example waited forever for AMCL's get_state), so the rig does not hand the stack over earlier."""
-    try:
-        done = subprocess.run(
-            ["ros2", "topic", "echo", "--no-daemon", topic, "--once"], capture_output=True, timeout=timeout, env=_environment(), check=False
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    return done.returncode == 0
+    deadline = time.monotonic() + timeout
+    while True:  # asked until it does: echo gives up at once on a topic nobody advertises yet
+        try:
+            cmd = ["ros2", "topic", "echo", "--no-daemon", topic, "--once"]
+            left = max(deadline - time.monotonic(), 1.0)
+            if subprocess.run(cmd, capture_output=True, timeout=left, env=_environment(), check=False).returncode == 0:
+                return True
+        except subprocess.TimeoutExpired:
+            return False
+        if time.monotonic() + 1.0 > deadline:
+            return False
+        time.sleep(1.0)
 
 
 def _read(path: Path) -> str:
