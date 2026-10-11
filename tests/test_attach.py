@@ -5,6 +5,8 @@ because gymnasium is not in the project's venv. The real published environment i
 examples/published_policy/test_act_aloha.py.
 """
 
+import zipfile
+
 import mujoco
 import numpy as np
 import pytest
@@ -12,6 +14,7 @@ import pytest
 import robowright as rw
 from robowright import expect
 from robowright.attached import AttachedRenderer, _physics_of
+from robowright.backends.attached_engine import AttachedEngine
 from robowright.errors import CapabilityError, ExpectationError, InvariantViolation
 from robowright.render import jpeg_frames
 from robowright.trace import Trace
@@ -309,3 +312,115 @@ def test_a_reset_that_rebuilds_the_simulation_is_followed(tmp_path):
     assert w.model is env.model and w.model is not first
     assert w.body("box").position[2] == pytest.approx(env.data.xpos[mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, "box"), 2])
     w.close(failed=False)
+
+
+class FakeEngine(AttachedEngine):
+    """The smallest engine that meets the contract: one free puck, one hinge, a clock; no contacts, no render.
+
+    It is written for this test, so it checks the core against the contract, not against any real simulator.
+    """
+
+    engine = "fake"
+
+    def __init__(self):
+        super().__init__(seed=0, dt=0.01)
+        self.free_bodies = ["puck"]
+        self.joint_names = ["hinge"]
+        self.puck = np.zeros(3)
+        self.angle = 0.0
+        self.steps = 0
+
+    def names(self, kind="body"):
+        return ["puck", "frame"] if kind == "body" else []
+
+    def resolve(self, name):
+        return {"puck": ("body", 0), "frame": ("body", 1)}.get(name)
+
+    def label(self, handle):
+        return ["puck", "frame"][handle[1]]
+
+    def pose(self, handle):
+        pos = self.puck if handle[1] == 0 else np.array([1.0, 0.0, 0.0])
+        return pos.copy(), np.array([1.0, 0.0, 0.0, 0.0])
+
+    def velocity(self, handle):
+        return np.zeros(6)
+
+    def contacts_of(self, handle):
+        return []
+
+    def contact_pairs(self):
+        return []
+
+    def joint_qadr(self, name):
+        if name != "hinge":
+            raise KeyError(f"no joint named {name!r}; joints: hinge")
+        return 0
+
+    def joint_value(self, name):
+        self.joint_qadr(name)
+        return self.angle
+
+    def qpos(self):
+        return np.array([self.angle])
+
+    def set_object_pose(self, name, pos, quat=None):
+        self.puck = np.asarray(pos, float)
+
+    def apply_force(self, name, force):
+        pass
+
+    @property
+    def time(self):
+        return self.steps * self._dt
+
+    def note_step(self):
+        self.steps += 1
+        self.angle += 0.1  # the environment's own motion, which the test drives
+
+
+def test_an_engine_meeting_the_contract_is_attached_without_mujoco(tmp_path):
+    from robowright.attached import AttachedWorld
+
+    eng = FakeEngine()
+    env_steps = []
+
+    def advance():
+        env_steps.append(1)
+        eng.note_step()
+
+    w = AttachedWorld(eng, advance, name="fake", seed=0, settings=rw.Settings(trace_dir=str(tmp_path)))
+    assert w.bodies() == ["puck", "frame"]
+    assert w.body("puck").position.tolist() == [0.0, 0.0, 0.0]
+    assert w.joint("hinge").value == pytest.approx(0.0)
+    w.step(3)
+    assert len(env_steps) == 3 and w.joint("hinge").value == pytest.approx(0.3)
+    assert w.backend.time == pytest.approx(0.03)
+    with pytest.raises(KeyError, match="no joint named 'nope'"):
+        w.joint("nope")
+    with pytest.raises(CapabilityError, match="the fake engine has no MuJoCo model"):
+        _ = w.model  # a non-MuJoCo engine has no MjModel: the core says so rather than inventing one
+    path = w.close(failed=False)
+    tr = Trace(path)
+    assert tr.meta["attached"] == {"engine": "fake"}
+    assert "model.mjb" not in set(zipfile.ZipFile(path).namelist())
+
+
+def test_redraw_of_a_non_mujoco_trace_says_why(tmp_path):
+    from robowright.attached import AttachedWorld
+    from robowright.render import renderer_for
+
+    eng = FakeEngine()
+    w = AttachedWorld(eng, lambda: eng.note_step(), name="fake", seed=0, settings=rw.Settings(trace_dir=str(tmp_path)))
+    w.step(2)
+    tr = Trace(w.close(failed=False))
+    with pytest.raises(CapabilityError, match="frame redraw is not available for the fake engine"):
+        renderer_for(tr)
+
+
+def test_an_engine_without_render_or_state_says_so_in_one_line():
+    eng = FakeEngine()
+    with pytest.raises(CapabilityError, match="frame redraw is not available for the fake engine"):
+        eng.render("cam", 64, 48)
+    with pytest.raises(CapabilityError, match="saving and restoring state is not available for the fake engine"):
+        eng.get_state()

@@ -1,4 +1,9 @@
-"""Attach robowright to a MuJoCo simulation someone else built, and test it as it is.
+"""Attach robowright to a simulation someone else built, and test it as it is.
+
+The engine is found from the environment: MuJoCo (gymnasium, dm_control, robosuite), or PyBullet
+(panda-gym, gym-pybullet-drones, or a bare client with ``engine="pybullet", client=...``). Each engine is one
+adapter on the contract in :mod:`robowright.backends.attached_engine`; nothing here reads an engine directly.
+
 
     env = gym.make("gym_aloha/AlohaTransferCube-v0", obs_type="pixels_agent_pos")
     world = rw.attach(env, advance=lambda: advance_one_step())   # advance is optional
@@ -35,7 +40,9 @@ import mujoco
 import numpy as np
 
 from . import _current
+from .backends import base as backends
 from .backends.attached_backend import AttachedBackend
+from .backends.attached_engine import AttachedEngine
 from .errors import CapabilityError
 from .faults import Faults
 from .locators import Subject
@@ -45,25 +52,24 @@ from .world import Settings, World, _safe
 
 
 class AttachedSubject(Subject):
-    """A MuJoCo body, site or geom by name: position, orientation, velocity and contacts from ground truth."""
+    """A named thing in the environment's simulation: position, orientation, velocity and contacts from ground truth."""
 
-    def __init__(self, world: AttachedWorld, kind: str, index: int, name: str):
+    def __init__(self, world: AttachedWorld, handle, name: str):
         self.world = world
-        self.kind = kind
-        self.index = index
+        self.handle = handle  # what the engine's resolve() returned for the name
         self.name = name
 
     @property
-    def _b(self) -> AttachedBackend:
+    def _b(self) -> AttachedEngine:
         return self.world.backend
 
     @property
     def position(self) -> np.ndarray:
-        return self._b.pose(self.kind, self.index)[0]
+        return self._b.pose(self.handle)[0]
 
     @property
     def quaternion(self) -> np.ndarray:
-        return self._b.pose(self.kind, self.index)[1]
+        return self._b.pose(self.handle)[1]
 
     @property
     def yaw(self) -> float:
@@ -78,49 +84,31 @@ class AttachedSubject(Subject):
     @property
     def velocity(self) -> np.ndarray:
         """Linear then angular velocity, world frame."""
-        return self._b.velocity(self.kind, self.index)
+        return self._b.velocity(self.handle)
 
     def bounds(self):
-        raise CapabilityError(f"{self.name!r} has no bounds: a MuJoCo body is not a box; test its position instead")
+        raise CapabilityError(f"{self.name!r} has no bounds: a body is not a box in this simulation; test its position instead")
 
     def contacts(self) -> list[str]:
-        """What this touches, by body name and by geom name: a geom is named as the environment names it.
+        """What this touches, by the names the engine gives it (MuJoCo: body and geom names).
 
         Environments often test contacts between geoms (gym-aloha's reward does), so both names are
-        listed, and ``to_be_touching`` accepts either.
+        listed where the engine has them, and ``to_be_touching`` accepts either.
         """
         self.world.require("contacts", "contact queries")
-        b = self._b
-        body = b.body_of(self.kind, self.index)
-        out = set()
-        for b1, b2, _, g1, g2 in b.contact_pairs():
-            if self.kind == "geom":
-                if self.index not in (g1, g2):
-                    continue
-                other_body, other_geom = (b2, g2) if g1 == self.index else (b1, g1)
-            else:
-                if body not in (b1, b2):
-                    continue
-                other_body, other_geom = (b2, g2) if b1 == body else (b1, g1)
-            if other_body == body:
-                continue
-            out.add(b.label(other_body))
-            if b.geom_name(other_geom):
-                out.add(b.geom_name(other_geom))
-        return sorted(out)
+        return self._b.contacts_of(self.handle)
 
 
 class AttachedJoint(Subject):
-    """A MuJoCo joint by name: its scalar value (a hinge angle in rad, a slide in m), read from the state."""
+    """A hinge or slide joint by name: its scalar value (a hinge angle in rad, a slide in m), read from the state."""
 
-    def __init__(self, world: AttachedWorld, name: str, qadr: int):
+    def __init__(self, world: AttachedWorld, name: str):
         self.world = world
         self.name = name
-        self.qadr = qadr
 
     @property
     def value(self) -> float:
-        return float(self.world.data.qpos[self.qadr])
+        return self.world.backend.joint_value(self.name)
 
 
 class AttachedScene:
@@ -140,22 +128,25 @@ class AttachedScene:
 
 
 class AttachedRecorder(Recorder):
-    """The standard trace, plus the simulation's model, so the trace can be redrawn from its state."""
+    """The standard trace, plus what the engine keeps so a trace can be redrawn from its state (a MuJoCo model)."""
 
     def meta(self) -> dict:
-        return {**super().meta(), "attached": {"model": "model.mjb", "nq": int(self.world.backend.model.nq)}}
+        return {**super().meta(), "attached": self.world.backend.trace_meta()}
 
     def save(self, path: str | Path) -> Path:
         path = super().save(path)
-        with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as z:
-            z.writestr("model.mjb", model_bytes(self.world.backend.model))
+        files = self.world.backend.trace_files()
+        if files:
+            with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as z:
+                for name, data in files.items():
+                    z.writestr(name, data)
         return path
 
 
 class AttachedWorld(World):
-    """A World over a simulation robowright did not build. Its ``backend`` is an :class:`AttachedBackend`."""
+    """A World over a simulation robowright did not build. Its ``backend`` is an :class:`AttachedEngine`."""
 
-    def __init__(self, backend: AttachedBackend, advance: Callable[[], object] | None, *, name: str, seed: int, settings: Settings | None):
+    def __init__(self, backend: AttachedEngine, advance: Callable[[], object] | None, *, name: str, seed: int, settings: Settings | None):
         self.backend = backend
         self.name = name
         self.seed = seed
@@ -187,10 +178,14 @@ class AttachedWorld(World):
     # --- what the simulation is -------------------------------------------------
     @property
     def model(self) -> mujoco.MjModel:
+        if not isinstance(self.backend, AttachedBackend):
+            raise CapabilityError(f"the {self.backend.engine} engine has no MuJoCo model; use world.backend for its state")
         return self.backend.model
 
     @property
     def data(self) -> mujoco.MjData:
+        if not isinstance(self.backend, AttachedBackend):
+            raise CapabilityError(f"the {self.backend.engine} engine has no MuJoCo data; use world.backend for its state")
         return self.backend.data
 
     def bodies(self) -> list[str]:
@@ -202,19 +197,12 @@ class AttachedWorld(World):
         found = self.backend.resolve(name)
         if found is None:
             raise KeyError(f"no body, site or geom named {name!r}; bodies: {', '.join(self.bodies()) or 'none'}")
-        kind, i = found
-        return AttachedSubject(self, kind, i, name)
+        return AttachedSubject(self, found, name)
 
     def joint(self, name: str) -> AttachedJoint:
         """A hinge or slide joint by name, for ``expect(...).to_be_between``: its value, not a position."""
-        j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if j < 0:
-            named = [n for n in (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)) if n]
-            raise KeyError(f"no joint named {name!r}; joints: {', '.join(named) or 'none'}")
-        # int(): numpy's int32 does not compare equal to MuJoCo's enum members
-        if int(self.model.jnt_type[j]) not in (int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)):
-            raise CapabilityError(f"joint {name!r} is not a hinge or slide, so it has one scalar value; use world.body() for its pose")
-        return AttachedJoint(self, name, int(self.model.jnt_qposadr[j]))
+        self.backend.joint_qadr(name)  # raises the engine's own KeyError or CapabilityError for a bad name
+        return AttachedJoint(self, name)
 
     # --- time ---------------------------------------------------------------------
     def step(self, n: int = 1):
@@ -261,7 +249,8 @@ class AttachedWorld(World):
     def _begin(self):
         if not self._began:
             self._began = True
-            state0 = self.backend.get_state()
+            # An engine with no state save (PyBullet) starts its trace with no state0, not an error.
+            state0 = self.backend.get_state() if backends.STATE in self.backend.capabilities else None
             if self.trace:
                 self.trace.begin(state0)
 
@@ -272,7 +261,10 @@ class AttachedWorld(World):
             self.trace.event("log", "env.reset", {"seed": seed})
 
     def _rebind(self, env) -> None:
-        """Point at the environment's current model and data when it has replaced them (a reset that rebuilds the simulation)."""
+        """Point at the environment's current simulation when it has replaced it (a reset that rebuilds a MuJoCo model)."""
+        if self.backend.engine != "mujoco":
+            self.backend.rebind(env)
+            return
         model, data = _physics_of(env)
         if model is self.backend.model and data is self.backend.data:
             return
@@ -284,15 +276,16 @@ class AttachedWorld(World):
         """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
         self._begin()
         forces = self.faults.forces_for_step(self.step_count) if pushes else {}
-        saved = self.backend.data.xfrc_applied.copy() if forces else None
+        saved = self.backend.data.xfrc_applied.copy() if forces and self.backend.engine == "mujoco" else None
         for name, f in forces.items():
-            self.backend.apply_force(name, f)
+            self.backend.apply_force(name, f)  # MuJoCo: undone in the finally below; other engines: one step only
         t0 = self.backend.time
         try:
             out = fn() if fn is not None else None
         finally:
             if saved is not None:  # what was there before the push, not zero: nothing of ours is left behind
                 self.backend.data.xfrc_applied[:] = saved
+        self.backend.note_step()
         t1 = self.backend.time
         if not self._dt_known and t1 > t0:
             self.backend.set_control_dt(t1 - t0)  # the environment's control period, as it steps
@@ -345,25 +338,42 @@ def attach(
     data: mujoco.MjData | None = None,
     step: Callable[[], object] | None = None,
     advance: Callable[[], object] | None = None,
+    engine: str | None = None,
+    client: int | None = None,
+    dt: float | None = None,
     name: str = "attached",
     seed: int = 0,
     settings: Settings | None = None,
 ) -> AttachedWorld:
-    """Attach to an environment (``env``), or to a bare ``model``/``data`` pair.
+    """Attach to an environment (``env``), a bare ``model``/``data`` pair, or a PyBullet client.
+
+    The engine is found from the environment: a MuJoCo model and data it holds, or else a PyBullet
+    client (panda-gym). ``engine="pybullet", client=<physics client id>`` names one directly.
 
     ``advance`` is one control step of their loop, for robowright to call when a test waits.
-    With ``model``/``data`` and ``step``, ``step`` is the bare stepper: ``world.step()`` calls it and
-    observes the result, and their own loop should step through ``world.step()`` too.
+    With ``model``/``data`` or ``client`` and ``step``, ``step`` is the bare stepper: ``world.step()``
+    calls it and observes the result, and their own loop should step through ``world.step()`` too.
+    ``dt`` is the control period in seconds: needed for a bare PyBullet client, where nothing in
+    PyBullet says how many physics steps make one control step.
     """
-    if env is not None and (model is not None or data is not None):
-        raise ValueError("attach takes an environment, or a model and data, not both")
-    if env is None and (model is None or data is None):
-        raise ValueError("attach needs an environment, or model= and data=")
+    if engine not in (None, "mujoco", "pybullet"):
+        raise ValueError(f"engine must be 'mujoco' or 'pybullet', not {engine!r}")
+    if env is not None and (model is not None or data is not None or client is not None):
+        raise ValueError("attach takes an environment, or a model and data, or a client, not more than one")
+    if env is None and client is None and (model is None or data is None):
+        raise ValueError("attach needs an environment, or model= and data=, or engine='pybullet' with client=")
+    if client is not None and (engine == "mujoco" or model is not None or data is not None):
+        raise ValueError("a PyBullet client is not a MuJoCo model: pass engine='pybullet' and client=, or model= and data=")
     if step is not None and advance is not None:
         raise ValueError("pass step= (a bare model's stepper) or advance= (a loop to wait through), not both")
     if env is not None:
-        model, data = _physics_of(env)
-    backend = AttachedBackend(model, data, seed=seed)
+        backend = _engine_of_env(env, seed=seed, dt=dt, engine=engine)
+    elif client is not None:
+        from .backends.attached_pybullet import PyBulletEngine
+
+        backend = PyBulletEngine(client, seed=seed, dt=dt)
+    else:
+        backend = AttachedBackend(model, data, seed=seed)
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
     if env is not None:
         _wrap_env(env, world)
@@ -371,6 +381,30 @@ def attach(
         world._advance = lambda: world._physics_step(step)
     _current.set(world)
     return world
+
+
+def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> AttachedEngine:
+    """The adapter for an environment: its MuJoCo model and data if it has them, else its PyBullet client."""
+    if engine != "pybullet":
+        try:
+            model, data = _physics_of(env)
+            return AttachedBackend(model, data, seed=seed)
+        except ValueError as mujoco_error:
+            if engine == "mujoco":
+                raise
+            from .backends.attached_pybullet import pybullet_engine_of
+
+            found = pybullet_engine_of(env, seed=seed, dt=dt)
+            if found is None:
+                raise mujoco_error from None
+            return found
+    from .backends.attached_pybullet import pybullet_engine_of
+
+    found = pybullet_engine_of(env, seed=seed, dt=dt)
+    if found is None:
+        name = type(getattr(env, "unwrapped", env)).__name__
+        raise ValueError(f"cannot find a PyBullet client in {name}; pass attach(engine='pybullet', client=...)")
+    return found
 
 
 def _wrap_env(env, world: AttachedWorld) -> None:

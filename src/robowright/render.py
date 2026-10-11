@@ -61,7 +61,13 @@ class Renderer:
 def renderer_for(trace: str | Path | Trace):
     """The renderer for a trace: its own model if it was attached to a simulation robowright did not build."""
     tr = trace if isinstance(trace, Trace) else Trace(trace)
-    if tr.meta.get("attached"):
+    attached = tr.meta.get("attached")
+    if attached:
+        engine = attached.get("engine", "mujoco")  # traces from before the engine adapters are MuJoCo's
+        if engine != "mujoco":
+            from .errors import CapabilityError
+
+            raise CapabilityError(f"frame redraw is not available for the {engine} engine: this trace keeps its states, not its frames")
         from .attached import AttachedRenderer
 
         return AttachedRenderer(tr)
