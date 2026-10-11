@@ -409,12 +409,15 @@ def attach(
     advance: Callable[[], object] | None = None,
     engine: str | None = None,
     client: int | None = None,
+    simulator=None,
+    plant=None,
+    context=None,
     dt: float | None = None,
     name: str = "attached",
     seed: int = 0,
     settings: Settings | None = None,
 ) -> AttachedWorld:
-    """Attach to an environment (``env``), a bare ``model``/``data`` pair, or a PyBullet client.
+    """Attach to an environment (``env``), a bare ``model``/``data`` pair, a PyBullet client, or a Drake simulation.
 
     The engine is found from the environment: a MuJoCo model and data it holds, else a SAPIEN scene
     (ManiSkill 3), else a PyBullet client (panda-gym). ``engine="pybullet", client=<physics client id>``
@@ -425,18 +428,44 @@ def attach(
     calls it and observes the result, and their own loop should step through ``world.step()`` too.
     ``dt`` is the control period in seconds: needed for a bare PyBullet client, where nothing in
     PyBullet says how many physics steps make one control step.
+
+    A Drake simulation is ``attach(simulator)`` (a ``pydrake.systems.analysis.Simulator``), or
+    ``attach(simulator=..., plant=...)``, or ``attach(diagram, context=..., plant=...)`` when there is
+    no Simulator. Drake's ``Simulator`` cannot be wrapped, so the environment's loop must go through
+    ``world.step()`` or call ``world.observe()`` after each ``simulator.AdvanceTo``; ``advance`` is the
+    one control step (``world.step`` calls it, and robowright observes it).
     """
-    if engine not in (None, "mujoco", "pybullet", "sapien"):
-        raise ValueError(f"engine must be 'mujoco', 'pybullet' or 'sapien', not {engine!r}")
+    diagram = None
+    if env is not None and _is_drake_system(env):
+        if _is_drake_simulator(env):
+            simulator, env = env, None  # a Simulator, passed by position
+        else:
+            diagram, env = env, None  # a Diagram, which needs context=
+    if engine not in (None, "mujoco", "pybullet", "sapien", "drake"):
+        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien' or 'drake', not {engine!r}")
+    if simulator is not None or diagram is not None or context is not None or plant is not None:
+        if env is not None or model is not None or data is not None or client is not None or engine not in (None, "drake"):
+            raise ValueError("a Drake simulation is attached with simulator= (or a diagram and context=), not with other arguments")
+        if simulator is None and (diagram is None or context is None):
+            raise ValueError("a Drake diagram needs its context: attach(diagram, context=...)")
+        if step is not None:
+            raise ValueError("a Drake simulation is stepped through advance= or world.step(), not step=")
     if env is not None and (model is not None or data is not None or client is not None):
         raise ValueError("attach takes an environment, or a model and data, or a client, not more than one")
-    if env is None and client is None and (model is None or data is None):
-        raise ValueError("attach needs an environment, or model= and data=, or engine='pybullet' with client=")
+    if env is None and client is None and simulator is None and diagram is None and (model is None or data is None):
+        raise ValueError("attach needs an environment, or model= and data=, or engine='pybullet' with client=, or a Drake simulator")
     if client is not None and (engine == "mujoco" or model is not None or data is not None):
         raise ValueError("a PyBullet client is not a MuJoCo model: pass engine='pybullet' and client=, or model= and data=")
     if step is not None and advance is not None:
         raise ValueError("pass step= (a bare model's stepper) or advance= (a loop to wait through), not both")
-    if env is not None:
+    drake = simulator is not None or diagram is not None
+    if drake:
+        from .backends.attached_drake import DrakeEngine
+
+        if simulator is not None:
+            diagram, context = simulator.get_system(), simulator.get_mutable_context()
+        backend = DrakeEngine(diagram, context, plant=plant, seed=seed, dt=dt)
+    elif env is not None:
         backend = _engine_of_env(env, seed=seed, dt=dt, engine=engine)
     elif client is not None:
         from .backends.attached_pybullet import PyBulletEngine
@@ -444,6 +473,14 @@ def attach(
         backend = PyBulletEngine(client, seed=seed, dt=dt)
     else:
         backend = AttachedBackend(model, data, seed=seed)
+    if drake:
+        # Drake's Simulator cannot be wrapped: advance (or nothing) is the control step, and the loop observes the rest.
+        world = AttachedWorld(backend, None, name=_safe(name), seed=seed, settings=settings)
+        if advance is not None:
+            world._advance = lambda: world._physics_step(advance)
+        world._note_unreplayable("the simulation was stepped by a Drake Simulator, which robowright does not wrap")
+        _current.set(world)
+        return world
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
     if env is not None:
         world.env_spec = _env_spec(env)
@@ -453,6 +490,27 @@ def attach(
         world._note_unreplayable("the steps were taken by a bare stepper (step=), not by an environment's step")
     _current.set(world)
     return world
+
+
+def _is_drake_system(obj) -> bool:
+    """A Drake Simulator or Diagram. pydrake is optional, so it is imported only to ask."""
+    return _is_drake_simulator(obj) or _is_drake_diagram(obj)
+
+
+def _is_drake_simulator(obj) -> bool:
+    try:
+        from pydrake.systems.analysis import Simulator
+    except ImportError:
+        return False
+    return isinstance(obj, Simulator)
+
+
+def _is_drake_diagram(obj) -> bool:
+    try:
+        from pydrake.systems.framework import Diagram
+    except ImportError:
+        return False
+    return isinstance(obj, Diagram)
 
 
 def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> AttachedEngine:
