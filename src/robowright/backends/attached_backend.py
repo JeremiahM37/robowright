@@ -9,12 +9,15 @@ is not its business: the environment's loop steps, and :mod:`robowright.attached
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import mujoco
 import numpy as np
 
 from ..errors import CapabilityError
-from ..scene import SceneSpec
-from .base import CONTACTS, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact
+from .attached_engine import AttachedEngine
+from .base import CONTACTS, FORCES, GROUND_TRUTH, RENDER, STATE, Contact
 
 _FREE = mujoco.mjtJoint.mjJNT_FREE
 _HINGE = mujoco.mjtJoint.mjJNT_HINGE
@@ -22,34 +25,16 @@ _SLIDE = mujoco.mjtJoint.mjJNT_SLIDE
 _KINDS = {"body": mujoco.mjtObj.mjOBJ_BODY, "site": mujoco.mjtObj.mjOBJ_SITE, "geom": mujoco.mjtObj.mjOBJ_GEOM}
 
 
-class _UnknownRobot:
-    """The fields of a robot model the core reads. The robot here belongs to the environment,
-    so robowright describes none of it: no arm, no gripper, no floating base."""
+class AttachedBackend(AttachedEngine):
+    """A MuJoCo model and data, as the environment holds them. Handles are ``(kind, id)`` pairs."""
 
-    floating = False
-    arm_joints: tuple = ()
-    extra: dict = {}  # (not loaded from a file by robowright: nothing to record for a trace to reload)
-    title = "attached"
-    family = "attached"
-    n_arm = 0
-    has_gripper = False
-
-
-class AttachedBackend(Backend):
-    name = "attached"
-    builds = False  # the environment built it: robowright changes nothing in it
+    engine = "mujoco"
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, STATE, FORCES})
 
     def __init__(self, model: mujoco.MjModel, data: mujoco.MjData, seed: int = 0):
-        # Backend.__init__ reads a robot model from a SceneSpec; there is none, so set what it sets.
+        super().__init__(seed, dt=float(model.opt.timestep))
         self.model, self.data = model, data
-        self.seed = seed
-        self.spec = SceneSpec(robot="attached", objects=[], cameras=[])
-        self.robot_model = _UnknownRobot()
-        self.n_arm, self.has_gripper = 0, False
         self.joint_names = _qpos_names(model)
-        self._dt = float(model.opt.timestep)
-        self._renderers: dict = {}
         self._label = {b: (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or f"body{b}") for b in range(model.nbody)}
         self._label[0] = "world"
         self._free = {}  # body name -> (qpos address, dof address)
@@ -101,7 +86,12 @@ class AttachedBackend(Backend):
         out = [mujoco.mj_id2name(self.model, _KINDS[kind], i) for i in range(n)]
         return [x for x in out if x]
 
-    def pose(self, kind: str, i: int) -> tuple[np.ndarray, np.ndarray]:
+    def label(self, handle) -> str:
+        kind, i = handle
+        return self._label[i] if kind == "body" else (mujoco.mj_id2name(self.model, _KINDS[kind], i) or f"{kind}{i}")
+
+    def pose(self, handle) -> tuple[np.ndarray, np.ndarray]:
+        kind, i = handle
         d = self.data
         if kind == "body":
             return d.xpos[i].copy(), d.xquat[i].copy()
@@ -113,17 +103,15 @@ class AttachedBackend(Backend):
         mujoco.mju_mat2Quat(quat, np.asarray(mat, float))
         return pos.copy(), quat
 
-    def velocity(self, kind: str, i: int) -> np.ndarray:
+    def velocity(self, handle) -> np.ndarray:
         """World-frame linear then angular velocity."""
+        kind, i = handle
         res = np.zeros(6)
         # mj_objectVelocity reads the body velocities cached by the last physics step, which lag the
         # joint state by a substep (0.7 mm/s on a 3.8 mm/s push); comVel refreshes them from qpos/qvel.
         mujoco.mj_comVel(self.model, self.data)
         mujoco.mj_objectVelocity(self.model, self.data, _KINDS[kind], i, res, 0)
         return np.concatenate([res[3:], res[:3]])
-
-    def label(self, body: int) -> str:
-        return self._label[body]
 
     def geom_name(self, g: int) -> str | None:
         return mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g)
@@ -133,13 +121,43 @@ class AttachedBackend(Backend):
             return i
         return int(self.model.site_bodyid[i] if kind == "site" else self.model.geom_bodyid[i])
 
+    def contacts_of(self, handle) -> list[str]:
+        """What this touches, by body name and by geom name: a geom is named as the environment names it."""
+        kind, index = handle
+        body = self.body_of(kind, index)
+        out = set()
+        for b1, b2, _, g1, g2 in self.contact_pairs():
+            if kind == "geom":
+                if index not in (g1, g2):
+                    continue
+                other_body, other_geom = (b2, g2) if g1 == index else (b1, g1)
+            else:
+                if body not in (b1, b2):
+                    continue
+                other_body, other_geom = (b2, g2) if b1 == body else (b1, g1)
+            if other_body == body:
+                continue
+            out.add(self._label[other_body])
+            if self.geom_name(other_geom):
+                out.add(self.geom_name(other_geom))
+        return sorted(out)
+
+    # --- joints -------------------------------------------------------------------------
+    def joint_qadr(self, name: str) -> int:
+        """The qpos address of a hinge or slide joint, for the core's ``joint()``; the errors name what exists."""
+        j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if j < 0:
+            named = [n for n in (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)) if n]
+            raise KeyError(f"no joint named {name!r}; joints: {', '.join(named) or 'none'}")
+        # int(): numpy's int32 does not compare equal to MuJoCo's enum members
+        if int(self.model.jnt_type[j]) not in (int(_HINGE), int(_SLIDE)):
+            raise CapabilityError(f"joint {name!r} is not a hinge or slide, so it has one scalar value; use world.body() for its pose")
+        return int(self.model.jnt_qposadr[j])
+
+    def joint_value(self, name: str) -> float:
+        return float(self.data.qpos[self.joint_qadr(name)])
+
     # --- ground truth for free bodies (what the object locators read) -------------------
-    def object_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
-        return self.pose("body", self._body_id(name))
-
-    def object_velocity(self, name: str) -> np.ndarray:
-        return self.velocity("body", self._body_id(name))
-
     def _body_id(self, name: str) -> int:
         i = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
         if i < 0:
@@ -170,12 +188,6 @@ class AttachedBackend(Backend):
         self.data.xfrc_applied[b, :3] += force
 
     # --- contacts -----------------------------------------------------------------------
-    def contacts(self) -> list[Contact]:
-        out = []
-        for a, b, force, _, _ in self.contact_pairs():
-            out.append(Contact(self._label[a], self._label[b], force))
-        return out
-
     def contact_pairs(self) -> list[tuple]:
         """Every contact: ``(body1, body2, normal force, geom1, geom2)``, within one body excluded."""
         m, d = self.model, self.data
@@ -189,6 +201,9 @@ class AttachedBackend(Backend):
             mujoco.mj_contactForce(m, d, i, f6)
             out.append((b1, b2, float(abs(f6[0])), int(c.geom1), int(c.geom2)))
         return out
+
+    def contacts(self):
+        return [Contact(self._label[a], self._label[b], f) for a, b, f, _, _ in self.contact_pairs()]
 
     # --- rendering, state ------------------------------------------------------------------
     def render(self, camera: str, width: int, height: int) -> np.ndarray:
@@ -215,11 +230,20 @@ class AttachedBackend(Backend):
         mujoco.mj_setState(self.model, self.data, np.asarray(state, float), mujoco.mjtState.mjSTATE_FULLPHYSICS)
         mujoco.mj_forward(self.model, self.data)
 
-    def close(self) -> None:
-        # The environment owns its renderer's GL context lifetime too: nothing here outlives a test.
-        for r in self._renderers.values():
-            r.close()
-        self._renderers.clear()
+    def trace_meta(self) -> dict:
+        # No "engine" key: a trace without one is a MuJoCo trace, as those were recorded before the adapters.
+        return {"model": "model.mjb", "nq": int(self.model.nq)}
+
+    def trace_files(self) -> dict[str, bytes]:
+        return {"model.mjb": model_bytes(self.model)}
+
+
+def model_bytes(model: mujoco.MjModel) -> bytes:
+    """The model as a self-contained MuJoCo binary (``.mjb``), which the trace keeps for redrawing."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "model.mjb"
+        mujoco.mj_saveModel(model, str(p), None)
+        return p.read_bytes()
 
 
 def _qpos_names(model: mujoco.MjModel) -> list[str]:
