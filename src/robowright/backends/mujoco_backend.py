@@ -171,6 +171,9 @@ class MujocoBackend(Backend):
         self._renderers: dict = {}
         self._acts = np.append(self._act, self._gact) if self.has_gripper else self._act
         self._ramp = TargetRamp()
+        # A maker's PD loop (pd_gains) is handed each control step's targets whole, as its own
+        # loop holds them; ramping them would not run the published controller.
+        self._hold_targets = rm.pd_gains is not None
         reset_data(m, self.data)
         if rm.floating:
             yaw = rm.base_yaw
@@ -200,6 +203,8 @@ class MujocoBackend(Backend):
         if self.has_gripper:
             g = float(np.clip(target[self.n_arm], 0.0, 1.0))
             u = np.append(u, rm.gripper_closed + g * (rm.gripper_open - rm.gripper_closed))
+        if self._hold_targets:
+            self._ramp.reset()
         self._ramp.set(u)
         self.data.ctrl[self._acts] = u  # ramped from the last step's in step()
 
@@ -237,6 +242,10 @@ class MujocoBackend(Backend):
 
     def base_pose(self):
         return self.data.xpos[self._base].copy(), self.data.xquat[self._base].copy()
+
+    def current_base_quat(self):
+        # xquat is computed before the last step integrates, so base_pose lags the joints by a step.
+        return self.data.qpos[self._base_q + 3 : self._base_q + 7].copy()
 
     def base_velocity(self):
         v = self.data.qvel[self._base_v : self._base_v + 6].copy()
