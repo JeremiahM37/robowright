@@ -224,3 +224,39 @@ def test_a_stack_that_puts_the_tool_in_the_wrong_place_fails(world):
         out, _ = reach.communicate(timeout=60)
     assert reach.returncode == 0 and "Pose motion completed successfully" in out, out  # MoveIt did what it was told
     assert abs(np.linalg.norm(r.tcp.position - meant) - 0.04) < 0.002  # and robowright measured the miss
+
+
+@pytest.fixture
+def driven_world(stack):
+    """robowright commanding the Panda, through the stack's own arm and hand controllers."""
+    model = robots.load(rig.description(), name="panda_ros", gripper=True, base_pos=(0.0, 0.0, 0.0), tcp=(0.0, 0.0, 0.0))
+    w = rw.launch(
+        SceneSpec(robot=model.name, objects=[]),
+        backend="ros2",
+        arm={"controller": "panda_arm_controller", "interface": "trajectory"},
+        gripper={"controller": "panda_hand_controller", "interface": "action"},
+        frame=BASE,
+        use_sim_time=SIM_TIME,
+        settings=rw.Settings(trace="on", trace_dir=str(stack)),
+    )
+    yield w
+    w.close(failed=False)
+
+
+def test_robowright_moves_the_panda_through_the_stacks_own_controllers(driven_world, stack):
+    """Each arm move is one goal to the stack's ``panda_arm_controller`` (as MoveIt's are), and the
+    hand goes through ``panda_hand_controller``'s gripper action. The flange arrives, the fingers
+    open and close, and the stack logs no error."""
+    w, r = driven_world, driven_world.robot
+    errors = lambda: rig._read(stack / "panda.log").count("[ERROR]")
+    before, sent = errors(), w.backend.moves_sent
+    goals = ((0.4, 0.2, 0.4), (0.3, -0.2, 0.5), (0.45, 0.0, 0.25))
+    for goal in goals:
+        r.arm.move_to(goal)
+        expect(r.tcp).to_be_near(goal, tol=0.001, timeout=2, hold=0.3)
+    r.gripper.close()
+    expect(r.gripper).to_be_closed(timeout=5)
+    r.gripper.open()
+    expect(r.gripper).to_be_open(timeout=5)
+    assert w.backend.moves_sent - sent == len(goals)
+    assert errors() == before
