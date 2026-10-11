@@ -253,9 +253,17 @@ measurement). [`examples/environments`](examples/environments) attaches the same
 | Gymnasium-Robotics 1.4 | none ships: a reach written in the test | FetchReach agrees with `is_success` 5 of 5; Fetch pick-and-place, Franka Kitchen and the Shadow hand attach |
 | dm_control 1.0 | none ships: a reach written in the test | reacher agrees with the task's reward 5 of 5; walker and a manipulation task attach |
 | robosuite 1.5 | none ships | Lift attaches; robosuite builds a new model on every reset, which robowright follows |
+| ManiSkill 3 (SAPIEN) | its own motion-planning solutions (pick, stack, push) | agrees with the environment's `success` on 15 of 15; with the cube moved 3 cm after reset, pick and push still succeed 5 of 5 and stack 4 of 5 |
+| panda-gym 3 (PyBullet) | none ships: a reach written in the test | PandaReach agrees with `is_success` 5 of 5; pick-and-place attaches |
+| gym-pybullet-drones (PyBullet) | its own `DSLPIDControl` | the drone hovers 5.4 mm from its target, and robowright's reading agrees with the environment's state to 1 mm |
 
-These suites pin different MuJoCo versions, so each runs in its own environment; the examples
-skip where a suite is not installed.
+Attach reads MuJoCo, PyBullet and SAPIEN simulations through one small adapter each
+([`attached_engine.py`](src/robowright/backends/attached_engine.py) is the contract for another).
+A MuJoCo trace is redrawn frame by frame from their model; PyBullet and SAPIEN traces keep
+every body's pose and say that they cannot be redrawn. Holding is judged by force, not by a
+contact existing: SAPIEN keeps zero-force contacts after a gripper lets go, which first read as
+"still held" on every seed. These suites pin different versions of their engines, so each runs
+in its own environment; the examples skip where a suite is not installed.
 
 ### What a passing test tells you
 
@@ -1363,9 +1371,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   Gazebo, and against Universal Robots', MoveIt's and Kinova's own stacks, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
-- **Attached simulations are MuJoCo's:** `rw.attach` reads a MuJoCo model and data. Isaac Lab,
-  ManiSkill (SAPIEN) and PyBullet environments are not attached to yet, and a trace of an
-  attached run is redrawn but not replayed or turned into a test.
+- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet and SAPIEN simulations (one
+  environment at a time, on the CPU). Isaac Lab and GPU-batched environments are not attached
+  to yet, and a trace of an attached run is not replayed or turned into a test.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
