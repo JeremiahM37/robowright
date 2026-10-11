@@ -15,9 +15,10 @@ from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import mujoco
 import numpy as np
 import pytest
-from test_attach import ToyEnv
+from test_attach import XML, ToyEnv
 
 import robowright as rw
 from robowright import expect
@@ -218,3 +219,17 @@ def test_a_hand_built_environment_gives_a_stub_that_fails_loudly(tmp_path):
     proc = _run_test_file(test_file, None)
     assert proc.returncode != 0
     assert "NotImplementedError: make_env() is a stub" in proc.stdout + proc.stderr
+
+
+def test_replay_says_when_the_rebuilt_model_differs_from_the_recorded_one(tmp_path):
+    path = _record(tmp_path)
+
+    def heavier_env():  # the same scene with a box twice as heavy: another version of the environment
+        env = ToyEnv()
+        env.model = mujoco.MjModel.from_xml_string(XML.replace('mass="0.05"', 'mass="0.10"'))
+        env.data = mujoco.MjData(env.model)
+        return env
+
+    r = replay(path, make_env=heavier_env)
+    assert any("different MuJoCo model" in n for n in r.notes)
+    assert not r.matches  # the box falls differently, so the states differ too
