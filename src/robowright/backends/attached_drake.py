@@ -20,6 +20,10 @@ What Drake gives, and what this adapter says it cannot give:
 * The clock. Time is the simulator's context time, not a count of steps.
 * Rendering and saved state are not read here. Drake draws through its own visualizer, and a trace of a
   Drake run is recorded without a state to redraw it from.
+* Replay. A trace keeps the steps, the forces robowright applied and the calls the test made, so
+  ``replay(trace, make_env=...)`` rebuilds the simulation and re-runs them. The factory must build the same
+  diagram with the same initial state and the same controllers: the inputs the run's own code set between steps
+  are not in the trace, and replay reports where a rebuilt run first differs.
 """
 
 from __future__ import annotations
@@ -249,3 +253,8 @@ class DrakeEngine(AttachedEngine):
     @property
     def time(self) -> float:
         return float(self.context.get_time())
+
+    def trace_meta(self) -> dict:
+        # Replay re-runs the steps and the forces robowright applied, but not the inputs the user set between them
+        # (actuation ports, controllers wired outside the diagram): the factory must rebuild those itself.
+        return {"engine": self.engine, "inputs_recorded": False}

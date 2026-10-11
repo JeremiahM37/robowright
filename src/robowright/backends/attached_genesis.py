@@ -213,6 +213,11 @@ class GenesisEngine(AttachedEngine):
     def time(self) -> float:
         return float(_np(self.scene.get_time()))
 
+    def trace_meta(self) -> dict:
+        # Replay re-runs the steps, resets and forces robowright applied, but not the joint targets or other inputs
+        # the user's code set on the entities between steps: the factory must rebuild those itself.
+        return {"engine": self.engine, "inputs_recorded": False}
+
     def close(self) -> None:
         self._restore()
         super().close()
