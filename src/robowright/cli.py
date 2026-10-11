@@ -175,19 +175,31 @@ def _show(args, rest):
 def _replay(args, rest):
     from .replay import replay
 
-    r = replay(args.trace, backend=args.backend, tol=args.tol)
+    try:
+        r = replay(args.trace, backend=args.backend, tol=args.tol)
+    except ValueError as e:  # an attached run whose environment has no spec to rebuild it from
+        print(f"robowright replay: {e}", file=sys.stderr)
+        return 2
     print(r.summary())
-    return 0 if r.first_divergent_step is None else 1
+    return 0 if r.matches else 1
 
 
 def _codegen(args, rest):
-    from .codegen import generate
+    from .codegen import companion, generate
 
     code = generate(args.trace, test_name=args.name, stop_at_failure=not args.full)
+    extra = companion(args.trace, test_name=args.name)  # a long attached run's actions, read by the test beside it
     if args.output:
         Path(args.output).write_text(code)
         print(args.output)
+        if extra:
+            path = Path(args.output).with_name(extra[0])
+            path.write_bytes(extra[1])
+            print(path)
     else:
+        if extra:
+            print(f"robowright codegen: pass -o to write {extra[0]} next to the test", file=sys.stderr)
+            return 2
         sys.stdout.write(code)
     return 0
 
