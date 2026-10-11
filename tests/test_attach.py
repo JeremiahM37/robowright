@@ -248,3 +248,18 @@ def test_joint_by_name_is_a_scalar_subject_for_to_be_between(toy):
         w.joint("nope")
     with pytest.raises(CapabilityError, match="not a hinge or slide"):
         w.joint("box_free")  # a free joint has seven values, not one
+
+
+def test_redraw_of_a_model_with_no_camera_uses_the_free_camera():
+    """Shadow-hand style models have no cameras; the redraw then falls back to MuJoCo's free camera."""
+    model = mujoco.MjModel.from_xml_string('<mujoco><worldbody><geom type="sphere" size="0.1" pos="0 0 0.2"/></worldbody></mujoco>')
+    r = AttachedRenderer.__new__(AttachedRenderer)  # a renderer over a model and states, without a saved trace file
+    r.model, r.data = model, mujoco.MjData(model)
+    r.trace = type("Trace", (), {"arrays": {"qpos": np.zeros((1, model.nq))}})()
+    r.steps, r._renderer, r._renderer_size = 1, None, None
+    try:
+        assert r.cameras == []
+        img = r.frame(0, size=(64, 48))
+        assert img.shape == (48, 64, 3) and img.any()
+    finally:
+        r.close()
