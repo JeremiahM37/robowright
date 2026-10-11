@@ -40,6 +40,7 @@ SRC = Path(sys.prefix) / "src" / "xarm_ros2"  # the checkout of scripts/ros2_env
 XARM_WS = Path(os.environ.get("ROBOWRIGHT_XARM_WS", "/mnt/bulk/rw-ext/xarm-ws"))
 XARM_LAUNCH = SRC / "xarm_gazebo" / "launch" / "_robot_beside_table_gazebo.launch.py"
 MIMIC_PLUGIN = XARM_WS / "lib" / "libgazebo_mimic_joint_plugin.so"
+CONTROLLER_MANAGER = Path(sys.prefix) / "overlay" / "lib" / "libcontroller_manager.so"
 # The arm stands on the table: xarm_gazebo's launch spawns it at (-0.2, -0.5, 1.021), yawed 90 degrees.
 BASE_POS = (-0.2, -0.5, 1.021)
 READY = (
@@ -118,6 +119,10 @@ def _environment(gripper: bool) -> dict:
     gripper, the mimic-joint plugin on Gazebo's system plugin path."""
     env = dict(os.environ)  # ros_paths() has the overlay on AMENT_PREFIX_PATH
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SRC / "uf_ros_lib"), env.get("PYTHONPATH")]))
+    # The patched controller manager of scripts/ros2_env.sh ros2_control, as the UR and Kinova rigs
+    # preload it: the installed one times controllers by /clock messages, which go late in simulation.
+    if CONTROLLER_MANAGER.exists():
+        env["LD_PRELOAD"] = os.pathsep.join(filter(None, [str(CONTROLLER_MANAGER), env.get("LD_PRELOAD")]))
     if gripper:
         env["GZ_SIM_SYSTEM_PLUGIN_PATH"] = os.pathsep.join(filter(None, [str(MIMIC_PLUGIN.parent), env.get("GZ_SIM_SYSTEM_PLUGIN_PATH")]))
     return env
