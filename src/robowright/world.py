@@ -259,7 +259,7 @@ def _safe(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_.[]=" else "_" for c in name)[:180]
 
 
-def _ros_robot(robot: str | None, options: dict) -> str:
+def _ros_robot(robot: str | None, options: dict, load: dict | None = None, as_name: str | None = None) -> str:
     """The robot a ROS 2 world runs: ``robot`` (a name or a model file), else the description the
     stack publishes, written to robowright's cache as the URDF it is (named for the robot)."""
     if robot is not None:
@@ -275,7 +275,21 @@ def _ros_robot(robot: str | None, options: dict) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{_safe(name.group(1))}.urdf"
     path.write_text(text)
-    return str(path)
+    from . import robots
+
+    # As the stack has it: its own gripper or none (robowright attaches nothing to a robot it does
+    # not build), in its own base frame unless told where it stands.
+    model = robots.load(path, as_name, **{"gripper": "own", "base_pos": (0.0, 0.0, 0.0), **(load or {})})
+    # Where it came from, for a trace: a test generated from it reads the description again
+    model.extra["stack"] = {k: options[k] for k in ("namespace", "description") if options.get(k)}
+    return model.name
+
+
+def ros2_robot(name: str | None = None, **options) -> str:
+    """Register the robot a ROS 2 stack is running, from the description it publishes
+    (``[ros2] description`` under ``namespace``), and return its name (``name``, or the
+    description's own): what ``rw.launch(backend="ros2")`` does when no robot is named."""
+    return _ros_robot(None, options, as_name=name)
 
 
 def launch(

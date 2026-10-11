@@ -62,7 +62,11 @@ from .expect import condition, expect  # noqa: E402
 from .locators import ObjectHandle, Point  # noqa: E402
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene, open_floor, tabletop  # noqa: E402
 from .trace import Trace  # noqa: E402
-from .world import Settings, World  # noqa: E402
+from .world import (  # noqa: E402
+    Settings,
+    World,
+    ros2_robot,  # noqa: E402
+)
 from .world import launch as _launch  # noqa: E402
 
 
@@ -95,6 +99,7 @@ __all__ = [
     "condition",
     "expect",
     "launch",
+    "ros2_robot",
     "tabletop",
     "open_floor",
     "default_scene",

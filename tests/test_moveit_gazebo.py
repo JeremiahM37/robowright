@@ -380,3 +380,32 @@ def test_a_move_urs_controller_gives_up_is_reported_as_that(driven_world):
     with pytest.raises(rw.ActionError, match="PATH_TOLERANCE_VIOLATED"):
         w.backend.end_trajectory()
     assert abs(w.robot.true_qpos()[0] - q[0]) < 0.3  # it held the arm rather than carry on
+
+
+def test_an_agent_meets_the_stack_knowing_nothing_and_its_test_runs(ur_sim, tmp_path):
+    """What an agent given only "a robot is running under ROS 2" does over MCP: ask what is there,
+    connect with what it is told, move the arm, check, and save a test, which then runs by itself:
+    the robot from the description UR's stack publishes, the controller from UR's controller manager."""
+    import json
+
+    from robowright.session import Session
+
+    s = Session(trace_dir=ur_sim)
+    try:
+        found = s.ros2_inspect()
+        assert "scaled_joint_trajectory_controller" in found and "simulation time" in found and "Gazebo: world" in found
+        settings = json.loads(found.rsplit("ros2 settings for launch: ", 1)[1])
+        snap = s.launch(backend="ros2", ros2=settings, objects=[{"name": "cube", "kind": "box", "pos": [0.4, 0.1]}])
+        assert "cube" in snap and s.world.backend.has_gripper is False  # UR's arm as it is: no gripper added
+        s.move_to([0.4, 0.1, 0.17])
+        assert s.expect("tcp", "to_be_near", {"target": [0.4, 0.1, 0.17], "tol": 0.005}).startswith("PASS")
+        test = tmp_path / "test_agent.py"
+        code = s.generate_test("test_agent", str(test))
+        assert "rw.ros2_robot(name=" in code and "scaled_joint_trajectory_controller" in code
+    finally:
+        if s.world is not None:
+            s.close()
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(test)], capture_output=True, text=True, cwd=tmp_path
+    )
+    assert run.returncode == 0, run.stdout[-2000:]

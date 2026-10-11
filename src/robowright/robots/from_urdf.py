@@ -121,6 +121,16 @@ def _resolved(path: Path, raw: bytes, meshes: Path, notes) -> ET.ElementTree:
         raise URDFError(f"{path.name} is not valid XML ({e})") from e
     if root.tag != "robot":
         raise URDFError(f"{path.name} is not a URDF (its root element is <{root.tag}>, not <robot>)")
+    # A box with no thickness (UR draws its cell's floor as "5 5 0") is a plane to ROS tools and
+    # an error to MuJoCo: a millimetre, its far face where the plane was.
+    flat = 0
+    for box in root.iter("box"):
+        size = [float(v) for v in (box.get("size") or "").split()]
+        if len(size) == 3 and min(size) <= 0:
+            box.set("size", " ".join(repr(max(v, 0.001)) for v in size))
+            flat += 1
+    if flat:
+        notes.append(f"repair: {flat} box shape(s) with a side of zero given a millimetre (MuJoCo does not read a box with no thickness)")
     # A link drawn but given no collision shape (the SO-100's gripper and jaw) could not touch
     # anything; its visual meshes are what it is shaped like. Not a massless one: that is a
     # frame drawn as a marker (an end-effector point), not a part.

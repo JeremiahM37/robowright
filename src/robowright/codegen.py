@@ -77,6 +77,9 @@ def _robot_line(rec: dict, imports: set) -> str:
     """``ROBOT = rw.robots.load(...)``: registers the robot the trace was run with, from its model file."""
     from .robots.detect import restore_options
 
+    if "stack" in rec:  # the description the robot's own stack publishes, read again when the test runs
+        args = [f"name={rec['name']!r}", *(f"{k}={v!r}" for k, v in rec["stack"].items())]
+        return f"ROBOT = rw.ros2_robot({', '.join(args)})"
     opts = restore_options(rec.get("overrides", {}))
     if _has_attachment(opts):
         imports.add("from pathlib import Path")

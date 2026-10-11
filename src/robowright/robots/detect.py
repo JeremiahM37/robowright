@@ -142,7 +142,10 @@ def recorded(model: RobotModel) -> dict | None:
     """What a model loaded from a file needs to be loaded again (its file, name and options), else None."""
     if "file" not in model.extra:
         return None
-    return {"file": model.extra["file"], "name": model.name, "overrides": model.extra.get("overrides", {})}
+    rec = {"file": model.extra["file"], "name": model.name, "overrides": model.extra.get("overrides", {})}
+    if "stack" in model.extra:  # read from a ROS 2 stack's own description (the file is robowright's copy of it)
+        rec["stack"] = model.extra["stack"]
+    return rec
 
 
 def reload(rec: dict) -> RobotModel:
@@ -183,7 +186,8 @@ def _build(path, name, drive: bool, **overrides) -> Built:
     path, query = _split_query(path)
     given = dict(overrides)  # as passed: what a trace needs to load this model again
     overrides = dict(overrides)
-    bare = overrides.pop("gripper", True) is False
+    gripper = overrides.pop("gripper", True)
+    bare = gripper is False
     xacro_args = {**query, **overrides.pop("xacro_args", {})}
     given.pop("xacro_args", None)
     if xacro_args:
@@ -203,6 +207,13 @@ def _build(path, name, drive: bool, **overrides) -> Built:
         path_mjcf = path
     mjcf = _named(path_mjcf)
     mjcf, held = (_drive_mobile_base if drive else _hold_mobile_base)(mjcf)
+    if gripper == "own":
+        # The robot as it is, for one robowright does not build (behind ROS 2): the gripper its
+        # model has, and none attached where it has none.
+        try:
+            bare = "attach" in detect(mjcf, overrides.get("attach"), given=overrides, bare=False).fields
+        except DetectionError:
+            bare = True
     det = detect(mjcf, overrides.get("attach"), given=overrides, bare=bare)
     det.notes[:0] = first + held
     if first and not bare and det.fields.get("family", "arm") == "arm" and "attach" not in det.fields:

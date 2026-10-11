@@ -117,10 +117,11 @@ class Session:
         if backend == "ros2":
             from .world import _ros_robot
 
-            robot = _ros_robot(robot, ros2 or {})
-        if robot_options and not robots.is_file(robot):
-            raise RobowrightError(f"robot_options are for a robot given as a model file; {robot!r} is a built-in robot")
         opts = {k: tuple(v) if isinstance(v, list) else v for k, v in (robot_options or {}).items()}
+        if backend == "ros2" and robot is None:
+            robot, opts = _ros_robot(None, ros2 or {}, opts), {}  # the stack's own description, read with them
+        elif robot_options and not robots.is_file(robot):
+            raise RobowrightError(f"robot_options are for a robot given as a model file; {robot!r} is a built-in robot")
         model = robots.load(robot, **opts) if opts else robots.get(robot)
         # A mobile robot's scene is its own: no table, cube or bin to place (its world is the stack's).
         scene = SceneSpec(robot=model.name, objects=[]) if model.family == "mobile" else default_scene(model.name)
