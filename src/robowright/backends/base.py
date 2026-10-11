@@ -143,6 +143,14 @@ class Backend(ABC):
         """World position and (w, x, y, z) quaternion of the floating base."""
         raise NotImplementedError(f"{self.name} does not support floating-base robots")
 
+    def current_base_quat(self) -> np.ndarray:
+        """The floating base's (w, x, y, z) orientation as the joints read it right now (an IMU's view).
+
+        ``base_pose`` may report the last physics step's pose; engines that keep a separate body
+        pose (MuJoCo's xquat) lag their joint state by a step, which a policy's gravity would see.
+        """
+        return self.base_pose()[1]
+
     def base_velocity(self) -> np.ndarray:
         """World-frame linear then angular velocity of the floating base."""
         raise NotImplementedError(f"{self.name} does not support floating-base robots")

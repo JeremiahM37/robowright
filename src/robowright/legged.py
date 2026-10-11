@@ -24,6 +24,18 @@ from .robot import Robot, Rollout, _minjerk, action  # noqa: F401  (Rollout re-e
 __tracebackhide__ = True
 
 
+def _rotation(quat) -> np.ndarray:
+    """The rotation matrix of a (w, x, y, z) quaternion."""
+    w, x, y, z = quat
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
 class Base(Subject):
     """The floating base: position, orientation and velocity, live."""
 
@@ -158,6 +170,12 @@ class LeggedRobot(Robot):
         v = b.base_velocity()
         # What an IMU and leg odometry give a real robot: orientation and velocities.
         obs.update(base_quat=quat, base_lin_vel=v[:3], base_ang_vel=v[3:], qvel=b.qvel())
+        # Locomotion policies are trained on the base's own frame: angular velocity as the gyro
+        # reads it, and gravity as the accelerometer does (down, in the base's axes). Taken from
+        # the orientation the joints read now, not base_quat, which may be a step behind them.
+        now = b.current_base_quat()
+        rot = _rotation(now)
+        obs.update(imu_quat=now, base_ang_vel_body=rot.T @ v[3:], projected_gravity=rot.T @ np.array([0.0, 0.0, -1.0]))
         if privileged:
             obs["base_pos"] = pos
             w = self.world

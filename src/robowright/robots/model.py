@@ -80,6 +80,10 @@ class RobotModel:
     stand: tuple | None = None  # legged: standing joint angles; default: the model's keyframe
     crouch: tuple | None = None  # legged: fully crouched joint angles; default: bend the bent joints further
     servo: tuple | None = None  # (kp, kv): turn torque motors into joint PD servos, as robot firmware does
+    # (kp, kd) per actuated joint, in arm_joints order: torque motors driven by the maker's own PD
+    # loop, as published (kp*(target - q) - kd*qdot each physics step, clipped to the motor's torque).
+    # Takes precedence over ``servo``; targets are held for each control step, as that loop holds them.
+    pd_gains: tuple | None = None
     # (kp, kv): a gripper modelled as a force motor becomes a position servo over its joint's
     # travel, limited to the motor's force, so it can be opened part-way like the others.
     gripper_servo: tuple | None = None
@@ -135,7 +139,18 @@ class RobotModel:
             s.option.impratio, s.option.cone = g.option.impratio, g.option.cone
             _copy_options(s, g)
             s.attach(g, prefix=self.attach.prefix, site=self.attach.at(s))
-        if self.servo is not None:
+        if self.pd_gains is not None:
+            if len(self.pd_gains) != len(self.arm_joints):
+                raise ValueError(f"pd_gains has {len(self.pd_gains)} (kp, kd) pairs for {len(self.arm_joints)} joints")
+            gains = dict(zip(self.arm_joints, self.pd_gains))
+            fidelity.record(
+                "interface",
+                "joint PD loop",
+                f"torque motors driven by the maker's PD gains (kp {[float(g[0]) for g in self.pd_gains]}, "
+                f"kd {[float(g[1]) for g in self.pd_gains]}), held per control step",
+            )
+            _motors_to_pd(s, gains)
+        elif self.servo is not None:
             fidelity.record(
                 "interface",
                 "joint servos",
@@ -393,6 +408,34 @@ def _motors_to_servos(s: mujoco.MjSpec, kp: float, kv: float) -> None:
             a.forcerange = [lo, hi]
             a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
             a.ctrllimited = mujoco.mjtLimited.mjLIMITED_FALSE
+
+
+def _motors_to_pd(s: mujoco.MjSpec, gains: dict) -> None:
+    """Drive each torque motor named in ``gains`` (joint -> (kp, kd)) by its own PD loop.
+
+    A MuJoCo position actuator with bias ``-kp * q - kd * qdot`` is that loop, evaluated at every
+    physics step from the state at that step, and clipped to the motor's torque range.
+    """
+    for a in s.actuators:
+        if a.target not in gains or not (a.gaintype == mujoco.mjtGain.mjGAIN_FIXED and a.biastype == mujoco.mjtBias.mjBIAS_NONE):
+            continue
+        kp, kd = (float(v) for v in gains[a.target])
+        # The torque limit is the motor's own, or the one its joint carries (MJCF's actuatorfrcrange).
+        joint = s.joint(a.target)
+        jlo, jhi = (float(v) for v in joint.actfrcrange)
+        if a.forcelimited == mujoco.mjtLimited.mjLIMITED_TRUE:
+            limit = list(a.forcerange)
+        elif joint.actfrclimited != mujoco.mjtLimited.mjLIMITED_FALSE and jhi > jlo:
+            limit = [jlo, jhi]
+        else:
+            limit = None
+        a.gainprm[0] = kp
+        a.biastype = mujoco.mjtBias.mjBIAS_AFFINE
+        a.biasprm[0], a.biasprm[1], a.biasprm[2] = 0.0, -kp, -kd
+        if limit is not None:
+            a.forcerange = limit
+            a.forcelimited = mujoco.mjtLimited.mjLIMITED_TRUE
+        a.ctrllimited = mujoco.mjtLimited.mjLIMITED_FALSE
 
 
 def _exclude_resting_contacts(s: mujoco.MjSpec) -> None:
