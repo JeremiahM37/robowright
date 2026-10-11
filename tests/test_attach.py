@@ -263,3 +263,15 @@ def test_redraw_of_a_model_with_no_camera_uses_the_free_camera():
         assert img.shape == (48, 64, 3) and img.any()
     finally:
         r.close()
+
+
+def test_set_joint_is_a_recorded_fault_on_a_slide_joint(toy):
+    env, w = toy()
+    env.reset(seed=0)
+    w.set_joint("slide", 0.2)
+    assert w.joint("slide").value == pytest.approx(0.2)
+    with pytest.raises(ValueError, match="not a hinge or slide"):
+        w.set_joint("box_free", 0.0)
+    path = w.close(failed=False)
+    edits = [e for e in Trace(path).events if e.get("type") == "edit"]
+    assert [(e["name"], e["args"]) for e in edits] == [("set_joint", {"joint": "slide", "value": 0.2})]

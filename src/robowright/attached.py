@@ -240,6 +240,12 @@ class AttachedWorld(World):
         finally:
             self._advance = saved
 
+    def set_joint(self, name: str, value: float) -> None:
+        """Move a hinge or slide joint to ``value`` now, as a recorded fault: for bodies that no free joint moves."""
+        self.backend.set_joint(name, value)
+        if self.trace:
+            self.trace.event("edit", "set_joint", {"joint": name, "value": float(value)})
+
     def push(self, body: str, force, duration: float = 0.1, at: float | None = None):
         """A world-frame force (N) on a free body from ``at`` for ``duration`` s, applied to the physics steps it covers."""
         if body not in self.object_names:
