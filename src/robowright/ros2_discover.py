@@ -98,6 +98,7 @@ def _topic(ns: str, name: str) -> str:
 def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> Graph:
     """Look at the ROS graph under ``namespace`` for up to ``timeout`` seconds (wall clock)."""
     import rclpy
+    import rclpy.action as rclpy_action
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile
     from sensor_msgs.msg import JointState
@@ -150,7 +151,7 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
         # Discovery takes a moment; controllers are asked for once their manager is seen
         while time.monotonic() < deadline:
             g.topics = {name: list(types) for name, types in node.get_topic_names_and_types()}
-            g.navigate = find_navigate({n: list(t) for n, t in node.get_action_names_and_types()}, nav_name)
+            g.navigate = find_navigate({n: list(t) for n, t in rclpy_action.get_action_names_and_types(node)}, nav_name)
             if g.manager is None:
                 g.manager = _manager(node, namespace)
             if g.manager and not g.controllers:

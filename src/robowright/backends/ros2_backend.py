@@ -223,6 +223,9 @@ class Ros2Backend(Backend):
         self.gazebo = None
         if cfg["gazebo"]:
             self._open_gazebo(spec, cfg["gazebo"] if isinstance(cfg["gazebo"], dict) else {})
+        # The schedule starts with the world: opening Gazebo above moved the clock on, and a schedule left
+        # behind it would step through that time without waiting for the simulator (no motion, no time).
+        self._tick = self._now()
         q = self.qpos()
         self._ctrl = q.copy()
         self._last_q, self._last_t = q, self._t0
@@ -763,6 +766,7 @@ class Ros2Backend(Backend):
         """Send a goal to the robot's own navigation stack: the pose (x, y, yaw) in the frame the
         stack plans in (``[ros2] base.in``, else ``map``). Nothing is planned here: Nav2 does that,
         and :meth:`navigation_done` and :meth:`end_navigation` say how it went."""
+        import rclpy.action as rclpy_action
         from nav2_msgs.action import NavigateToPose
         from rclpy.action import ActionClient
 
@@ -771,7 +775,7 @@ class Ros2Backend(Backend):
 
         if self._nav is None:
             name = self.topic_name((self.cfg["base"] or {}).get("navigate", "navigate_to_pose"))
-            actions = {n: list(t) for n, t in self.node.get_action_names_and_types()}
+            actions = {n: list(t) for n, t in rclpy_action.get_action_names_and_types(self.node)}
             if find_navigate(actions, name) is None:
                 raise CapabilityError(
                     f"no navigation action {name} (nav2_msgs/action/NavigateToPose) in the ROS graph, so the base cannot be sent "
