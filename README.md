@@ -275,9 +275,13 @@ expect(robot.base).to_be_near((1.0, 0.5, 0.0), tol=0.05, timeout=3)
 Here `go_to` is a turn-drive-turn controller on the simulation's true pose: it plans no path and
 avoids nothing, and raises when it does not arrive in time. Commanded against travelled, over
 2 s: the TurtleBot 3 burger and waffle drive 98 to 101% of a straight line and turn 92 to 99% of
-a pivot; the TurtleBot 4 drives 89% at 0.1 m/s and 76% at 0.2 m/s, which is not yet explained
-(its caster sits 0.6 mm below its wheels in the published model and carries much of its
-weight). `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
+a pivot; the TurtleBot 4 drives 97 and 98%. (It drove 76 to 89% until its caster's friction was read from
+its own file: the URDF gives the caster 0.1 in its Gazebo block, the converter dropped that, and
+the caster dragged at the floor's 1.0.) A base with omni wheels whose rollers are modelled takes a
+sideways speed, `drive(linear, angular, duration, lateral=...)`, with the wheel map measured from
+the rollers. On Menagerie's Robot Soccer Kit the wheels turn at the commanded speeds and the map
+is right (the spins imply the commanded motion to 2%), but the rollers slip on MuJoCo's floor: the
+base moves 60% of a forward command, 43% sideways and 80% of a pivot, which is not explained. `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
 for tests that need no particular robot.
 
 ### Test in a simulation someone else built
@@ -1488,8 +1492,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   otherwise, as two idealised joints (no wheel slip).
 - **Mobile robots:** behind ROS 2, robowright watches and drives a wheeled robot through its
   own stack (velocity commands, Nav2 goals). In its own simulation it drives differential-drive
-  bases on MuJoCo only, with no path planning and no obstacle avoidance; mecanum, omni and
-  caster-only bases are not driven, and there is no localisation (the estimate is the true pose).
+  bases on MuJoCo only, with no path planning and no obstacle avoidance. Omni bases are driven
+  but slip (see above); mecanum bases are untested (no published model with modelled rollers was
+  at hand), and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at a published or measured force (Franka Hand, xArm
