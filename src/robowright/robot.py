@@ -16,6 +16,7 @@ import mujoco
 import numpy as np
 
 from .errors import ActionTimeoutError, CapabilityError, GraspError, TooWideError, UnreachableError
+from .faults import ActionDelay
 from .locators import ObjectHandle, Subject, as_subject
 from .robots import PREFIX, Kinematics
 
@@ -302,7 +303,8 @@ class Robot:
         self.tcp = TCP(self)
         b = world.backend
         self._target = b.qpos().copy()
-        self._target[-1] = GRIPPER_OPEN
+        if self.model.has_gripper:  # (a bare arm's last target is its wrist's)
+            self._target[-1] = GRIPPER_OPEN
         self._held = None  # the arm targets last given, while they hold still (see _servo_target)
         self._still = 0
         self._policy = False  # a policy is driving the arm (run_policy)
@@ -490,13 +492,66 @@ class Robot:
         smooth = hasattr(b, "feedforward")  # its servos are led along the move (see the MuJoCo backend)
         if smooth:
             b.feedforward = True
+        n = self._within_speed_limits(at, n)
+        whole = self._send_whole(at, n)
         try:
             for i in range(1, n + 1):
                 at(i / n)
                 self.world.step()
+            if whole:
+                # The controller answers once it has checked where the arm stopped
+                wait = self.world.settings.action_timeout
+                deadline = self.world.time + wait
+                while not b.trajectory_done():
+                    if self.world.time >= deadline:
+                        raise ActionTimeoutError(f"the robot's controller did not answer the move within {wait:g}s of its end")
+                    self.world.step()
         finally:
             if smooth:
                 b.feedforward = False
+            if whole:
+                b.end_trajectory()
+
+    @functools.cached_property
+    def _speed_limits(self) -> np.ndarray:
+        """Each arm joint's speed limit, where the robot's description gives one (a URDF's
+        ``<limit velocity>``), else infinite."""
+        m = self.kin.m
+        given = {m.numeric(i).name.removeprefix(PREFIX): float(m.numeric(i).data[0]) for i in range(m.nnumeric)}
+        return np.array([given.get(f"speed_limit:{j}", np.inf) for j in self.model.arm_joints])
+
+    def _within_speed_limits(self, at, n: int) -> int:
+        """The number of steps a move planned over ``n`` needs for no joint to be asked to go
+        faster than its limit. A smooth move peaks at nearly twice its average speed: one a UR5e's
+        wrists were to make at 2 rad/s on average asked them for 3.7, over the 3.14 they can do,
+        and UR's controller gave the move up with the arm 0.2 rad behind."""
+        limits = self._speed_limits
+        if not np.isfinite(limits).any():
+            return n
+        now = self._target.copy()
+        last, worst = now[: self.n_arm].copy(), 0.0
+        for i in range(1, n + 1):
+            at(i / n)
+            q = self._target[: self.n_arm]
+            worst = max(worst, float(np.max(np.abs(q - last) / limits)))
+            last = q.copy()
+        self._target = now
+        return max(n, int(np.ceil(n * worst / self.world.dt)))
+
+    def _send_whole(self, at, n: int) -> bool:
+        """Hand the move to a controller that takes whole trajectories (a ROS 2
+        ``joint_trajectory_controller``), as its own clients do, rather than a target a step. Not
+        under an injected action delay, which is a delay of each target."""
+        b = self.world.backend
+        if not getattr(b, "plans_moves", False) or any(isinstance(f, ActionDelay) for f in self.world.faults.active):
+            return False
+        now = self._target.copy()
+        targets = []
+        for i in range(1, n + 1):
+            at(i / n)
+            targets.append(self._target.copy())
+        self._target = now
+        return b.start_trajectory(targets)
 
     def _settle(self, goal, timeout, tol: float = 0.03):
         timeout = timeout or self.world.settings.action_timeout

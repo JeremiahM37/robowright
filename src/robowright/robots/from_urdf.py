@@ -66,6 +66,7 @@ def to_mjcf(path: Path, cache: Path, xacro_args: dict | None = None) -> tuple[Pa
     out = cache / f"{path.stem}-{hashlib.sha1(raw + str(path).encode() + str(VERSION).encode()).hexdigest()[:12]}.xml"
     tree = _resolved(path, raw, cache / "meshes", notes)
     spec = _load(tree, cache)
+    _keep_speed_limits(tree, spec)
     notes.append("collision: the robot's links collide with the world but not with each other (as PyBullet treats a URDF)")
     _add_servos(spec, notes)
     xml = spec.to_xml()
@@ -439,6 +440,17 @@ def _load(tree: ET.ElementTree, cache: Path) -> mujoco.MjSpec:
         for b in bodies[i + 1 :]:
             spec.add_exclude(bodyname1=a, bodyname2=b)
     return spec
+
+
+def _keep_speed_limits(tree: ET.ElementTree, spec: mujoco.MjSpec) -> None:
+    """Each joint's ``<limit velocity>``, which MJCF has no place for, kept as a custom numeric
+    (``speed_limit:<joint>``): moves are planned inside it (see ``Robot._speed_limits``)."""
+    known = {j.name for j in spec.joints}
+    for joint in tree.getroot().iter("joint"):
+        limit = joint.find("limit")
+        v = float(limit.get("velocity", 0) or 0) if limit is not None else 0.0
+        if v > 0 and joint.get("name") in known:
+            spec.add_numeric(name=f"speed_limit:{joint.get('name')}", data=[v], size=1)
 
 
 def _add_servos(spec: mujoco.MjSpec, notes) -> None:

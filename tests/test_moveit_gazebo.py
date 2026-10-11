@@ -330,3 +330,53 @@ def test_an_agent_session_drives_gazebo_and_sees_what_it_renders(ur_sim):
     finally:
         if s.world is not None:
             s.close()
+
+
+@pytest.fixture
+def driven_world(ur_sim):
+    """robowright commanding the arm, through UR's own controller."""
+    model = robots.load(rig.description("ur5e"), name="ur5e_ros", gripper=False, base_pos=(0.0, 0.0, 0.0))
+    w = rw.launch(
+        SceneSpec(robot=model.name, objects=[]),
+        backend="ros2",
+        arm={"controller": "scaled_joint_trajectory_controller", "interface": "trajectory"},
+        frame="base_link",
+        gripper={"interface": "none"},
+        use_sim_time=True,
+        settings=rw.Settings(trace="on", trace_dir=str(ur_sim)),
+    )
+    yield w
+    w.close(failed=False)
+
+
+def _controller_errors(ur_sim) -> int:
+    return rig._read(ur_sim / "control.log").count("[ERROR]")
+
+
+def test_robowright_moves_the_arm_through_urs_own_controller(driven_world, ur_sim):
+    """Each move is one goal to UR's ``scaled_joint_trajectory_controller``, as MoveIt's are: the
+    controller interpolates it, holds it to its own tolerances (0.2 rad along the path) and
+    answers. The tool arrives within a fraction of a millimetre and UR's stack logs no error."""
+    w, r = driven_world, driven_world.robot
+    before, sent = _controller_errors(ur_sim), w.backend.moves_sent
+    goals = ((0.4, 0.2, 0.4), (0.3, -0.2, 0.5), (0.45, 0.0, 0.25))
+    for goal in goals:
+        r.arm.move_to(goal)
+        expect(r.tcp).to_be_near(goal, tol=0.001, timeout=2, hold=0.3)
+    # Home turns two wrists about half a turn: planned at 2 rad/s on average it would peak at
+    # 3.7, over the 3.14 UR's description allows them, and the controller would give it up.
+    r.arm.home()
+    assert w.backend.moves_sent - sent == len(goals) + 1
+    assert _controller_errors(ur_sim) == before
+
+
+def test_a_move_urs_controller_gives_up_is_reported_as_that(driven_world):
+    """A trajectory the arm cannot follow (a quarter turn of the base in one control period):
+    UR's controller aborts it on its path tolerance, and robowright says so in its words."""
+    w = driven_world
+    q = w.robot.true_qpos()
+    assert w.backend.start_trajectory([q + (np.pi / 2, 0, 0, 0, 0, 0), q + (np.pi / 2, 0, 0, 0, 0, 0)])
+    w.run_until(w.backend.trajectory_done, timeout=5)
+    with pytest.raises(rw.ActionError, match="PATH_TOLERANCE_VIOLATED"):
+        w.backend.end_trajectory()
+    assert abs(w.robot.true_qpos()[0] - q[0]) < 0.3  # it held the arm rather than carry on

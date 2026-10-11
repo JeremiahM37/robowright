@@ -10,6 +10,11 @@ class ActionTimeoutError(RobowrightError, TimeoutError):
     """A robot action did not complete within its timeout."""
 
 
+class ActionError(RobowrightError):
+    """The robot's own controller refused a move, or gave it up part-way (a trajectory controller
+    aborting on its path tolerance, say): the message is the controller's."""
+
+
 class InvariantViolation(ExpectationError):
     """A condition registered with ``expect(...).always`` stopped holding."""
 

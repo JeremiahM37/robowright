@@ -5,8 +5,12 @@ The robot is read from ``sensor_msgs/JointState`` and driven through the standar
 driver (most arms do), and with any simulator that speaks ROS 2 (Gazebo, Isaac Sim's bridge):
 
 * **arm**: a ``JointGroupPositionController`` (``forward_command_controller``), sent each
-  control step's targets on ``/<controller>/commands``; or a ``joint_trajectory_controller``,
-  sent a one-point trajectory reaching them one control period later.
+  control step's targets on ``/<controller>/commands``; or a ``joint_trajectory_controller``.
+  A move robowright plans (``arm.move_to``, ``pick``) goes to that one as its clients send
+  theirs: the whole trajectory as one ``FollowJointTrajectory`` goal, which the controller
+  interpolates, checks against its own tolerances and answers (a move it aborts raises
+  ``ActionError`` with its reason). Targets that come one at a time (a policy's) go as
+  one-point trajectories reaching them one control period later.
 * **gripper**: in the same forward controller as the arm, its own forward controller, a
   ``GripperCommand`` action (``gripper_action_controller``, ``parallel_gripper_action_controller``),
   or not at all.
@@ -165,6 +169,7 @@ class Ros2Backend(Backend):
                 _time.sleep(0.005)
         self._t0 = self._now()
         self._tick = self._t0
+        self.moves_sent = 0  # whole moves sent as one goal (start_trajectory)
         self.gazebo = None
         if cfg["gazebo"]:
             self._open_gazebo(spec, cfg["gazebo"] if isinstance(cfg["gazebo"], dict) else {})
@@ -182,6 +187,13 @@ class Ros2Backend(Backend):
         msg = {"position": (Float64MultiArray, "commands"), "trajectory": (JointTrajectory, "joint_trajectory")}
         typ, suffix = msg[arm["interface"]]
         self._arm_pub = self.node.create_publisher(typ, _topic(ns, arm.get("topic") or f"{arm['controller']}/{suffix}"), 10)
+        self._traj_action = self._traj = None
+        if arm["interface"] == "trajectory" and arm.get("whole_moves", True):
+            from control_msgs.action import FollowJointTrajectory
+            from rclpy.action import ActionClient
+
+            self._traj_name = _topic(ns, arm.get("action") or f"{arm['controller']}/follow_joint_trajectory")
+            self._traj_action = ActionClient(self.node, FollowJointTrajectory, self._traj_name)
         self._grip_pub = self._grip_action = None
         gi = grip["interface"]
         if not self.has_gripper or gi in ("with_arm", "none"):
@@ -292,7 +304,9 @@ class Ros2Backend(Backend):
             msg.points = [JointTrajectoryPoint(positions=positions, time_from_start=reach)]
             return msg
 
-        if self.cfg["arm"]["interface"] == "position":
+        if self._traj is not None:
+            pass  # the controller has the whole move (start_trajectory): a target now would replace it
+        elif self.cfg["arm"]["interface"] == "position":
             self._arm_pub.publish(Float64MultiArray(data=values))
         else:
             self._arm_pub.publish(trajectory(names, values))
@@ -300,6 +314,77 @@ class Ros2Backend(Backend):
             self._grip_pub.publish(Float64MultiArray(data=[grip]) if gi == "position" else trajectory([self._grip_joint], [grip]))
         elif self._grip_action is not None and (self._grip_sent is None or abs(grip - self._grip_sent) > 1e-4):
             self._send_grip_goal(grip)
+
+    # --- a whole move, as one goal -----------------------------------------------------------
+    @property
+    def plans_moves(self) -> bool:
+        """Whether a planned move is sent whole (a trajectory controller's action)."""
+        return self.commands and self._traj_action is not None
+
+    def start_trajectory(self, targets) -> bool:
+        """Send ``targets`` (one per control step from now) as one ``FollowJointTrajectory`` goal.
+        False, and nothing sent, where they move nothing the controller drives (a gripper with a
+        controller of its own)."""
+        from builtin_interfaces.msg import Duration
+        from control_msgs.action import FollowJointTrajectory
+        from trajectory_msgs.msg import JointTrajectoryPoint
+
+        targets = np.asarray(targets, float)
+        with_arm = self.has_gripper and self.cfg["gripper"]["interface"] == "with_arm"
+        rows = [[*map(float, t[: self.n_arm]), *([self._grip_q(t[-1])] if with_arm else [])] for t in targets]
+        if np.ptp(np.array([self._last_sent(with_arm), *rows]), axis=0).max(initial=0.0) < 1e-9:
+            return False
+        if not self._traj_action.wait_for_server(timeout_sec=self.cfg["timeout"]):
+            raise TimeoutError(
+                f"no action server {self._traj_name} within {self.cfg['timeout']} s: is the arm's controller active, and is "
+                "[ros2] arm.controller its name? (arm.whole_moves = false sends targets on its topic instead)"
+            )
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = [*self.ros_names, *([self._grip_joint] if with_arm else [])]
+        for i, row in enumerate(rows, 1):
+            sec, nanosec = divmod(round(i * self.control_dt * 1e9), 10**9)
+            goal.trajectory.points.append(JointTrajectoryPoint(positions=row, time_from_start=Duration(sec=sec, nanosec=nanosec)))
+        self._traj = move = {"handle": None, "done": None}
+        self.moves_sent += 1
+
+        def answered(future):
+            result = future.result()
+            move["done"] = (result.result.error_code, result.result.error_string)
+
+        def accepted(future):
+            move["handle"] = handle = future.result()
+            if handle.accepted:
+                handle.get_result_async().add_done_callback(answered)
+            else:
+                move["done"] = (None, "the controller rejected the goal")
+
+        self._traj_action.send_goal_async(goal).add_done_callback(accepted)
+        return True
+
+    def _last_sent(self, with_arm: bool) -> list:
+        return [*map(float, self._ctrl[: self.n_arm]), *([self._grip_q(self._ctrl[-1])] if with_arm else [])]
+
+    def trajectory_done(self) -> bool:
+        return self._traj is None or self._traj["done"] is not None
+
+    def end_trajectory(self) -> None:
+        """Close the move sent by ``start_trajectory``: cancelled if the controller still has it,
+        ``ActionError`` if the controller refused it or gave it up."""
+        from ..errors import ActionError
+
+        move, self._traj = self._traj, None
+        if move is None:
+            return
+        if move["done"] is None:
+            if move["handle"] is not None and move["handle"].accepted:
+                move["handle"].cancel_goal_async()
+            return
+        code, text = move["done"]
+        if code != 0:
+            names = {-1: "INVALID_GOAL", -2: "INVALID_JOINTS", -3: "OLD_HEADER_TIMESTAMP", -4: "PATH_TOLERANCE_VIOLATED"}
+            names[-5] = "GOAL_TOLERANCE_VIOLATED"
+            what = f"{names.get(code, code)}: {text}" if code is not None else text
+            raise ActionError(f"{self.cfg['arm']['controller']} did not carry out the move ({what})")
 
     def _send_grip_goal(self, q: float):
         from control_msgs.action import GripperCommand
