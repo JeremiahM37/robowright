@@ -146,3 +146,41 @@ def test_a_chain_of_unlimited_joints_is_an_arm_not_wheels(tmp_path):
     path.write_text(chain)
     m = mujoco.MjModel.from_xml_path(str(to_mjcf(path, cache_root().parent / "from_urdf")[0]))
     assert not _wheeled(m)
+
+
+class _NavWorld:
+    """A world whose stack never reports the goal done, at the pose it is given (no simulator needed)."""
+
+    def __init__(self, pos):
+        self.settings = SimpleNamespace(action_timeout=10.0)
+        self.dt = 0.02
+        self.backend = self
+        self.trace = None  # no trace: the action is not recorded
+        self.commands = True
+        self.status = "running"
+        self.pos = np.asarray(pos, float)
+
+    def start_navigation(self, x, y, yaw):
+        pass
+
+    def navigation_done(self):
+        return False
+
+    def cancel_navigation(self):
+        pass
+
+    def base_pose(self):
+        return self.pos, np.array([1.0, 0.0, 0.0, 0.0])
+
+    def step(self, n=1):
+        pass
+
+
+def test_a_goal_the_stack_gives_up_on_says_where_the_base_is():
+    """The timeout names the base's pose and how far it is from the goal, so a stall and a slow approach read differently."""
+    from robowright.errors import ActionTimeoutError
+    from robowright.mobile import MobileBase
+
+    base = MobileBase(SimpleNamespace(world=_NavWorld((-1.22, -0.5, 0.0))))
+    with pytest.raises(ActionTimeoutError, match=r"it is at \(-1\.220, -0\.500\), 0\.220 m from the goal"):
+        base.go_to((-1.0, -0.5))

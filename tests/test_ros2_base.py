@@ -57,6 +57,22 @@ def test_suggest_and_the_report_name_what_was_found():
     assert 'base = { cmd_vel = "/cmd_vel", navigate = "/navigate_to_pose" }' in text
 
 
+def test_a_base_suggests_the_frames_it_localizes_in_when_tf_has_them():
+    """Without its frame the base's belief is not read at all, and the agent has to guess it from TF."""
+    g = ros2_discover.Graph(namespace="", sim_time=True)
+    g.cmd_vel = ("/cmd_vel", "geometry_msgs/msg/TwistStamped", 1)
+    g.navigate = "/navigate_to_pose"
+    g.frames = ["base_footprint", "base_link", "map", "odom", "wheel_left_link"]
+    assert ros2_discover.suggest(g)["base"] == {
+        "cmd_vel": "/cmd_vel",
+        "navigate": "/navigate_to_pose",
+        "frame": "base_footprint",
+        "in": "map",
+    }
+    g.frames = ["base_link", "odom"]  # no map: localization is odometry only
+    assert ros2_discover.suggest(g)["base"] == {"cmd_vel": "/cmd_vel", "navigate": "/navigate_to_pose", "frame": "base_link", "in": "odom"}
+
+
 def test_a_robot_without_them_suggests_no_base():
     assert "base" not in ros2_discover.suggest(ros2_discover.Graph(namespace=""))
 

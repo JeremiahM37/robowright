@@ -272,7 +272,16 @@ def suggest(g: Graph, arm_joints: list[str] | None = None) -> dict:
     if g.navigate:
         base["navigate"] = g.navigate
     if base:
-        out["base"] = base  # a mobile base: the frames it localizes in are the project's to give ([ros2] base)
+        # Without the frames the base's pose is not read, and the belief (where the stack thinks it is) is
+        # not there either: a base's frame and the frame it localizes in are found in TF when TF has them.
+        frame = next((f for f in ("base_footprint", "base_link") if f in g.frames), None)
+        if frame is not None:
+            base["frame"] = frame
+            if "map" in g.frames:
+                base["in"] = "map"
+            elif "odom" in g.frames:
+                base["in"] = "odom"
+        out["base"] = base
     grips = [c for c in g.controllers if c.active and c.interface and c.interface[0] == "gripper"]
     if grips:
         out["gripper"] = {"controller": grips[0].name, "interface": grips[0].interface[1]}
