@@ -11,7 +11,7 @@ import pytest
 
 import robowright as rw
 from robowright import expect
-from robowright.attached import AttachedRenderer
+from robowright.attached import AttachedRenderer, _physics_of
 from robowright.errors import CapabilityError, ExpectationError, InvariantViolation
 from robowright.render import jpeg_frames
 from robowright.trace import Trace
@@ -275,3 +275,37 @@ def test_set_joint_is_a_recorded_fault_on_a_slide_joint(toy):
     path = w.close(failed=False)
     edits = [e for e in Trace(path).events if e.get("type") == "edit"]
     assert [(e["name"], e["args"]) for e in edits] == [("set_joint", {"joint": "slide", "value": 0.2})]
+
+
+def test_model_and_data_found_behind_a_binding_wrapper_sim_attribute():
+    """robosuite keeps the MuJoCo structs behind env.sim.model._model and env.sim.data._data."""
+    model = mujoco.MjModel.from_xml_string(XML)
+    data = mujoco.MjData(model)
+
+    model_wrapper = type("ModelWrapper", (), {"_model": model})()  # the binding's own attribute name for its struct
+    data_wrapper = type("DataWrapper", (), {"_data": data})()
+    sim = type("FakeSim", (), {"model": model_wrapper, "data": data_wrapper})()
+    env = type("FakeEnv", (), {"sim": sim})()
+    found_model, found_data = _physics_of(env)
+    assert found_model is model and found_data is data
+    with pytest.raises(ValueError, match="cannot find a MuJoCo model"):
+        _physics_of(type("Bare", (), {})())
+
+
+def test_a_reset_that_rebuilds_the_simulation_is_followed(tmp_path):
+    """robosuite's reset builds a new MjModel and MjData. Subjects must read the new ones, not the ones at attach time."""
+
+    class RebuildingToy(ToyEnv):
+        def reset(self, seed=None, options=None):
+            self.model = mujoco.MjModel.from_xml_string(XML)  # a new simulation object each reset, as robosuite does
+            self.data = mujoco.MjData(self.model)
+            return super().reset(seed=seed, options=options)
+
+    env = RebuildingToy()
+    w = rw.attach(env, settings=rw.Settings(trace_dir=str(tmp_path)))
+    env.reset(seed=0)
+    first = w.model
+    env.reset(seed=1)
+    assert w.model is env.model and w.model is not first
+    assert w.body("box").position[2] == pytest.approx(env.data.xpos[mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, "box"), 2])
+    w.close(failed=False)

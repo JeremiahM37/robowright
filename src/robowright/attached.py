@@ -269,6 +269,15 @@ class AttachedWorld(World):
         if self.trace:
             self.trace.event("log", "env.reset", {"seed": seed})
 
+    def _rebind(self, env) -> None:
+        """Point at the environment's current model and data when it has replaced them (a reset that rebuilds the simulation)."""
+        model, data = _physics_of(env)
+        if model is self.backend.model and data is self.backend.data:
+            return
+        old = self.backend
+        self.backend = AttachedBackend(model, data, seed=self.seed)
+        self.backend.set_control_dt(old.control_dt)
+
     def _physics_step(self, fn, pushes: bool = True):
         """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
         self._begin()
@@ -303,12 +312,24 @@ def model_bytes(model: mujoco.MjModel) -> bytes:
         return p.read_bytes()
 
 
+def _raw(wrapper, attr: str):
+    """The MuJoCo struct a binding wrapper holds, or the object itself when it already is one."""
+    if isinstance(wrapper, (mujoco.MjModel, mujoco.MjData)):
+        return wrapper
+    return getattr(wrapper, attr, None)
+
+
 def _physics_of(env):
     """The MjModel and MjData of an environment: gymnasium's MuJoCo envs, or dm_control's physics."""
     core = getattr(env, "unwrapped", env)
     model, data = getattr(core, "model", None), getattr(core, "data", None)
     if isinstance(model, mujoco.MjModel) and isinstance(data, mujoco.MjData):
         return model, data
+    sim = getattr(core, "sim", None)  # robosuite: sim.model._model and sim.data._data are the raw MuJoCo structs
+    if sim is not None:
+        model, data = _raw(getattr(sim, "model", None), "_model"), _raw(getattr(sim, "data", None), "_data")
+        if isinstance(model, mujoco.MjModel) and isinstance(data, mujoco.MjData):
+            return model, data
     physics = getattr(core, "physics", None) or getattr(getattr(core, "_env", None), "physics", None)
     if physics is not None:  # dm_control: the raw structs are behind .ptr
         return physics.model.ptr, physics.data.ptr
@@ -359,6 +380,7 @@ def _wrap_env(env, world: AttachedWorld) -> None:
 
     def reset(*args, **kwargs):
         out = orig_reset(*args, **kwargs)
+        world._rebind(env)  # robosuite builds a new MjModel and MjData on every reset
         world._on_reset(kwargs.get("seed"))
         return out
 
