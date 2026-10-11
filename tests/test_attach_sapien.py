@@ -264,7 +264,7 @@ def test_robowright_attaches_to_an_object_with_a_sapien_scene_and_refuses_one_wi
 
 
 def test_an_unknown_engine_name_is_refused_and_the_message_lists_sapien():
-    with pytest.raises(ValueError, match="'mujoco', 'pybullet', 'sapien' or 'drake'"):
+    with pytest.raises(ValueError, match="'mujoco', 'pybullet', 'sapien', "):
         rw.attach(engine="nope", model=None, data=None, name="unit_bad_engine")
 
 
