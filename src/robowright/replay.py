@@ -211,7 +211,12 @@ def _make_from_spec(tr: Trace):
     if not spec or not spec.get("reproducible") or not env_rec.get("actions_recorded", True):
         why = env_rec.get("note") or (spec or {}).get("reason") or "this run's environment was not made by gymnasium.make"
         raise ValueError(f"cannot rebuild this run's environment ({why}): pass make_env=... that builds it the way the run did")
-    import gymnasium
+    try:
+        import gymnasium
+    except ImportError as e:
+        raise ValueError(
+            f"this run's environment is {spec['id']!r}, rebuilt with gymnasium, which is not installed: install it or pass make_env=..."
+        ) from e
 
     return lambda: gymnasium.make(spec["id"], **spec["kwargs"])
 
