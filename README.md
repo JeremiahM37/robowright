@@ -195,8 +195,8 @@ description its stack publishes, loaded as it is (its own gripper, or none), and
 gripper controllers are the active ones that claim its joints.
 
 ```python
-with rw.launch(backend="ros2", use_sim_time=True, gazebo=True) as world:   # UR's Gazebo simulation, nothing named
-    world.robot.arm.move_to((0.4, 0.1, 0.3))      # one goal to UR's own trajectory controller
+with rw.launch(backend="ros2", use_sim_time=True, gazebo=True) as world:  # UR's Gazebo simulation, nothing named
+    world.robot.arm.move_to((0.4, 0.1, 0.3))  # one goal to UR's own trajectory controller
     expect(world.robot.tcp).to_be_near((0.4, 0.1, 0.3), tol=0.001)
 ```
 
@@ -224,15 +224,15 @@ passes when their code steps it:
 
 ```python
 env = gym.make("gym_aloha/AlohaTransferCube-v0", obs_type="pixels_agent_pos")
-world = rw.attach(env)                              # their MjModel and MjData, found in the environment
+world = rw.attach(env)  # their MjModel and MjData, found in the environment
 obs, _ = env.reset(seed=1)
-cube = world.body("box")                            # any body, site, geom or joint, by its name in their model
-expect(cube).always.to_be_above(-0.01)              # checked on every env.step
+cube = world.body("box")  # any body, site, geom or joint, by its name in their model
+expect(cube).always.to_be_above(-0.01)  # checked on every env.step
 for _ in range(400):
-    obs, *_ = env.step(policy(obs))                 # their loop, their policy
+    obs, *_ = env.step(policy(obs))  # their loop, their policy
 expect(cube).to_be_touching("vx300s_left/10_left_gripper_finger")
-expect(cube).not_.to_be_touching("table")           # the outcome, from the simulation's own contacts
-world.close()                                       # a trace of the episode, redrawn from their model
+expect(cube).not_.to_be_touching("table")  # the outcome, from the simulation's own contacts
+world.close()  # a trace of the episode, redrawn from their model
 ```
 
 Give it `advance=lambda: env.step(policy(obs))` and `expect(...)` waits by stepping their
@@ -570,9 +570,9 @@ commit:
 
 ```python
 def test_walks_one_metre_upright(published):
-    pub, name = published                                   # unitree_rl_gym's g1.yaml, h1.yaml or h1_2.yaml
+    pub, name = published  # unitree_rl_gym's g1.yaml, h1.yaml or h1_2.yaml
     robot = rw.launch(robot=name, backend="mujoco").robot
-    expect(robot.base).always.to_be_upright(tol_deg=30)     # never falls
+    expect(robot.base).always.to_be_upright(tol_deg=30)  # never falls
     robot.run_policy(ug.LocomotionPolicy(pub, cmd=(0.5, 0.0, 0.0)), timeout=10.0)
     assert robot.base.position[0] >= 1.0
 ```
