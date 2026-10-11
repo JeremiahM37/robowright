@@ -41,9 +41,8 @@ class PyBulletEngine(AttachedEngine):
 
         self.p = p
         self.client = int(client)
-        if dt is None:
-            dt = float(p.getPhysicsEngineParameters(physicsClientId=self.client)["fixedTimeStep"])
-        super().__init__(seed, dt=dt)
+        self._physics_dt = float(p.getPhysicsEngineParameters(physicsClientId=self.client)["fixedTimeStep"])
+        super().__init__(seed, dt=dt if dt is not None else self._physics_dt)
         self._steps = 0
         self._name_of: dict[int, str] = {}  # body id -> name
         self._bodies: dict[str, int] = {}  # name -> body id
@@ -118,10 +117,10 @@ class PyBulletEngine(AttachedEngine):
     def _raw_contacts(self):
         """``(body a, link a, body b, link b, normal force)`` for every contact between two different bodies."""
         out = []
-        for c in self.p.getContactPoints(physicsClientId=self.client):
-            if c[2] == c[3]:
+        for c in self.p.getContactPoints(physicsClientId=self.client):  # [1]/[2] bodies, [3]/[4] links, [9] normal force
+            if c[1] == c[2]:
                 continue
-            out.append((c[2], c[4], c[3], c[5], abs(float(c[9]))))
+            out.append((c[1], c[3], c[2], c[4], abs(float(c[9]))))
         return out
 
     def _side(self, bid: int, link: int) -> str:
@@ -197,13 +196,20 @@ class PyBulletEngine(AttachedEngine):
         p.resetBaseVelocity(bid, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], physicsClientId=c)
 
     def apply_force(self, name: str, force) -> None:
-        """Applied for the next physics step only: PyBullet clears external forces after each step, so a push
-        that lasts several steps is re-applied on each one (the core does that)."""
+        """A force for one control step, delivered as the impulse that step would give.
+
+        PyBullet clears an external force after the physics step it was applied to (measured: the velocity of a
+        free sphere rose by one step's worth and no more). A control step is ``control_dt / physics_dt`` physics
+        steps, so the force is applied once, scaled by that count: the same impulse over the control step. The
+        exact force-over-time within the step is not reproduced, and contacts within the step see the impulse at once.
+        """
         bid = self._bodies.get(name)
         if bid is None:
             raise KeyError(f"no body named {name!r} in this simulation")
+        n = max(1, int(round(self._dt / self._physics_dt)))
         pos, _ = self.p.getBasePositionAndOrientation(bid, physicsClientId=self.client)
-        self.p.applyExternalForce(bid, -1, list(map(float, force)), list(pos), self.p.WORLD_FRAME, physicsClientId=self.client)
+        force_n = [float(f) * n for f in force]
+        self.p.applyExternalForce(bid, -1, force_n, list(pos), self.p.WORLD_FRAME, physicsClientId=self.client)
 
     # --- clock -------------------------------------------------------------------------
     @property

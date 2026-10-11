@@ -35,6 +35,7 @@ import mujoco
 import numpy as np
 
 from . import _current
+from .backends import base as backends
 from .backends.attached_backend import AttachedBackend
 from .backends.attached_engine import AttachedEngine
 from .errors import CapabilityError
@@ -243,7 +244,8 @@ class AttachedWorld(World):
     def _begin(self):
         if not self._began:
             self._began = True
-            state0 = self.backend.get_state()
+            # An engine with no state save (PyBullet) starts its trace with no state0, not an error.
+            state0 = self.backend.get_state() if backends.STATE in self.backend.capabilities else None
             if self.trace:
                 self.trace.begin(state0)
 
