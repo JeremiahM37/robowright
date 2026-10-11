@@ -618,6 +618,7 @@ class Ros2Backend(Backend):
             self.close()
             raise
         self.capabilities = self.capabilities | {GROUND_TRUTH}
+        self._object_names = {o.name for o in spec.objects}
         mine = _SPAWNED.setdefault(gz.world, set())
         for o in spec.objects:
             if gz.has(o.name) and o.name not in mine:
@@ -631,11 +632,33 @@ class Ros2Backend(Backend):
                 mine.add(o.name)
         # The scene's cameras, other than those [ros2] cameras maps to a robot's own image topics,
         # are Gazebo cameras: render() is then what Gazebo draws, not a picture robowright makes.
+        # The world's fixed geometry (its table, floor and walls), as the planner must see it: read once,
+        # after the objects are placed, and kept apart from the robot and the objects (see fixtures).
+        self._scene_models = gz.scene()
         self._gz_cameras = [c for c in spec.cameras if c.name not in self.cfg["cameras"]]
         for c in self._gz_cameras:
             gz.add_camera(c.name, c.pos, c.lookat, c.fovy, c.width, c.height)
         if self._gz_cameras:
             self.capabilities = self.capabilities | {RENDER}
+
+    @property
+    def fixtures(self) -> tuple[list, list]:
+        """The world's fixed obstacles (robowright.obstacles.Obstacle) and the notes on what was skipped:
+        Gazebo's models other than the robot and the scene's objects. Empty without ``gazebo``."""
+        if self.gazebo is None or not hasattr(self, "_scene_models"):
+            return [], []
+        if getattr(self, "_fixtures", None) is None:
+            import mujoco
+
+            from ..obstacles import from_scene
+            from ..robots import PREFIX
+
+            s = mujoco.MjSpec()
+            self.robot_model.add_to(s)
+            m = s.compile()
+            links = {m.body(b).name[len(PREFIX) :] for b in range(m.nbody) if m.body(b).name.startswith(PREFIX)}
+            self._fixtures = from_scene(self._scene_models, robot=links, exclude=self._object_names)
+        return self._fixtures
 
     def object_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
         if self.gazebo is None:

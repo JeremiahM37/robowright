@@ -38,7 +38,7 @@ pytestmark = [
 _worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
 # This module's own ROS graph and Gazebo, as the other Gazebo tests': nothing else on the machine
 # (ROS 2 domain ids stop at 232).
-os.environ["ROS_DOMAIN_ID"] = str(220 + (int(_worker.removeprefix("gw")) * 7 + os.getpid()) % 12)
+os.environ["ROS_DOMAIN_ID"] = str(230 + (int(_worker.removeprefix("gw")) * 7 + os.getpid()) % 3)  # 230-232: no other rig
 os.environ["GZ_PARTITION"] = f"rw-xarm-{_worker}-{os.getpid()}"
 os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
 

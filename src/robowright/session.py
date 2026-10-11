@@ -394,6 +394,10 @@ class Session:
                     line += f", holding {held}" if held else ", holding nothing"
                 lines.append(line)
         lines.append("  joints: " + ", ".join(f"{k}={v:.3f}" for k, v in zip(b.joint_names, r.qpos())))
+        fixtures = getattr(b, "fixtures", ([], []))[0]
+        if fixtures:
+            lines.append("fixed geometry (the stack's world, from Gazebo; moves keep the arm off it):")
+            lines += [f"  - {o.name}: {o.kind} at {_f(o.pos)}, size {tuple(round(s, 4) for s in o.size)}" for o in fixtures]
         lines.append("objects (refs for other calls):")
         for o in w.spec.objects:
             lines.append("  - " + self._describe(o))

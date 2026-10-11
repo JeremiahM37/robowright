@@ -245,6 +245,16 @@ class Gazebo:
             p, q = self._poses[name]
         return p.copy(), q.copy()
 
+    def scene(self, timeout: float = _TIMEOUT_MS / 1000) -> list[dict]:
+        """The world's models as plain data (poses, joints, links, collisions with their geometry), as
+        Gazebo's scene graph has them: each pose is relative to its parent. See :mod:`robowright.obstacles`."""
+        from gz.msgs10 import empty_pb2, scene_pb2
+
+        ok, rep = self._request(f"/world/{self.world}/scene/info", empty_pb2.Empty(), scene_pb2.Scene, int(timeout * 1000))
+        if not ok:
+            raise TimeoutError(f"Gazebo did not answer /world/{self.world}/scene/info within {timeout:g} s")
+        return [_model_dict(m) for m in rep.model]
+
     def velocity(self, name: str) -> np.ndarray:
         """``name``'s linear then angular velocity (world frame): the change in its pose over the
         last ``_VELOCITY_SPAN`` or more of Gazebo's clock (zero until there are two poses since it
@@ -444,6 +454,53 @@ class Gazebo:
         for topic in list(self._node.subscribed_topics()):
             self._node.unsubscribe(topic)
         self._request.close()
+
+
+def _pose_data(p) -> tuple:
+    """A gz.msgs.Pose as ((x, y, z), (w, x, y, z))."""
+    return (p.position.x, p.position.y, p.position.z), (p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z)
+
+
+def _geometry_data(g) -> dict:
+    """The geometry of a gz.msgs.Geometry, by the primitive it is (only the ones it sets)."""
+    out = {}
+    if g.HasField("box"):
+        out["box"] = (g.box.size.x / 2, g.box.size.y / 2, g.box.size.z / 2)  # the message gives the full size
+    if g.HasField("cylinder"):
+        out["cylinder"] = (g.cylinder.radius, g.cylinder.length / 2)
+    if g.HasField("sphere"):
+        out["sphere"] = g.sphere.radius
+    if g.HasField("plane"):
+        out["plane"] = (g.plane.size.x / 2, g.plane.size.y / 2)
+    if g.HasField("mesh"):
+        out["mesh"] = g.mesh.filename
+    return out
+
+
+def _model_dict(m) -> dict:
+    """A gz.msgs.Model as plain data (see :meth:`Gazebo.scene`)."""
+    d = {
+        "name": m.name,
+        "pose": _pose_data(m.pose),
+        "joints": [j.name for j in m.joint],
+        "links": [
+            {
+                "name": link.name,
+                "pose": _pose_data(link.pose),
+                # Scene info carries the visuals (what Gazebo draws), and collisions only where the world has them.
+                "collisions": [
+                    {"name": c.name, "pose": _pose_data(c.pose), "geometry": _geometry_data(c.geometry)} for c in link.collision
+                ],
+                "visuals": [{"name": v.name, "pose": _pose_data(v.pose), "geometry": _geometry_data(v.geometry)} for v in link.visual],
+            }
+            for link in m.link
+        ],
+        "models": [_model_dict(sub) for sub in m.model],
+    }
+    if m.HasField("bounding_box"):  # the model's own box, in its frame: the corners (min, max)
+        b = m.bounding_box
+        d["bounding_box"] = ((b.min_corner.x, b.min_corner.y, b.min_corner.z), (b.max_corner.x, b.max_corner.y, b.max_corner.z))
+    return d
 
 
 def _box(hx, hy, hz) -> str:

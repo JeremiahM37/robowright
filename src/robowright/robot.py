@@ -122,6 +122,21 @@ class Arm:
         goal = np.asarray(q, float)
         start = r._target[: r.n_arm].copy()
         speed = speed or self.world.settings.max_joint_speed
+        if getattr(self.world.backend, "fixtures", ([], []))[0]:
+            # The world has fixed geometry the planner knows (a ROS 2 robot's table, from Gazebo): a
+            # joint-space line through it is not sent. The planner's path goes round it, or the move says why it cannot.
+            planner = r.planner
+            planner.sync(r.gripper.holding() if self.world.has_contacts and r.model.has_gripper else None)
+            hits = planner.line_hits(start, goal)
+            if hits:
+                try:
+                    path = planner.plan(start, goal)
+                except UnreachableError as e:
+                    raise UnreachableError(
+                        f"the straight joint move passes through {', '.join(sorted(hits))}, and no path round it was found ({e}). "
+                        "Name a higher waypoint, or use plan=True where the move allows it"
+                    ) from e
+                return self.follow.__wrapped__(self, path, timeout=timeout)
         # Long arms sweep the tool fast for small joint motions; cap tool speed too
         # or a held object is flung out of the gripper. Measure the path the tool
         # actually sweeps: a joint-space move that changes arm configuration arcs far
