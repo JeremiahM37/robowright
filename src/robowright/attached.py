@@ -1,7 +1,7 @@
 """Attach robowright to a simulation someone else built, and test it as it is.
 
-The engine is found from the environment: MuJoCo (gymnasium, dm_control, robosuite), or PyBullet
-(panda-gym, gym-pybullet-drones, or a bare client with ``engine="pybullet", client=...``). Each engine is one
+The engine is found from the environment: MuJoCo (gymnasium, dm_control, robosuite), SAPIEN (ManiSkill 3),
+or PyBullet (panda-gym, gym-pybullet-drones, or a bare client with ``engine="pybullet", client=...``). Each engine is one
 adapter on the contract in :mod:`robowright.backends.attached_engine`; nothing here reads an engine directly.
 
 
@@ -347,8 +347,9 @@ def attach(
 ) -> AttachedWorld:
     """Attach to an environment (``env``), a bare ``model``/``data`` pair, or a PyBullet client.
 
-    The engine is found from the environment: a MuJoCo model and data it holds, or else a PyBullet
-    client (panda-gym). ``engine="pybullet", client=<physics client id>`` names one directly.
+    The engine is found from the environment: a MuJoCo model and data it holds, else a SAPIEN scene
+    (ManiSkill 3), else a PyBullet client (panda-gym). ``engine="pybullet", client=<physics client id>``
+    names one directly, and ``engine="sapien"`` requires a SAPIEN scene.
 
     ``advance`` is one control step of their loop, for robowright to call when a test waits.
     With ``model``/``data`` or ``client`` and ``step``, ``step`` is the bare stepper: ``world.step()``
@@ -356,8 +357,8 @@ def attach(
     ``dt`` is the control period in seconds: needed for a bare PyBullet client, where nothing in
     PyBullet says how many physics steps make one control step.
     """
-    if engine not in (None, "mujoco", "pybullet"):
-        raise ValueError(f"engine must be 'mujoco' or 'pybullet', not {engine!r}")
+    if engine not in (None, "mujoco", "pybullet", "sapien"):
+        raise ValueError(f"engine must be 'mujoco', 'pybullet' or 'sapien', not {engine!r}")
     if env is not None and (model is not None or data is not None or client is not None):
         raise ValueError("attach takes an environment, or a model and data, or a client, not more than one")
     if env is None and client is None and (model is None or data is None):
@@ -384,7 +385,15 @@ def attach(
 
 
 def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> AttachedEngine:
-    """The adapter for an environment: its MuJoCo model and data if it has them, else its PyBullet client."""
+    """The adapter for an environment: its MuJoCo model and data if it has them, else its SAPIEN scene, else its PyBullet client."""
+    from .backends.attached_sapien import sapien_engine_of
+
+    if engine == "sapien":
+        found = sapien_engine_of(env, seed=seed, dt=dt)
+        if found is None:
+            name = type(getattr(env, "unwrapped", env)).__name__
+            raise ValueError(f"cannot find a SAPIEN scene in {name}: it has no scene with actors, articulations and px")
+        return found
     if engine != "pybullet":
         try:
             model, data = _physics_of(env)
@@ -392,6 +401,9 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
         except ValueError as mujoco_error:
             if engine == "mujoco":
                 raise
+            found = sapien_engine_of(env, seed=seed, dt=dt)
+            if found is not None:
+                return found
             from .backends.attached_pybullet import pybullet_engine_of
 
             found = pybullet_engine_of(env, seed=seed, dt=dt)
