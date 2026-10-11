@@ -32,6 +32,10 @@ steps:
     actions:
       - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_moveit_gazebo.py tests/test_moveit_panda.py tests/test_kinova_gazebo.py -q -p no:cacheprovider", timeout: 1800 }
 
+  - name: Nav2's own TurtleBot simulations and example programs, robowright observing a mobile robot (truth from Gazebo, belief from TF)
+    actions:
+      - shell: { cmd: "ROBOWRIGHT_ROS2_ENV=$HOME/.cache/robowright/ros2-jazzy-nav2 capped scripts/ros2_env.sh pytest tests/test_nav2_examples.py tests/test_nav2_turtlebot.py -q -p no:cacheprovider", timeout: 1500 }
+
   - name: fidelity - the default is the model as published, and every change is on record
     actions:
       - shell: ".venv/bin/robowright fidelity --robot panda --backend mujoco | grep -q 'sourced: grip force' && ! .venv/bin/robowright fidelity --robot panda | grep -q '^  adjusted'"

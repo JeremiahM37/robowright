@@ -60,7 +60,7 @@ def _first_message(topic: str, timeout: float) -> bool:
     example waited forever for AMCL's get_state), so the rig does not hand the stack over earlier."""
     try:
         done = subprocess.run(
-            ["ros2", "topic", "echo", topic, "--once"], capture_output=True, timeout=timeout, env=_environment(), check=False
+            ["ros2", "topic", "echo", "--no-daemon", topic, "--once"], capture_output=True, timeout=timeout, env=_environment(), check=False
         )
     except subprocess.TimeoutExpired:
         return False

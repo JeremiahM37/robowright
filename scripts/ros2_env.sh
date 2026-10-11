@@ -11,6 +11,7 @@
 #
 #   scripts/ros2_env.sh create                  # once (about 2 GB)
 #   scripts/ros2_env.sh kortex                  # Kinova's ros2_kortex and Robotiq's descriptions, for the Kinova Gazebo rig
+#   scripts/ros2_env.sh nav2                    # a second environment with Nav2 and its TurtleBot simulations
 #   scripts/ros2_env.sh pytest tests/test_ros2.py
 #
 # The environment lives in $ROBOWRIGHT_ROS2_ENV (default ~/.cache/robowright/ros2-jazzy).
@@ -30,7 +31,10 @@ if [ "${1:-}" = "create" ]; then
         python=3.12 ros-jazzy-ros-base ros-jazzy-ros2-control ros-jazzy-ros2-controllers \
         ros-jazzy-controller-manager ros-jazzy-tf2-ros-py ros-jazzy-control-msgs \
         ros-jazzy-robot-state-publisher ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge ros-jazzy-gz-ros2-control \
-        ros-jazzy-moveit ros-jazzy-ur-simulation-gz ros-jazzy-ur-moveit-config ros-jazzy-ur-description ros-jazzy-ur-robot-driver uv
+        ros-jazzy-moveit ros-jazzy-ur-simulation-gz ros-jazzy-ur-moveit-config ros-jazzy-ur-description ros-jazzy-ur-robot-driver \
+        ros-jazzy-moveit-resources-panda-moveit-config ros-jazzy-moveit-resources-panda-description \
+        ros-jazzy-kortex-description ros-jazzy-robotiq-description ros-jazzy-gripper-controllers \
+        ros-jazzy-picknik-twist-controller ros-jazzy-picknik-reset-fault-controller uv
     "$ENV/bin/uv" pip install --python "$ENV/bin/python" -e "$REPO[dev,onnx]"
     "$0" pymoveit2
     "$0" kortex
@@ -43,6 +47,18 @@ if [ "${1:-}" = "pymoveit2" ]; then
     git clone -q https://github.com/AndrejOrsula/pymoveit2.git "$ENV/src/pymoveit2"
     git -C "$ENV/src/pymoveit2" checkout -q "$PYMOVEIT2_COMMIT"
     git -C "$ENV/src/pymoveit2" apply "$REPO"/scripts/patches/pymoveit2-*.patch
+    exit 0
+fi
+if [ "${1:-}" = "nav2" ]; then
+    # Nav2 and its TurtleBot simulations, in an environment of their own ($ENV-nav2): RoboStack's
+    # Nav2 builds do not install beside the MoveIt and UR packages above. Run its tests with
+    #   ROBOWRIGHT_ROS2_ENV="$ENV-nav2" scripts/ros2_env.sh pytest tests/test_nav2_examples.py tests/test_nav2_turtlebot.py
+    [ -x "$MM" ] || { echo "run $0 create first (it fetches micromamba)" >&2; exit 1; }
+    MAMBA_ROOT_PREFIX="$TOOLS/root" "$MM" create -y -p "$ENV-nav2" -c conda-forge -c robostack-jazzy \
+        ros-jazzy-ros-base ros-jazzy-nav2-bringup ros-jazzy-navigation2 ros-jazzy-nav2-simple-commander \
+        ros-jazzy-turtlebot3-gazebo ros-jazzy-turtlebot3-navigation2 ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge \
+        ros-jazzy-tf2-ros-py ros-jazzy-robot-state-publisher uv
+    "$ENV-nav2/bin/uv" pip install --python "$ENV-nav2/bin/python" -e "$REPO[dev]"
     exit 0
 fi
 if [ "${1:-}" = "kortex" ]; then

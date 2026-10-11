@@ -214,6 +214,27 @@ Stacks this is tested around, each as its makers ship it, on ROS 2 Jazzy:
 | Universal Robots UR5e ([`test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)) | `ur_simulation_gz` (Gazebo, `gz_ros2_control`), `ur_moveit_config` | pymoveit2's examples, UR's `example_move.py` | observes; drives Gazebo; drives the arm through UR's controller |
 | MoveIt's Panda demo ([`test_moveit_panda.py`](tests/test_moveit_panda.py)) | `moveit_resources_panda_moveit_config` (mock hardware) | pymoveit2's pose, joint and gripper examples | observes; drives arm and hand through the demo's controllers; finds them by itself |
 | Kinova Gen3 + Robotiq 2F-85 ([`test_kinova_gazebo.py`](tests/test_kinova_gazebo.py)) | `ros2_kortex`'s `kortex_sim_control` (Gazebo) | robowright's own pick and place, through Kinova's controllers | drives arm and gripper; picks a cube and sets it in a bin, judged by Gazebo's poses |
+| Nav2 with a TurtleBot 4 ([`test_nav2_examples.py`](tests/test_nav2_examples.py)) and a TurtleBot 3 ([`test_nav2_turtlebot.py`](tests/test_nav2_turtlebot.py)) | Nav2's own example launch files (Gazebo, AMCL, the navigation stack) | `nav2_simple_commander`'s `example_nav_to_pose` and `example_follow_path` | observes a mobile robot: where it is (Gazebo) against where Nav2 believes it is (TF) |
+
+A wheeled robot has `robot.base` in place of an arm: where it is, by Gazebo's ground truth, and
+`robot.base.estimate`, where its own stack believes it is. Any topic and any TF frame can be
+watched and asserted on:
+
+```python
+with rw.launch(
+    backend="ros2", command=False, use_sim_time=True, gazebo=True, base={"frame": "base_footprint", "in": "map"}
+) as world:  # Nav2 drives; robowright watches
+    robot = world.robot
+    expect(robot.base).always.to_be_upright(tol_deg=5)
+    expect(world.ros.topic("/scan")).to_publish(hz=10.0, tol=0.25, timeout=10)  # the lidar, at its rate
+    expect(robot.base.estimate).to_be_near(goal, tol=0.75, timeout=120)  # arrived, by Nav2's own belief
+    assert np.linalg.norm(robot.base.estimate.position - in_map(robot.base.position)) < 0.5  # and the belief is true
+```
+
+With Nav2's examples run as Nav2 launches them, the TurtleBot 4 arrives 0.17 m from
+`example_nav_to_pose`'s final goal and 0.22 to 0.35 m from `example_follow_path`'s (Nav2's own
+goal tolerance is 0.25 m, and the example reports success at 0.35), and Nav2's belief stays
+within 0.26 m of where Gazebo has the robot.
 
 ### Test in a simulation someone else built
 
@@ -1368,7 +1389,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 
 - **No physical robot yet:** the ROS 2 backend has run against `ros2_control`'s own controllers
   on mock hardware, against robowright's simulation served over ROS 2, against an SO-101 in
-  Gazebo, and against Universal Robots', MoveIt's and Kinova's own stacks, on Jazzy only. Nothing
+  Gazebo, and against Universal Robots', MoveIt's, Kinova's and Nav2's own stacks, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet and SAPIEN simulations (one
@@ -1383,6 +1404,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   (no grasp that rolls the hand); plain moves interpolate joints without checking for
   collisions (pass `plan=True`). A mobile base drives only where the arm cannot reach
   otherwise, as two idealised joints (no wheel slip).
+- **Mobile robots are watched, not driven:** robowright reads a wheeled robot's pose, belief and
+  topics while its own stack drives it. It does not send velocity commands or navigation goals,
+  and there is no wheeled robot in robowright's own engines.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at a published or measured force (Franka Hand, xArm
@@ -1399,9 +1423,11 @@ Each of these builds on the extension points above, not on any one robot or fram
 
 1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
    from simulation as known divergences, as the engines' are.
-2. **A camera-trained example policy**, tested on every engine and behind ROS 2.
-3. **Locomotion policies** as first-class fixtures (walk a Go2 or G1 one metre, assert it
-   stays upright).
+2. **More stacks and simulators:** xArm's and Franka's own Gazebo simulations, Isaac Lab and
+   GPU-batched environments for `rw.attach`, and driving a mobile robot (velocity commands,
+   navigation goals) as arms are driven.
+3. **Replay and codegen for attached simulations**, where the environment can be rebuilt from
+   its seed.
 
 ## License
 

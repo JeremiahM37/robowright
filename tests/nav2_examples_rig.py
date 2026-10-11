@@ -66,7 +66,12 @@ def _scan_publishes(timeout: float) -> bool:
     global _last_scan_check
     try:
         done = subprocess.run(
-            ["ros2", "topic", "echo", "/scan", "--once"], capture_output=True, text=True, timeout=timeout, env=_environment(), check=False
+            ["ros2", "topic", "echo", "--no-daemon", "/scan", "--once"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_environment(),
+            check=False,
         )
     except subprocess.TimeoutExpired:
         _last_scan_check = "ros2 topic echo /scan timed out"
