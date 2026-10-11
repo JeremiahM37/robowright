@@ -477,17 +477,41 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
 
 
 def _env_spec(env) -> dict | None:
-    """The gymnasium id and kwargs an environment was made with (``gymnasium.make`` sets ``env.spec``), or None."""
+    """The gymnasium spec an environment was made from (``gymnasium.make`` sets ``env.spec``), or None.
+
+    ``entry_point`` names the module the environment's class lives in, so a rebuild in a fresh process can import
+    the package that registered it. ``max_episode_steps`` is what this make used, and ``registered_max_episode_steps``
+    the registry's default: a rebuild passes the first only when it differs from the second.
+    """
     spec = getattr(env, "spec", None) or getattr(getattr(env, "unwrapped", None), "spec", None)
     env_id = getattr(spec, "id", None)
     if not isinstance(env_id, str):
         return None
-    kwargs = dict(getattr(spec, "kwargs", None) or {})
+    entry = getattr(spec, "entry_point", None)
+    if not isinstance(entry, str) and callable(entry):  # a class object: the module and name it can be imported by
+        entry = f"{entry.__module__}:{entry.__qualname__}"
+    record = {
+        "id": env_id,
+        "kwargs": dict(getattr(spec, "kwargs", None) or {}),
+        "entry_point": entry if isinstance(entry, str) else None,
+        "max_episode_steps": getattr(spec, "max_episode_steps", None),
+        "registered_max_episode_steps": _registered_max_episode_steps(env_id),
+        "reproducible": True,
+    }
     try:
-        json.dumps(kwargs)
+        json.dumps(record)
     except (TypeError, ValueError):
-        return {"id": env_id, "kwargs": {}, "reproducible": False, "reason": "the make() kwargs are not plain values"}
-    return {"id": env_id, "kwargs": kwargs, "reproducible": True}
+        return {**record, "kwargs": {}, "reproducible": False, "reason": "the make() kwargs are not plain values"}
+    return record
+
+
+def _registered_max_episode_steps(env_id: str):
+    try:
+        import gymnasium
+
+        return gymnasium.spec(env_id).max_episode_steps
+    except Exception:  # noqa: BLE001 - not registered in this process: the rebuild passes the recorded limit as it is
+        return None
 
 
 def _wrap_env(env, world: AttachedWorld) -> None:

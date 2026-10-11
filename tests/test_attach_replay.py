@@ -120,11 +120,9 @@ def test_a_trace_records_the_spec_the_actions_and_the_calls(tmp_path):
     path = _record(tmp_path)
     tr = Trace(path)
     env_rec = tr.meta["env"]
-    assert env_rec == {
-        "spec": {"id": "ToyBox-v0", "kwargs": {"variant": "box"}, "reproducible": True},
-        "actions_recorded": True,
-        "note": None,
-    }
+    spec = env_rec["spec"]
+    assert (spec["id"], spec["kwargs"], spec["reproducible"]) == ("ToyBox-v0", {"variant": "box"}, True)
+    assert env_rec["actions_recorded"] is True and env_rec["note"] is None
     controls = tr.controls
     assert len(controls) == N_STEPS + 1
     assert sum(kind == "observe" for _, kind, _ in controls) == 1
@@ -233,3 +231,56 @@ def test_replay_says_when_the_rebuilt_model_differs_from_the_recorded_one(tmp_pa
     r = replay(path, make_env=heavier_env)
     assert any("different MuJoCo model" in n for n in r.notes)
     assert not r.matches  # the box falls differently, so the states differ too
+
+
+def test_a_real_gymnasium_robotics_run_replays_and_generates_a_test_that_runs_in_a_fresh_process(tmp_path):
+    """FetchPickAndPlace from gymnasium_robotics: a third-party registration, and a non-default episode limit.
+
+    Only runs where gymnasium and gymnasium_robotics are installed (not the project venv). The recording process
+    registers the environment; the generated test and the replay CLI run in fresh processes, which must find it
+    from the trace alone.
+    """
+    gymnasium = pytest.importorskip("gymnasium")
+    gymnasium_robotics = pytest.importorskip("gymnasium_robotics")
+    gymnasium.register_envs(gymnasium_robotics)
+    env = gymnasium.make("FetchPickAndPlace-v4", max_episode_steps=100)
+    w = rw.attach(env, settings=rw.Settings(trace="on", trace_dir=str(tmp_path / "rec")), name="fetch")
+    env.reset(seed=3)
+    env.action_space.seed(0)
+    expect(w.body("object0")).always.to_be_above(0.0)
+    for _ in range(80):
+        env.step(env.action_space.sample())
+    path = w.close()
+    assert path is not None
+
+    tr = Trace(path)
+    spec = tr.meta["env"]["spec"]
+    assert spec["entry_point"].startswith("gymnasium_robotics.")
+    assert spec["max_episode_steps"] == 100 and spec["registered_max_episode_steps"] == 50
+
+    r = replay(path)  # in this process, through the same spec
+    assert r.identical, r.summary()
+    assert not any("different MuJoCo model" in n for n in r.notes)
+
+    cli = subprocess.run(
+        [sys.executable, "-m", "robowright.cli", "replay", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={**__import__("os").environ, "PYTHONPATH": str(SRC)},
+    )
+    assert cli.returncode == 0, cli.stdout + cli.stderr
+    assert "bit-identical" in cli.stdout
+
+    out = tmp_path / "gen"
+    out.mkdir()
+    test_file = out / "test_fetch_gen.py"
+    test_file.write_text(generate(path, test_name="test_fetch_regression"))
+    extra = companion(path, test_name="test_fetch_regression")
+    assert extra is not None
+    (out / extra[0]).write_bytes(extra[1])
+    text = test_file.read_text()
+    assert "gymnasium.make('gymnasium_robotics:FetchPickAndPlace-v4', reward_type='sparse', max_episode_steps=100)" in text
+    proc = _run_test_file(test_file, None)  # a fresh process, which never imported gymnasium_robotics
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout

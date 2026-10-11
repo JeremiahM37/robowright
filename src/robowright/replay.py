@@ -205,6 +205,24 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         world.close(failed=False)
 
 
+def make_spec_call(spec: dict) -> tuple[str, dict]:
+    """The id and keyword arguments ``gymnasium.make`` needs to rebuild a recorded environment in a fresh process.
+
+    A third-party environment is named ``"<module>:<id>"``: gymnasium imports that module first, which registers the
+    environment. Without it a fresh process only knows ids that something else has already imported.
+    """
+    env_id = spec["id"]
+    entry = spec.get("entry_point")
+    if isinstance(entry, str) and ":" in entry:
+        module = entry.split(":", 1)[0].split(".", 1)[0]
+        if module != "gymnasium":
+            env_id = f"{module}:{env_id}"
+    kwargs = dict(spec.get("kwargs") or {})
+    if spec.get("max_episode_steps") != spec.get("registered_max_episode_steps"):
+        kwargs["max_episode_steps"] = spec.get("max_episode_steps")  # the make() passed a limit other than the default
+    return env_id, kwargs
+
+
 def _make_from_spec(tr: Trace):
     env_rec = tr.meta.get("env") or {}
     spec = env_rec.get("spec")
@@ -217,8 +235,8 @@ def _make_from_spec(tr: Trace):
         raise ValueError(
             f"this run's environment is {spec['id']!r}, rebuilt with gymnasium, which is not installed: install it or pass make_env=..."
         ) from e
-
-    return lambda: gymnasium.make(spec["id"], **spec["kwargs"])
+    env_id, kwargs = make_spec_call(spec)
+    return lambda: gymnasium.make(env_id, **kwargs)
 
 
 def _stored_model(tr: Trace) -> bytes | None:

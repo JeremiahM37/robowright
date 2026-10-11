@@ -362,8 +362,11 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) 
         i += 1
 
     if rebuilt:
-        kw = "".join(f", {k}={v!r}" for k, v in spec["kwargs"].items())
-        make = f"gymnasium.make({spec['id']!r}{kw})"
+        from .replay import make_spec_call
+
+        env_id, kwargs = make_spec_call(spec)
+        kw = "".join(f", {k}={v!r}" for k, v in kwargs.items())
+        make = f"gymnasium.make({env_id!r}{kw})"
         stub: list[str] = []
     else:
         make = "make_env()"
