@@ -7,6 +7,7 @@ Needs a ROS 2 environment with Gazebo and the checkout of ``scripts/ros2_env.sh 
 tests also need its mimic-joint plugin, built by the same script. Skipped elsewhere.
 """
 
+import functools
 import importlib.util
 import os
 import threading
@@ -52,6 +53,34 @@ ROT = np.array([[np.cos(YAW), -np.sin(YAW), 0], [np.sin(YAW), np.cos(YAW), 0], [
 # that is 80 cm below this arm's base, so the arm's own home is given, in its frame, as the goals are
 HOME = BASE + ROT @ np.array((0.3, 0.0, 0.3))
 GOALS = tuple(BASE + ROT @ np.array(p) for p in ((0.3, 0.0, 0.35), (0.25, 0.15, 0.25), (0.3, -0.15, 0.4)))
+
+
+GAZEBO_CRASH = (
+    "Gazebo crashed: a segmentation fault inside xarm_gazebo's mimic-joint plugin (libgazebo_mimic_joint_plugin.so), "
+    "about 2 s after start, in 1 of 12 runs of the gripper test here"
+)
+
+
+def _gazebo_crashed(sim) -> bool:
+    """Whether this simulation's Gazebo died of a segmentation fault in UFACTORY's mimic-joint plugin (its own log)."""
+    log = rig._read(sim / "control.log")
+    return "Segmentation fault" in log and "libgazebo_mimic_joint_plugin.so" in log
+
+
+def crash_is_ufactorys(test):
+    """A test that stops on a dead simulation clock is an expected failure when Gazebo's own log shows the crash
+    in UFACTORY's plugin: robowright reported the stop, and the cause is not its to fix."""
+
+    @functools.wraps(test)
+    def run(*args, **kwargs):
+        try:
+            return test(*args, **kwargs)
+        except rw.errors.RobowrightError as e:
+            if "simulation clock" in str(e) and _gazebo_crashed(kwargs["xarm"]):
+                pytest.xfail(f"{GAZEBO_CRASH}. {str(e)[:120]}")
+            raise
+
+    return run
 
 
 @pytest.fixture
@@ -169,6 +198,7 @@ def driven(xarm):
     w.close(failed=False)
 
 
+@crash_is_ufactorys
 def test_robowright_moves_the_arm_through_xarms_controller(driven, xarm):
     """Each move is one FollowJointTrajectory goal to UFACTORY's controller. The tool arrives within a
     millimetre of each goal, and the stack logs no error."""
@@ -184,6 +214,7 @@ def test_robowright_moves_the_arm_through_xarms_controller(driven, xarm):
     assert rig._read(xarm / "control.log").count("[ERROR]") == errors
 
 
+@crash_is_ufactorys
 def test_robowright_opens_and_closes_xarms_gripper_through_its_controller(xarm):
     """The gripper is one more joint of ``xarm_gripper_traj_controller``, found from the controller
     manager and driven by its trajectory topic; ``opening`` is read back from ``drive_joint``."""
@@ -264,6 +295,7 @@ PICK_LIFT_CAUSE = (
 )
 
 
+@crash_is_ufactorys
 def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
     """robowright commands the arm and its gripper through UFACTORY's controllers, and Gazebo's physics
     decides whether the cube comes with the hand: the cube's pose is Gazebo's ground truth. Starting from
@@ -278,6 +310,8 @@ def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
     except rw.errors.RobowrightError as e:
         if "simulation clock" not in str(e):
             raise
+        if _gazebo_crashed(xarm):
+            pytest.xfail(f"{GAZEBO_CRASH}. {str(e)[:120]}")
         # Seen once in a full suite run: after the kicked cube, Gazebo stopped publishing /clock (its process
         # still alive) and the pick waited on it for half an hour. robowright now gives up on a stopped clock.
         pytest.xfail(f"{PICK_LIFT_CAUSE}; then the simulation stopped. {str(e)[:160]}")
@@ -285,6 +319,7 @@ def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
         w.close(failed=False)
 
 
+@crash_is_ufactorys
 def test_robowright_picks_a_cube_after_lifting_clear_of_the_table(xarm):
     """The same pick, started from a pose 15 cm above the grasp, which robowright reaches by its own IK
     (joint space, one move): the route clears the table by 36 mm and 63 mm (offline, from the planned
@@ -310,6 +345,8 @@ def test_robowright_picks_a_cube_after_lifting_clear_of_the_table(xarm):
     except rw.errors.RobowrightError as e:
         if "simulation clock" not in str(e):
             raise
+        if _gazebo_crashed(xarm):
+            pytest.xfail(f"{GAZEBO_CRASH}. {str(e)[:120]}")
         # Seen once in a full suite run: after the kicked cube, Gazebo stopped publishing /clock (its process
         # still alive) and the pick waited on it for half an hour. robowright now gives up on a stopped clock.
         pytest.xfail(f"{PICK_LIFT_CAUSE}; then the simulation stopped. {str(e)[:160]}")
