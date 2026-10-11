@@ -1,25 +1,18 @@
 """robowright as the harness around Nav2's own TurtleBot3 simulation.
 
 Nav2's ``nav2_bringup`` runs a TurtleBot3 Waffle in Gazebo (headless) with its localization (AMCL)
-and navigation stacks, and ``nav2_simple_commander``'s example programs drive it. Those programs
-are the code under test, run as published (``ros2 run nav2_simple_commander example_...``); robowright
-does not command the robot (``command=False``): it reads the robot's stack and Gazebo's ground truth,
-and asserts. See tests/nav2_rig.py for the stack, and for the one change to Gazebo's world (its
-SceneBroadcaster, which the shipped headless world leaves out, so that the robot's pose can be read).
+and navigation stacks. robowright does not command the robot (``command=False``): it reads the
+robot's stack and Gazebo's ground truth, and asserts. See tests/nav2_rig.py for the stack, and for
+the one change to Gazebo's world (its SceneBroadcaster, which the shipped headless world leaves out,
+so that the robot's pose can be read).
 
-Measured with this stack (see the report with the module): the examples' goals and start pose are
-written for another map. ``example_nav_to_pose`` sends the robot to (17.86, -0.77), outside the
-sandbox's 20 m map, and every example sets Nav2's initial pose to (0, 0), where the simulation does
-not put the robot (it spawns it at (-2.0, -0.5)), and where the costmap leaves no plan out. The tests
-that run the examples assert what they should do, and fail where they do not.
-
-Needs a ROS 2 environment with nav2_bringup, nav2_minimal_tb3_sim and nav2_simple_commander
-(``ROBOWRIGHT_ROS2_ENV=/mnt/bulk/ros2-env/jazzy-nav2``); skipped elsewhere.
+Nav2's example programs (``nav2_simple_commander``) are written for the depot world, not this sandbox,
+so they are not run here: they are tested as shipped, with their own launch files, in
+tests/test_nav2_examples.py.
 """
 
 import importlib.util
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -51,15 +44,12 @@ os.environ["GZ_PARTITION"] = f"rw-nav2-{_worker}-{os.getpid()}"
 os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
 
 SPAWN = (-2.0, -0.5, 0.0)  # where nav2_bringup's launch file puts the robot in the sandbox world (z: on the floor)
-EXAMPLE_START = (0.0, 0.0, 0.0)  # the initial pose every nav2_simple_commander example sets
-EXAMPLE_GOAL = (17.86, -0.77, 0.0)  # example_nav_to_pose's goal
 SCAN_HZ = 5.0  # the lidar's update_rate in nav2_minimal_tb3_sim's waffle description
 
 
 @pytest.fixture
 def stack(tmp_path):
-    # One stack per test: an example ends by shutting Nav2 down (BasicNavigator.lifecycleShutdown),
-    # so a second example on the same stack finds no Nav2 and waits for it forever (measured).
+    # One simulation per test, so that each starts from the sandbox as the launch file puts it.
     with rig.nav2_stack(tmp_path) as st:
         yield st
 
@@ -77,18 +67,6 @@ def world(stack):
     )
     yield w
     w.close(failed=False)
-
-
-def _run_example(stack, world, name: str, timeout: float = 240.0) -> str:
-    """Run one of nav2_simple_commander's examples as shipped, with the world stepping meanwhile
-    (so invariants hold through it); its output."""
-    p = stack.example(name)
-    deadline = time.monotonic() + timeout
-    while p.poll() is None:
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"{name} did not finish within {timeout} s:\n{stack.example_log(name)[-2000:]}")
-        world.wait(0.2)
-    return stack.example_log(name)
 
 
 def test_the_robot_is_the_one_the_stack_publishes(world):
@@ -126,32 +104,3 @@ def test_a_session_observes_the_mobile_robot(stack):
         assert "robot (mobile):" in text and "base: position" in text and "wheels:" in text
     finally:
         s.close()
-
-
-def test_nav_to_pose_example_reaches_its_goal(stack, world):
-    """example_nav_to_pose, as shipped, must take the robot to its goal. It cannot: the goal lies
-    outside the sandbox map. The example's own output is part of the failure."""
-    r = world.robot
-    log = _run_example(stack, world, "example_nav_to_pose")
-    assert "Goal succeeded!" in log, log[-1500:]
-    expect(r.base).to_be_near(EXAMPLE_GOAL, tol=0.25, timeout=5)
-
-
-def test_nav2_believes_where_the_robot_is(stack, world):
-    """Nav2's localization (the example's initial pose, then AMCL) against Gazebo's truth, after the
-    example has run. The example's start is (0, 0); the robot is at (-2.0, -0.5)."""
-    _run_example(stack, world, "example_nav_to_pose")
-    expect(world.robot.base.estimate).to_be_near(world.robot.base, tol=0.25, timeout=5)
-
-
-def test_the_robot_stays_upright_through_an_example(stack, world):
-    expect(world.robot.base).always.to_be_upright(tol_deg=5)
-    _run_example(stack, world, "example_nav_to_pose")
-
-
-def test_follow_path_example_follows_its_path(stack, world):
-    """example_follow_path plans from the example's start to (7.0, 0.5) and follows it. Its planner
-    finds no path from (0, 0) in this map, and the example stops on the empty path."""
-    log = _run_example(stack, world, "example_follow_path")
-    assert "Estimated distance remaining" in log, log[-1500:]
-    expect(world.robot.base).to_be_near((7.0, 0.5, 0.0), tol=0.5, timeout=5)
