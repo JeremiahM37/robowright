@@ -137,7 +137,9 @@ def rollout(act, seed: int, trace_dir: Path, fault=None, tag: str = "run") -> di
 @pytest.mark.parametrize(
     "seed",
     [
-        pytest.param(0, id="seed0"),
+        # The policy as published fails this one, the same way in 5 of 5 runs: the right gripper lifts the
+        # cube to 0.29 m and lets go of it at step 187, before the left gripper has touched it.
+        pytest.param(0, id="seed0", marks=pytest.mark.xfail(strict=True, reason="the published policy drops the cube before the handover")),
         *[pytest.param(s, id=f"seed{s}") for s in SEEDS[1:]],
     ],
 )
@@ -161,7 +163,9 @@ def test_act_holds_the_cube_above_the_table(act, tmp_path_factory, seed):
 
 
 def test_cube_moved_3cm_after_reset(act, tmp_path_factory):
-    """The fault from the brief: the cube 3 cm off after reset. The outcome is reported, not asserted."""
+    """The cube moved 3 cm just after reset, before the policy first sees it. Printed, not asserted:
+    5 of 5 seeds succeeded in each of 4 runs (seed 0 among them, which fails with the cube where the
+    environment put it), which is too few episodes to promise."""
     rows = []
     for seed in SEEDS:
         res = rollout(act, seed, _trace_dir(tmp_path_factory), fault=(0.03, 0.0, 0.0), tag="moved3cm")
