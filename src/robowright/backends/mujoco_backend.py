@@ -204,13 +204,23 @@ class MujocoBackend(Backend):
         for name in rm.arm_joints:
             j = m.joint(PREFIX + name)
             body = int(m.jnt_bodyid[j.id])
-            if m.body_parentid[body] != base:
+            c = body  # the wheel hangs off the base, through fixed links (a URDF's base_link under base_footprint)
+            while c > 0 and c != base:
+                c = int(m.body_parentid[c])
+            if c != base:
                 raise CapabilityError(f"{rm.title}: wheel {name} is not on the base's body, so the drive cannot be measured")
             axis = d.xmat[body].reshape(3, 3) @ m.jnt_axis[j.id]  # the joint's axis, in the world
+            # The collision cylinder is the wheel's (a URDF's visual copy of it is the same shape); cylinders that
+            # disagree in radius or axle are not one wheel, and are refused.
             geoms = [g for g in range(m.ngeom) if m.geom_bodyid[g] == body and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER]
-            if len(geoms) != 1:
-                raise CapabilityError(f"{rm.title}: wheel {name} needs exactly one cylinder geom for its radius, found {len(geoms)}")
+            collide = [g for g in geoms if m.geom_contype[g] or m.geom_conaffinity[g]]
+            geoms = collide or geoms
+            if not geoms:
+                raise CapabilityError(f"{rm.title}: wheel {name} has no cylinder geom, so its radius cannot be measured")
             g = geoms[0]
+            radii = {round(float(m.geom_size[h][0]), 9) for h in geoms}
+            if len(radii) != 1:
+                raise CapabilityError(f"{rm.title}: wheel {name}'s cylinders disagree in radius ({sorted(radii)}), so it is not one wheel")
             if abs(float(d.geom_xmat[g].reshape(3, 3)[:, 2] @ axis)) < 0.99:
                 raise CapabilityError(f"{rm.title}: wheel {name}'s cylinder is not along its axle, so its radius is not measurable")
             lateral = float((R.T @ (d.xpos[body] - d.xpos[base]))[1])

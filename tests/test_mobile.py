@@ -128,9 +128,11 @@ def test_the_built_in_arms_are_still_arms():
 
 
 def test_mujoco_reads_the_wheeled_model(rover):
+    """The two wheels, and the free joint a wheeled base rolls on (added to the URDF's fixed base)."""
     mjcf = to_mjcf(rover, cache_root().parent / "from_urdf")[0]
     m = mujoco.MjModel.from_xml_path(str(mjcf))
-    assert m.njnt == 2 and m.nu >= 2
+    assert m.njnt == 3 and m.nu == 2
+    assert m.jnt_type[0] == mujoco.mjtJoint.mjJNT_FREE
 
 
 def test_a_chain_of_unlimited_joints_is_an_arm_not_wheels(tmp_path):

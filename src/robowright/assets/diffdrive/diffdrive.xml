@@ -29,9 +29,14 @@
     </body>
   </worldbody>
   <actuator>
-    <!-- Velocity servos: ctrl is the wheel's angular velocity (rad/s). The force limit is what a
-         small motor gives; at 0 it holds the wheel still, as a driven wheel does. -->
-    <velocity name="wheel_left_motor" joint="wheel_left_joint" kv="0.5" ctrlrange="-30 30" forcerange="-1.5 1.5"/>
-    <velocity name="wheel_right_motor" joint="wheel_right_joint" kv="0.5" ctrlrange="-30 30" forcerange="-1.5 1.5"/>
+    <!-- Velocity servos: ctrl is the wheel's angular velocity (rad/s). The gain and limits follow the rule
+         the URDF path uses for a wheel (robots/from_urdf.py, _wheel_servos): effort 1.5 N m (the stall
+         torque of a small geared wheel motor), speed limit 15 rad/s (0.6 m/s at this radius, twice the
+         drive's 0.3 m/s command), so kv = effort / (0.02 * speed) = 1.5 / (0.02 * 15) = 5 N m s/rad: at
+         full effort the wheel is within 2 % of its speed limit. Measured on this model, the pivot's
+         resisting torque is 0.135 N m a wheel at 1.5 rad/s, a 1.8 % speed error at kv 5 (it was 18 % at the
+         0.5 this file had before). The wheel's scrub, not the servo, is what loads it. -->
+    <velocity name="wheel_left_motor" joint="wheel_left_joint" kv="5" ctrlrange="-15 15" forcerange="-1.5 1.5"/>
+    <velocity name="wheel_right_motor" joint="wheel_right_joint" kv="5" ctrlrange="-15 15" forcerange="-1.5 1.5"/>
   </actuator>
 </mujoco>

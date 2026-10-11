@@ -1,14 +1,13 @@
 """A wheeled robot on robowright's own engine (MuJoCo): differential drive, go_to, expects, traces.
 
 The model is robowright's own minimal diff-drive base (assets/diffdrive), not a maker's: no Menagerie
-model is a purely wheeled differential drive. Its wheel radius and track are read from the model by the
-backend, and the tests check those readings against the file itself.
+model is a purely wheeled differential drive. The backend reads its wheel radius and track from the model
+(0.04 m and 0.24 m, as the file has them), and the tests check those readings against the file itself.
 
-Measured in the commit that added this file (3 runs, same numbers each time): a straight drive covers
-97-98 % of the commanded distance; an in-place turn reaches 77-83 % of the commanded angle, because the
-wheel velocity servos (kv 0.5) hold the wheels 15-18 % below their setpoints under the pivot's load
-(0.135 N m a wheel, against a 1.5 N m limit). The tests assert those measured bands rather than full
-accuracy, and do not tune the servo to close the gap.
+Measured from settled rest (deterministic, the same every run): a straight drive covers 98-99 % of the
+commanded distance; a pivot turns 93-94 % of the commanded angle. The pivot's loss is a resisting torque
+of 0.134 N m a wheel from the wheel's scrub on its 40 mm contact, and at kv 5 the servo's speed error is
+1.8 % of setpoint under it (see assets/diffdrive/diffdrive.xml). The tests assert bands around those numbers.
 """
 
 import re
@@ -19,7 +18,7 @@ import pytest
 import robowright as rw
 from robowright import robots
 from robowright.assets import diffdrive_mjcf
-from robowright.errors import ActionTimeoutError, CapabilityError
+from robowright.errors import ActionTimeoutError
 from robowright.robots.detect import build
 from robowright.scene import ObjectSpec, SceneSpec
 
@@ -179,13 +178,19 @@ def test_traces_record_base_motions_and_codegen_emits_them(tmp_path, mjcf):
     assert re.search(r"robot\.base\.go_to\(xy=\[0\.5, 0\.0\], yaw=0\.0, timeout=30\)", code), code
 
 
-def test_a_wheeled_model_on_a_fixed_base_is_refused_by_mujoco(tmp_path):
-    """A wheeled robot the backend cannot roll (no free base) says so, rather than driving nothing."""
+def test_a_wheeled_urdf_on_a_fixed_base_is_given_a_free_base_and_rolls(tmp_path):
+    """A URDF's wheeled base is fixed in the file, but a wheeled robot rolls: the converter gives it the free joint."""
     from robowright.robots.from_urdf import to_mjcf
     from robowright.robots.urdf import cache_root
 
     urdf = tmp_path / "rover.urdf"
     urdf.write_text(ROVER_URDF)
     mjcf = to_mjcf(urdf, cache_root().parent / "from_urdf")[0]
-    with pytest.raises(CapabilityError, match="free base"):
-        _launch(str(mjcf))
+    w = _launch(str(mjcf))
+    assert w.robot.model.floating and w.robot.model.family == "mobile"
+    w.wait(1.0)  # settle on the wheels first
+    p0 = w.robot.base.position.copy()
+    w.robot.base.drive(0.2, 0.0, 2.0)
+    # Only forward motion is asserted: this fixture's box chassis reaches the floor level with its wheels,
+    # so it drags, and covers 40 % of the command (measured 0.16 of 0.4 m).
+    assert w.robot.base.position[0] - p0[0] > 0.1
