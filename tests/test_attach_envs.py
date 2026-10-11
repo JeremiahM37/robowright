@@ -63,3 +63,26 @@ def test_metaworld_through_its_own_factory(session):
     assert "- obj: at" in snap, snap
     assert "stepped 5 of 5" in session.sim_env_step(None, 5)
     assert "obj*" in session.sim_subjects() and "tablelink" in session.sim_subjects()
+
+
+def test_an_agents_fetch_session_becomes_a_test_that_passes_by_itself(session, tmp_path):
+    """What an agent did over an attached session (steps, a shove, a check) is written as a test, which is then
+    run in a fresh process: the environment made from its recorded id, the reset and the actions repeated."""
+    import os
+    import subprocess
+    import sys
+
+    pytest.importorskip("gymnasium_robotics")
+    session.sim_attach("FetchPickAndPlace", seed=3)
+    session.sim_env_step([0.5, 0.0, 0.0, 0.0], 30)
+    session.push("object0", [0.0, 0.0, 40.0], 0.2)
+    session.sim_env_step(None, 10)
+    assert session.expect("object0", "to_be_above", {"target": 0.3}).startswith("PASS")
+    test = tmp_path / "test_fetch_agent.py"
+    code = session.generate_test("test_fetch_agent", str(test))
+    assert "gymnasium_robotics:FetchPickAndPlace-v4" in code and "env.reset(seed=3)" in code, code
+    src = os.path.dirname(os.path.dirname(os.path.abspath(__import__("robowright").__file__)))
+    env = {**os.environ, "PYTHONPATH": src}
+    cmd = [sys.executable, "-m", "pytest", str(test), "-q", "-p", "robowright.pytest_plugin", "-p", "no:cacheprovider"]
+    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0, out.stdout[-2000:]

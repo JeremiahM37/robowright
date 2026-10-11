@@ -218,7 +218,6 @@ def test_the_robot_tools_say_why_they_cannot_run_on_an_attached_simulation(sessi
             ("robot_run_policy", {"policy": "x:y"}, "run_policy is not available on an attached simulation"),
             ("robot_wait", {"seconds": 1.0}, "wait is not available on an attached simulation"),
             ("robot_watch", {}, "watch is not available on an attached simulation"),
-            ("robot_generate_test", {}, "generate_test is not available on an attached simulation"),
         ]:
             text, err = await call(c, tool, args)
             assert err and why in text, (tool, text)

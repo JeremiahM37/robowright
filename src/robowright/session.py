@@ -289,13 +289,16 @@ class Session:
         env = self._make_env(env_id, dict(kwargs or {}), entry_point)
         label = type(getattr(env, "unwrapped", env)).__name__
         try:
-            if seed is None:
-                env.reset()
-            else:
-                env.reset(seed=seed)
             self._n += 1
             settings = Settings(trace="on", trace_dir=str(self.trace_dir), trace_cameras=[])
-            world = attach(env, name=f"session_{self._n}", seed=seed or 0, settings=settings)
+            name = f"session_{self._n}"
+            try:
+                world = attach(env, name=name, seed=seed or 0, settings=settings)
+            except ValueError:  # an environment that builds its simulation on its first reset
+                env.reset()
+                world = attach(env, name=name, seed=seed or 0, settings=settings)
+            # reset after attaching, so the trace has the reset and a generated test repeats it
+            env.reset() if seed is None else env.reset(seed=seed)
         except Exception as e:
             _close_env(env)
             hint = (
@@ -916,14 +919,13 @@ class Session:
         return self.world.scene[name]
 
     # --- output ------------------------------------------------------------------
-    @_built_only("a generated test rebuilds the world robowright launched (robot and scene), which an attached simulation is not")
     def generate_test(self, test_name: str = "test_session", path: str | None = None, keep_failed: bool = False) -> str:
         """The session so far as a pytest test that reproduces it; written to ``path`` if given.
 
         A step that raised is left out, as a comment (the first line of the result says how many), unless
         ``keep_failed``: then it is asserted to fail again. A failed step can still have moved the world, so
         without it the test may not reproduce the session exactly."""
-        from .codegen import generate
+        from .codegen import companion, generate
 
         w = self._w()
         tmp = self.trace_dir / f"{w.name}_codegen.zip"
@@ -931,6 +933,9 @@ class Session:
         code = generate(tmp, test_name=test_name, keep_failed=keep_failed)
         if path:
             Path(path).write_text(code)
+            # an attached run's long action list is a file beside the test, which loads it by name
+            if self.env is not None and (beside := companion(tmp, test_name)) is not None:
+                Path(path).with_name(beside[0]).write_bytes(beside[1])
         return code
 
     @_built_only("it replays the session's calls on another engine, which needs a world robowright built")
