@@ -58,11 +58,21 @@ class Renderer:
         self.backend.close()
 
 
+def renderer_for(trace: str | Path | Trace):
+    """The renderer for a trace: its own model if it was attached to a simulation robowright did not build."""
+    tr = trace if isinstance(trace, Trace) else Trace(trace)
+    if tr.meta.get("attached"):
+        from .attached import AttachedRenderer
+
+        return AttachedRenderer(tr)
+    return Renderer(tr)
+
+
 def jpeg_frames(trace: str | Path | Trace, every: int, size=(320, 240), cameras=None) -> dict[str, dict[int, bytes]]:
     """Frames for the trace viewer: ``{camera: {step: jpeg}}``, every ``every`` steps."""
     from PIL import Image
 
-    r = Renderer(trace)
+    r = renderer_for(trace)
     out: dict[str, dict[int, bytes]] = {}
     try:
         for cam in cameras or r.cameras:
@@ -77,7 +87,7 @@ def jpeg_frames(trace: str | Path | Trace, every: int, size=(320, 240), cameras=
 
 def render_video(trace: str | Path | Trace, out: str | Path, camera: str = "front", size=(1280, 720), fps: float | None = None) -> Path:
     """Every recorded step as an MP4 (needs robowright[video]) or GIF, at the run's own pace by default."""
-    r = Renderer(trace)
+    r = renderer_for(trace)
     out = Path(out)
     try:
         if camera not in r.cameras:

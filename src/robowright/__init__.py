@@ -48,6 +48,7 @@ __version__ = "0.1.0.dev0"
 
 _current: contextvars.ContextVar = contextvars.ContextVar("robowright_world", default=None)
 
+from .attached import attach  # noqa: E402
 from .errors import (  # noqa: E402
     ActionError,
     ActionTimeoutError,
@@ -90,6 +91,7 @@ __all__ = [
     "Trace",
     "UnreachableError",
     "World",
+    "attach",
     "condition",
     "expect",
     "launch",
