@@ -28,9 +28,9 @@ steps:
     actions:
       - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_gazebo.py -q -n 4 -p no:cacheprovider", timeout: 1200 }
 
-  - name: someone else's whole stack (UR's Gazebo simulation and MoveIt, MoveIt's Panda demo, Kinova's Gazebo simulation), observed and driven through its own controllers
+  - name: someone else's whole stack (UR's Gazebo simulation and MoveIt, MoveIt's Panda demo, Kinova's and UFACTORY's Gazebo simulations), observed and driven through its own controllers
     actions:
-      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_moveit_gazebo.py tests/test_moveit_panda.py tests/test_kinova_gazebo.py -q -p no:cacheprovider", timeout: 1800 }
+      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_moveit_gazebo.py tests/test_moveit_panda.py tests/test_kinova_gazebo.py tests/test_xarm_gazebo.py -q -p no:cacheprovider", timeout: 1800 }
 
   - name: Nav2's own TurtleBot simulations and example programs, robowright observing a mobile robot (truth from Gazebo, belief from TF)
     actions:

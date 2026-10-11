@@ -214,7 +214,16 @@ Stacks this is tested around, each as its makers ship it, on ROS 2 Jazzy:
 | Universal Robots UR5e ([`test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)) | `ur_simulation_gz` (Gazebo, `gz_ros2_control`), `ur_moveit_config` | pymoveit2's examples, UR's `example_move.py` | observes; drives Gazebo; drives the arm through UR's controller |
 | MoveIt's Panda demo ([`test_moveit_panda.py`](tests/test_moveit_panda.py)) | `moveit_resources_panda_moveit_config` (mock hardware) | pymoveit2's pose, joint and gripper examples | observes; drives arm and hand through the demo's controllers; finds them by itself |
 | Kinova Gen3 + Robotiq 2F-85 ([`test_kinova_gazebo.py`](tests/test_kinova_gazebo.py)) | `ros2_kortex`'s `kortex_sim_control` (Gazebo) | robowright's own pick and place, through Kinova's controllers | drives arm and gripper; picks a cube and sets it in a bin, judged by Gazebo's poses |
+| UFACTORY xArm 6 + xArm Gripper ([`test_xarm_gazebo.py`](tests/test_xarm_gazebo.py)) | `xarm_ros2`'s `xarm_gazebo` (Gazebo), with its mimic-joint plugin built from UFACTORY's source | robowright's own moves and pick, through UFACTORY's trajectory controllers | connects with nothing named, agrees with TF, reaches three goals and drives the gripper; the pick fails as published: the jaws close unevenly (32 mm on one side, 21 mm on the other) and kick the cube 4 to 8 cm |
 | Nav2 with a TurtleBot 4 ([`test_nav2_examples.py`](tests/test_nav2_examples.py)) and a TurtleBot 3 ([`test_nav2_turtlebot.py`](tests/test_nav2_turtlebot.py)) | Nav2's own example launch files (Gazebo, AMCL, the navigation stack) | `nav2_simple_commander`'s `example_nav_to_pose` and `example_follow_path` | observes a mobile robot: where it is (Gazebo) against where Nav2 believes it is (TF) |
+
+With `gazebo=True` robowright also reads what stands in the stack's world. Gazebo's static
+models (a table, its legs, the ground) become fixtures: listed in the snapshot, and obstacles to
+robowright's own moves. A joint move whose straight line would pass through one is planned round
+it, or refused with the fixture's name; a grasp is planned above the surface the object rests on.
+(The xArm stands on a table, and its first pick swept the hand through the table top: the
+controller aborted, 1 rad behind.) Boxes, cylinders, spheres and planes are read; a mesh counts as
+its bounding box, or is skipped and noted. Worlds with no static models behave as before.
 
 A wheeled robot has `robot.base` in place of an arm: where it is, by Gazebo's ground truth, and
 `robot.base.estimate`, where its own stack believes it is. Any topic and any TF frame can be
