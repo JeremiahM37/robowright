@@ -591,7 +591,17 @@ class Session:
     @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def go_to(self, x: float, y: float, yaw: float | None = None) -> str:
         """Mobile: send the base to (x, y) in the map frame, with heading ``yaw``, and wait for its navigation stack."""
-        return self._act(self._mobile().go_to, (x, y), yaw=yaw)
+        out = self._act(self._mobile().go_to, (x, y), yaw=yaw)
+        if out.startswith("FAILED"):
+            return out
+        # Nav2 reports a goal reached within its own tolerance, so a goal already that close returns at once with
+        # no motion: say how far off the goal the base is, or that reads as a stack that did nothing.
+        pos = self._w().backend.base_pose()[0]
+        left = math.hypot(x - float(pos[0]), y - float(pos[1]))
+        return (
+            f"{out}\n\nthe base is {left:.3f} m from ({x}, {y}). The navigation stack may count a goal reached within its own "
+            "tolerance (0.25 m with nav2_bringup's defaults), so a goal that close returns with no motion."
+        )
 
     def _legged(self):
         w = self._w()
