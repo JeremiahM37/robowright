@@ -52,6 +52,7 @@ OPEN_GOAL = (0.5, -0.5)
 WALL = (0.0, -2.6)
 OFF_MAP = (30.0, 0.0)
 GOAL_TOL = 0.25  # xy_goal_tolerance in nav2_bringup's nav2_params.yaml: where Nav2 itself counts a goal reached
+BELIEF_ERROR = 0.1  # how far AMCL's belief is from Gazebo's truth at rest, with margin (measured: at most 0.035 m)
 
 
 @pytest.fixture
@@ -173,15 +174,24 @@ def test_the_base_goes_to_a_point_on_the_map(driven):
     e_truth = float(np.linalg.norm(truth - OPEN_GOAL))
     e_belief = float(np.linalg.norm(belief - OPEN_GOAL))
     print(f"\nmeasured: arrived in {elapsed:.1f} s (world clock); truth error {e_truth:.3f} m, belief error {e_belief:.3f} m", flush=True)
-    assert e_truth <= GOAL_TOL
+    # Nav2 stops as soon as its BELIEF is inside its goal tolerance, so that is what the tolerance
+    # bounds (0.195 to 0.220 m in three runs); the truth may be off by the belief's own error
+    # besides (0.220 to 0.254 m: at most 0.035 m more).
     expect(b.estimate).to_be_near((*OPEN_GOAL, 0.0), tol=GOAL_TOL, timeout=5)  # the base frame is 1 cm above the floor
+    assert e_truth <= GOAL_TOL + BELIEF_ERROR
 
 
-def test_a_goal_inside_a_wall_is_refused_with_nav2s_reason(driven):
-    with pytest.raises(ActionError) as e:
-        driven.robot.base.go_to(WALL, yaw=0.0, timeout=90)
-    print(f"\nmeasured: ActionError: {e.value}", flush=True)
-    assert "navigate_to_pose" in str(e.value)
+def test_nav2_says_it_arrived_at_a_goal_inside_a_wall_and_the_robot_is_not_there(driven):
+    """A goal inside a wall of the sandbox. Nav2 does not refuse it: it plans to the nearest free
+    space, stops about 0.4 m short (three runs, truth and belief agreeing) and answers SUCCEEDED.
+    Nav2's answer is not the outcome: the test of where the robot is fails."""
+    b = driven.robot.base
+    b.go_to(WALL, yaw=0.0, timeout=90)  # no ActionError: Nav2 reports success
+    short = float(np.linalg.norm(np.asarray(b.position, float)[:2] - WALL))
+    print(f"\nmeasured: Nav2 succeeded {short:.3f} m from the goal", flush=True)
+    with pytest.raises(rw.errors.ExpectationError, match="to_be_near"):
+        expect(b).to_be_near((*WALL, 0.0), tol=GOAL_TOL, timeout=2)
+    assert short > GOAL_TOL
 
 
 def test_a_goal_off_the_map_is_refused_with_nav2s_reason(driven):
