@@ -429,9 +429,7 @@ class Robot:
         kin = self.kin
         kin._set(path[0])
         mujoco.mj_crb(kin.m, kin.d)
-        M = np.zeros((kin.m.nv, kin.m.nv))
-        mujoco.mj_fullM(kin.m, kin.d, M)
-        inertia = np.diag(M)[kin.dadr]
+        inertia = np.diag(_dense_inertia(kin.m, kin.d))[kin.dadr]
         ok = kp > 0
         return float(np.sqrt(np.max(5.77 * travel[ok] * inertia[ok] / (lag * kp[ok])))) if ok.any() else 0.0
 
@@ -1402,3 +1400,14 @@ def _along(path, at, s: float) -> np.ndarray:
 def _minjerk(s: float) -> float:
     s = min(max(s, 0.0), 1.0)
     return 10 * s**3 - 15 * s**4 + 6 * s**5
+
+
+def _dense_inertia(m, d) -> np.ndarray:
+    """The dense joint-space inertia matrix. MuJoCo changed mj_fullM's arguments between releases (3.8:
+    ``(m, dst, qM)``; later ``(m, d, dst)``), so both are tried."""
+    dst = np.zeros((m.nv, m.nv))
+    try:
+        mujoco.mj_fullM(m, d, dst)
+    except TypeError:
+        mujoco.mj_fullM(m, dst, d.qM)
+    return dst
