@@ -146,8 +146,9 @@ def build_server(session: Session | None = None):
 
     @tool
     async def sim_state() -> str:
-        """The simulator's own state (Gazebo): its time, iterations, paused or running, real-time
-        factor, and every model in it."""
+        """The simulator's own state (Gazebo): its clock, iterations, paused or running, real-time
+        factor, and every model in it. Also the world's own time, which snapshots report as t and
+        which counts from launch; Gazebo's clock need not match it."""
         return await run(s.sim_state)
 
     @tool
@@ -297,9 +298,14 @@ def build_server(session: Session | None = None):
         return await run(s.expect, subject, matcher, args, negate, timeout)
 
     @tool
-    async def robot_generate_test(test_name: str = "test_session", path: str | None = None) -> str:
-        """The session so far as a pytest test that reproduces it exactly (written to path if given)."""
-        return await run(s.generate_test, test_name, path)
+    async def robot_generate_test(test_name: str = "test_session", path: str | None = None, keep_failed: bool = False) -> str:
+        """The session so far as a pytest test that reproduces it exactly (written to path if given).
+
+        keep_failed: false (default) leaves out the steps that failed (a wrong attempt is not something
+        the test should assert), each as a comment; the first line of the result says how many were left
+        out. A failed step can still have moved the world, so the test may then not reproduce the
+        session. true keeps each failed step, asserting it fails again."""
+        return await run(s.generate_test, test_name, path, keep_failed)
 
     @tool
     async def robot_crosscheck(backend: str) -> str:

@@ -128,6 +128,7 @@ class Session:
         if backend == "ros2" and not (ros2 or {}).get("gazebo"):
             scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name (in Gazebo, any)
         self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings, **(ros2 or {}))
+        self.world.source = "session"
         if backend != "ros2":  # a robot behind ROS 2 is already where its own stack has it: never move it
             self.world.robot.reset_to()
         if self.view is not None:
@@ -418,9 +419,12 @@ class Session:
 
     def sim_state(self) -> str:
         gz = self._gazebo()
+        w = self._w()
         return (
-            f"Gazebo world {gz.world!r}: t={gz.time:.3f} s, {gz.iterations} iterations, "
+            f"Gazebo world {gz.world!r}: its clock t={gz.time:.3f} s, {gz.iterations} iterations, "
             f"{'paused' if gz.paused else 'running'} at {gz.real_time_factor:.2f}x real time\n"
+            f"robowright's world time (the t in snapshots) is {w.time:.3f} s, counted from launch; "
+            "Gazebo's clock is its own simulation time and need not match it\n"
             f"models: {', '.join(gz.models())}"
         )
 
@@ -545,14 +549,18 @@ class Session:
         return self.world.scene[name]
 
     # --- output ------------------------------------------------------------------
-    def generate_test(self, test_name: str = "test_session", path: str | None = None) -> str:
-        """The session so far as a pytest test that reproduces it; written to ``path`` if given."""
+    def generate_test(self, test_name: str = "test_session", path: str | None = None, keep_failed: bool = False) -> str:
+        """The session so far as a pytest test that reproduces it; written to ``path`` if given.
+
+        A step that raised is left out, as a comment (the first line of the result says how many), unless
+        ``keep_failed``: then it is asserted to fail again. A failed step can still have moved the world, so
+        without it the test may not reproduce the session exactly."""
         from .codegen import generate
 
         w = self._w()
         tmp = self.trace_dir / f"{w.name}_codegen.zip"
         w.trace.save(tmp)
-        code = generate(tmp, test_name=test_name)
+        code = generate(tmp, test_name=test_name, keep_failed=keep_failed)
         if path:
             Path(path).write_text(code)
         return code

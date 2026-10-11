@@ -51,7 +51,9 @@ def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1
     from . import fidelity
 
     with fidelity.using(meta.get("fidelity")):  # rebuilt as it ran
-        b = backends.create(backend or meta["backend"], tr.scene(), seed=meta["seed"])
+        # The options the run's backend was created with (a ROS 2 robot's settings); another engine gets none.
+        opts = {} if backend and backend != meta["backend"] else meta.get("backend_options") or {}
+        b = backends.create(backend or meta["backend"], tr.scene(), seed=meta["seed"], **opts)
     try:
         restored = tr.state0 is not None and backends.STATE in b.capabilities
         if restored:

@@ -158,12 +158,19 @@ class Recorder:
             e.detail = detail
 
     def meta(self) -> dict:
+        from .robots.detect import recorded
+
         w = self.world
         return {
             "format": FORMAT_VERSION,
             "robowright": _version(),
             "name": w.name,
+            "source": w.source,
             "backend": w.backend.name,
+            # A robot loaded from a model file, and the options its backend was created with, so the
+            # run can be rebuilt by codegen, replay and crosscheck (see Trace.scene).
+            "robot_file": recorded(w.backend.robot_model),
+            "backend_options": json.loads(json.dumps(getattr(w, "backend_options", {}), default=_json_default)),
             "fidelity": getattr(w, "fidelity", None),
             "model_changes": [c.as_dict() for c in getattr(w, "model_changes", [])],
             "seed": w.seed,
@@ -273,7 +280,23 @@ class Trace:
     def scene(self):
         from .scene import SceneSpec
 
+        self._load_robot()
         return SceneSpec.from_dict(self.meta["scene"])
+
+    def _load_robot(self):
+        """Load the robot this trace was recorded with, from its model file, if it is not registered."""
+        from .robots import REGISTRY
+        from .robots.detect import reload
+
+        rec = self.meta.get("robot_file")
+        if not rec or rec["name"] in REGISTRY:
+            return
+        if not Path(rec["file"]).exists():
+            raise FileNotFoundError(
+                f"this trace's robot {rec['name']!r} was loaded from {rec['file']}, which no longer exists: "
+                "put the model back there, or register the robot under that name, to replay or regenerate the trace"
+            )
+        reload(rec)
 
     def frame(self, name: str) -> bytes:
         with zipfile.ZipFile(self.path) as z:

@@ -51,7 +51,7 @@ def test_actions_assertions_and_a_reproducing_test(session, tmp_path):
     assert session.expect("can", "to_be_inside", {"container": "bin"}).startswith("PASS")
     assert "inside bin" in session.snapshot()
 
-    code = session.generate_test("test_regen")
+    code = session.generate_test("test_regen", keep_failed=True)  # the failed checks reproduce as pytest.raises
     assert "move_to" not in code
     assert "with pytest.raises(ExpectationError):" in code and "timeout=0.3" in code
     assert "robot.reset_to()" in code
@@ -279,3 +279,39 @@ def test_ros2_launch_has_no_objects_unless_asked_and_never_moves_the_robot(monke
     assert seen["spec"].objects == []
     world_mod.launch(backend="mujoco")
     assert seen["spec"].objects  # the default tabletop, as before
+
+
+def test_generate_test_leaves_out_the_steps_that_failed_unless_asked(session, monkeypatch, tmp_path):
+    """An agent's wrong attempt is a comment, not an assertion, and the test runs as the session ended."""
+    monkeypatch.chdir(tmp_path)  # the generated test records its own trace
+    session.launch(robot="so101")
+    session.wait(0.1)
+    assert session.expect("cube", "to_be_inside", {"container": "bin"}).startswith("FAIL")
+    code = session.generate_test("test_probe")
+    assert code.startswith("# Left out 1 failed step(s)") and "may not reproduce" in code.splitlines()[0]
+    assert "# left out: expect(cube).to_be_inside(" in code and "pytest.raises" not in code
+    assert "generated from an interactive session" in code and "Original session: session_1" in code
+    exec(compile(code, "test_probe.py", "exec"), {})  # a test that left the failure out passes
+
+    kept = session.generate_test("test_probe", keep_failed=True)
+    assert not kept.startswith("# Left out") and "with pytest.raises(ExpectationError):" in kept
+
+
+class _FakeGazebo:
+    world = "empty"
+    iterations = 4200
+    paused = False
+    real_time_factor = 1.0
+    time = 139.9
+
+    def models(self):
+        return ["ground_plane", "ur"]
+
+
+def test_sim_state_says_whose_clock_is_whose(session, monkeypatch):
+    session.launch(robot="so101")
+    session.world.backend.gazebo = _FakeGazebo()
+    session.world.wait(55.0)
+    text = session.sim_state()
+    assert "its clock t=139.900 s" in text
+    assert f"robowright's world time (the t in snapshots) is {session.world.time:.3f} s, counted from launch" in text

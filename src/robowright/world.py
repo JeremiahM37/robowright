@@ -55,6 +55,8 @@ class World:
         self.seed = seed
         self.name = name
         self.settings = settings or Settings()
+        self.backend_options = dict(backend_kw)  # as the backend was created; a trace records them
+        self.source: str | None = None  # what made the world: None for a test, "session" for an agent's session
         self.rng = np.random.default_rng(seed)
         with fidelity.using(self.settings.fidelity):
             self.fidelity = fidelity.mode()

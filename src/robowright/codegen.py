@@ -14,7 +14,7 @@ import pprint
 import re
 from pathlib import Path
 
-from .trace import Trace
+from .trace import Trace, _call
 
 
 def _ident(name: str) -> str:
@@ -59,6 +59,57 @@ def _policy_lines(args: dict, imports: set) -> list[str]:
     return [f"policy = ...  # TODO: recreate {path or 'the policy'}"]
 
 
+def _robot_value(v) -> str:
+    """An option of a robot loaded from a file, as code (an attachment is rebuilt, the rest as values)."""
+    from .robots import Attachment
+
+    if isinstance(v, Attachment):
+        body = f"mjcf=lambda: Path({str(v.mjcf())!r}), site={v.site!r}, prefix={v.prefix!r}, body={v.body!r}, quat={v.quat!r}"
+        return f"rw.robots.Attachment({body})"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{k!r}: {_robot_value(x)}" for k, x in v.items()) + "}"
+    if isinstance(v, (list, tuple)):
+        return "(" + ", ".join(_robot_value(x) for x in v) + ("," if len(v) == 1 else "") + ")"
+    return _value(v)
+
+
+def _robot_line(rec: dict, imports: set) -> str:
+    """``ROBOT = rw.robots.load(...)``: registers the robot the trace was run with, from its model file."""
+    from .robots.detect import restore_options
+
+    opts = restore_options(rec.get("overrides", {}))
+    if _has_attachment(opts):
+        imports.add("from pathlib import Path")
+    args = [repr(rec["file"]), f"name={rec['name']!r}"] + [f"{k}={_robot_value(v)}" for k, v in opts.items()]
+    return f"ROBOT = rw.robots.load({', '.join(args)})"
+
+
+def _has_attachment(opts: dict) -> bool:
+    from .robots import Attachment
+
+    return any(isinstance(v, Attachment) for v in opts.values())
+
+
+def _launch_lines(m: dict, backend: str | None, name: str) -> list[str]:
+    """The ``with rw.launch(...) as world:`` line. A built-in robot on a built-in engine keeps its one-line call;
+    the backend options a model file's robot needs (a ROS 2 robot's settings) make it one argument per line when long."""
+    head = f"    with rw.launch(SCENE, backend={backend or m['backend']!r}, seed={m['seed']}, name={name!r}"
+    opts = (m.get("backend_options") or {}) if backend in (None, m["backend"]) else {}
+    if not opts:
+        return [f"{head}{_settings(m)}) as world:"]
+    settings = _settings(m).removeprefix(", ")
+    parts = ([settings] if settings else []) + [f"{k}={_value(v)}" for k, v in opts.items() if v is not None]
+    one = f"{head}{''.join(', ' + p for p in parts)}) as world:"
+    if len(one) <= 100:
+        return [one]
+    return [
+        "    with rw.launch(",
+        "        SCENE,",
+        *[f"        {p}," for p in [f"backend={backend or m['backend']!r}", f"seed={m['seed']}", f"name={name!r}", *parts]],
+        "    ) as world:",
+    ]
+
+
 def _settings(meta: dict) -> str:
     """``settings=...`` for the motion and timing settings the run changed from the defaults."""
     from .world import Settings
@@ -70,16 +121,28 @@ def _settings(meta: dict) -> str:
     return f", settings=rw.Settings({_kwargs(changed)})" if changed else ""
 
 
-def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_failure: bool = True, backend: str | None = None) -> str:
-    """The trace as a pytest test. ``backend`` runs it on another engine than the one recorded."""
+def generate(
+    trace: str | Path | Trace,
+    test_name: str | None = None,
+    stop_at_failure: bool = True,
+    backend: str | None = None,
+    keep_failed: bool = True,
+) -> str:
+    """The trace as a pytest test. ``backend`` runs it on another engine than the one recorded.
+
+    ``keep_failed``: a step that raised, but went on from, becomes ``pytest.raises`` (a failing test's trace);
+    False leaves it out as a comment, for an agent's exploratory session whose wrong attempts should not be asserted.
+    """
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     m = tr.meta
     name = test_name or f"test_{_ident(re.sub(r'^.*::', '', m['name'])).removeprefix('test_')}_regression"
     imports = {"import robowright as rw", "from robowright import expect"}
     body: list[str] = []
     failed_at = None
+    left_out = 0
     for e in tr.events:
         t, a = e["type"], e.get("args", {})
+        n_before = len(body)
         if t == "edit" and e["name"] == "reset_to":
             q = a["q"]
             if a.get("default"):
@@ -124,10 +187,17 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
             neg = ".not_" if a.get("negate") else ""
             mode = ".always" if t == "invariant" else ""
             body.append(f"expect({_subject(a['subject'])}){mode}{neg}.{a['matcher']}({_kwargs(a['kwargs'])})")
-        if e.get("status") == "raised" and body:
+        if e.get("status") == "raised" and (body or not keep_failed):
             # A call that failed but was carried on from (an agent's attempt that moved the world):
             # the test makes it too, for the same time to pass, and expects it to fail again.
             err = "ExpectationError" if t in ("expect", "invariant") else e.get("detail", "").split(":", 1)[0] or "RobowrightError"
+            if not keep_failed:
+                first = (e.get("detail") or "").splitlines()[0:1]
+                first = (first[0] if first else "").removeprefix(f"{err}: ")[:160]
+                del body[n_before:]
+                body.append(f"# left out: {_call(e)} raised {err}: {first}".rstrip(": "))
+                left_out += 1
+                continue
             imports.add("import pytest")
             imports.add(f"from robowright.errors import {err}")
             body[-1:] = [f"with pytest.raises({err}):", "    " + body[-1]]
@@ -145,16 +215,30 @@ def generate(trace: str | Path | Trace, test_name: str | None = None, stop_at_fa
     if failed_at:
         header.append(f"It failed at t={failed_at['t']:.2f}s in {failed_at['name']}: {failed_at.get('detail', '').splitlines()[0][:120]}")
     header += ['"""', ""]
+    if m.get("source") == "session":  # the header names the session, not a trace file that was never written
+        header[0] = '"""Regression test generated from an interactive session (robowright mcp, Session.generate_test).'
+        header[2] = f"Original session: {m['name']} ({m['backend']}, seed {m['seed']}, status {m['status']})."
+    summary = []
+    if left_out:
+        summary = [
+            f"# Left out {left_out} failed step(s), commented in the body: a failed step can still have moved the world part-way,"
+            " so without them this test may not reproduce the session exactly."
+        ]
+    robot = [_robot_line(m["robot_file"], imports), ""] if m.get("robot_file") else []
     lines = (
-        header
+        summary
+        + header
         + sorted(imports, key=lambda s: (s.startswith("from "), s))  # isort order: plain imports first
+        + [""]
+        + robot
         + [
-            "",
             f"SCENE = rw.SceneSpec.from_dict({scene})",
             "",
             "",
             f"def {name}():",
-            f"    with rw.launch(SCENE, backend={backend or m['backend']!r}, seed={m['seed']}, name={name!r}{_settings(m)}) as world:",
+        ]
+        + _launch_lines(m, backend, name)
+        + [
             # Bind only what the body uses, so the generated file passes a linter as is.
             "        robot, scene = world.robot, world.scene" if any("scene[" in ln for ln in body) else "        robot = world.robot",
         ]
