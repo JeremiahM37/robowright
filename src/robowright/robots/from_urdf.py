@@ -34,7 +34,7 @@ import numpy as np
 
 from .model import _collision_geoms, reset_data
 
-VERSION = 2  # bump when the output changes, to invalidate cached conversions
+VERSION = 3  # bump when the output changes, to invalidate cached conversions
 _LOADS = {".stl", ".obj", ".msh"}  # mesh formats MuJoCo reads
 _HINGE_ERR = 0.02  # rad from target at full effort
 _SLIDE_ERR = 0.002  # m
@@ -78,6 +78,7 @@ def to_mjcf(path: Path, cache: Path, xacro_args: dict | None = None) -> tuple[Pa
     tree = _resolved(path, raw, cache / "meshes", notes)
     spec = _load(tree, cache)
     _keep_speed_limits(tree, spec)
+    _keep_ground_friction(ET.fromstring(raw), spec)
     notes.append("collision: the robot's links collide with the world but not with each other (as PyBullet treats a URDF)")
     _add_servos(spec, notes)
     xml = spec.to_xml()
@@ -548,6 +549,19 @@ def _keep_speed_limits(tree: ET.ElementTree, spec: mujoco.MjSpec) -> None:
         v = float(limit.get("velocity", 0) or 0) if limit is not None else 0.0
         if v > 0 and joint.get("name") in known:
             spec.add_numeric(name=f"speed_limit:{joint.get('name')}", data=[v], size=1)
+
+
+def _keep_ground_friction(root: ET.Element, spec: mujoco.MjSpec) -> None:
+    """Each link's sliding friction on the ground, from the file's own ``<gazebo reference=...><mu1>``
+    block, kept as a custom numeric (``ground_friction:<link>``). The block is Gazebo's, and the
+    converter drops it; MJCF has no place for it except this, and :func:`.model.add_ground_friction`
+    turns it into a contact pair with the floor (a geom's friction is the larger of its two geoms',
+    so a caster cannot go below the floor's 1.0 through its own geom)."""
+    links = {link.get("name") for link in root.iter("link")}
+    for gz in root.iter("gazebo"):
+        ref, mu = gz.get("reference"), gz.find("mu1")
+        if ref in links and mu is not None and float(mu.text) > 0:
+            spec.add_numeric(name=f"ground_friction:{ref}", data=[float(mu.text)], size=1)
 
 
 def _is_wheeled(m: mujoco.MjModel) -> bool:

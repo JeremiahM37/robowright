@@ -6,6 +6,17 @@ Measured when this file was written, from settled rest, on the MuJoCo backend (d
 numbers each run). Drive: straight 0.1 and 0.2 m/s for 2 s; pivot 0.5 and 1.0 rad/s for 2 s; go_to three
 points. The tests assert wide bands around those measurements, not the accuracy a robot would need.
 
+TurtleBot 4 straight line, measured (2 s, 0.2 m/s): it covered 76 % of the distance at 0.2 m/s and 89 % at
+0.1 m/s, with the wheels' rim speed equal to the commanded speed and no wheel torque near its limit (0.13 of
+0.90 N m). The cause was the caster, not the wheels: its sphere is a rigid fixed link with no swivel, and the
+file's own Gazebo block gives it sliding friction 0.1 (mu1). The converter dropped that block and MuJoCo's
+contact took the floor's 1.0, so the caster dragged (about 7 N against 39 N on the wheels) and the base
+stuck and released with its velocity swinging between 0.03 and 0.26 m/s. Its wheels were rolling at 0.10 and
+0.20 m/s with no slip against the floor once the caster was at 0.1: the file's friction now applies as a contact
+pair with the floor (robots/model.py add_ground_friction), and straight travel is 97 % and 98 %. The
+caster's 0.6 mm offset below the wheels was measured and is not the cause (lifting it by that much moved travel
+by 2 points).
+
 Skipped when a file is absent. The TurtleBot 3 and 4 descriptions are expected in the ROS 2 Jazzy
 environment at ROBOWRIGHT_ROS2_SHARE (default /mnt/bulk/ros2-env/jazzy-nav2/share).
 """
@@ -112,3 +123,19 @@ def test_a_goal_out_of_reach_in_the_time_given_times_out(name):
     w = _settled(_path(name))
     with pytest.raises(ActionTimeoutError):
         w.robot.base.go_to((3.0, 0.0), timeout=3.0)
+
+
+def test_turtlebot4_caster_has_its_published_friction_and_drives_straight():
+    """The caster's 0.1 comes from the file's Gazebo block (see the module docstring), as a contact pair with the floor."""
+    w = _settled(_path("turtlebot4"))
+    m = w.backend.model
+    caster = [m.geom(m.pair_geom2[i]).name for i in range(m.npair) if m.geom(m.pair_geom2[i]).name.startswith("robot/front_caster_link")]
+    assert caster, "no contact pair for the caster with the floor"
+    pair = next(i for i in range(m.npair) if m.geom(m.pair_geom2[i]).name.startswith("robot/front_caster_link"))
+    assert m.pair_friction[pair][0] == pytest.approx(0.1)
+    for speed in (0.1, 0.2):
+        w = _settled(_path("turtlebot4"))
+        b = w.robot.base
+        p0 = b.position.copy()
+        b.drive(speed, 0.0, 2.0)
+        assert float(np.linalg.norm((b.position - p0)[:2])) >= 0.95 * speed * 2.0

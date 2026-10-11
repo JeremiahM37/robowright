@@ -12,7 +12,7 @@ import numpy as np
 
 from ..errors import CapabilityError
 from ..robots import PREFIX, body_labels
-from ..robots.model import joint_followers, reset_data
+from ..robots.model import add_ground_friction, joint_followers, reset_data
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 
@@ -75,6 +75,7 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
         height=1536,
     )
     wb.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[4, 4, 0.05], material="table")
+    add_ground_friction(s, spec.robot_model)  # needs the floor's name, so after it
     for o in spec.objects:
         pos = o.initial_pos
         if o.kind == "bin":
