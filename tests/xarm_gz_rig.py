@@ -158,8 +158,16 @@ def xarm_sim(workdir: Path | None = None, gripper: bool = False, timeout: float 
     d = Path(workdir or tempfile.mkdtemp(prefix="rw-xarm-"))
     with ros_paths(d):
         launch = headless_launch(d)
-        cmd = ["ros2", "launch", str(launch), "robot_type:=xarm", "dof:=6", "gz_type:=gz", "load_controller:=true",
-               f"add_gripper:={'true' if gripper else 'false'}"]
+        cmd = [
+            "ros2",
+            "launch",
+            str(launch),
+            "robot_type:=xarm",
+            "dof:=6",
+            "gz_type:=gz",
+            "load_controller:=true",
+            f"add_gripper:={'true' if gripper else 'false'}",
+        ]
         proc = _start(cmd, d / "control.log", _environment(gripper))
         ready = READY + ((GRIPPER_READY,) if gripper else ())
         try:

@@ -18,7 +18,7 @@ import pytest
 
 import robowright as rw
 from robowright import expect
-from robowright.scene import ObjectSpec, SceneSpec
+from robowright.scene import SceneSpec
 
 HERE = Path(__file__).parent
 
