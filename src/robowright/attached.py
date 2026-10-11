@@ -420,8 +420,9 @@ def attach(
     """Attach to an environment (``env``), a bare ``model``/``data`` pair, a PyBullet client, or a Drake simulation.
 
     The engine is found from the environment: a MuJoCo model and data it holds, else a SAPIEN scene
-    (ManiSkill 3), else a PyBullet client (panda-gym). ``engine="pybullet", client=<physics client id>``
-    names one directly, and ``engine="sapien"`` requires a SAPIEN scene.
+    (ManiSkill 3), else a PyBullet client (panda-gym), else a built ``genesis.Scene``, whose ``step`` is the
+    environment's step. ``engine="pybullet", client=<physics client id>`` names one directly, and
+    ``engine="sapien"`` requires a SAPIEN scene.
 
     ``advance`` is one control step of their loop, for robowright to call when a test waits.
     With ``model``/``data`` or ``client`` and ``step``, ``step`` is the bare stepper: ``world.step()``
@@ -441,8 +442,8 @@ def attach(
             simulator, env = env, None  # a Simulator, passed by position
         else:
             diagram, env = env, None  # a Diagram, which needs context=
-    if engine not in (None, "mujoco", "pybullet", "sapien", "drake"):
-        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien' or 'drake', not {engine!r}")
+    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis"):
+        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake' or 'genesis', not {engine!r}")
     if simulator is not None or diagram is not None or context is not None or plant is not None:
         if env is not None or model is not None or data is not None or client is not None or engine not in (None, "drake"):
             raise ValueError("a Drake simulation is attached with simulator= (or a diagram and context=), not with other arguments")
@@ -482,7 +483,9 @@ def attach(
         _current.set(world)
         return world
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
-    if env is not None:
+    if env is not None and backend.engine == "genesis":
+        _wrap_scene(env, world)  # a Genesis scene has no reset that rebuilds anything: the step is the one hook
+    elif env is not None:
         world.env_spec = _env_spec(env)
         _wrap_env(env, world)
     elif step is not None:
@@ -515,8 +518,14 @@ def _is_drake_diagram(obj) -> bool:
 
 def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> AttachedEngine:
     """The adapter for an environment: its MuJoCo model and data if it has them, else its SAPIEN scene, else its PyBullet client."""
+    from .backends.attached_genesis import genesis_engine_of
     from .backends.attached_sapien import sapien_engine_of
 
+    if engine == "genesis" or (engine is None and type(env).__module__.startswith("genesis")):
+        found = genesis_engine_of(env, seed=seed, dt=dt)
+        if found is None:
+            raise ValueError(f"cannot attach to {type(env).__name__} as a Genesis scene: pass a genesis.Scene that is built")
+        return found
     if engine == "sapien":
         found = sapien_engine_of(env, seed=seed, dt=dt)
         if found is None:
@@ -584,6 +593,28 @@ def _registered_max_episode_steps(env_id: str):
         return gymnasium.spec(env_id).max_episode_steps
     except Exception:  # noqa: BLE001 - not registered in this process: the rebuild passes the recorded limit as it is
         return None
+
+
+def _wrap_scene(scene, world: AttachedWorld) -> None:
+    """Route a Genesis scene's ``step`` through the world. Its ``reset`` only restores the initial state, so it is an event."""
+    orig_step, orig_reset = scene.step, scene.reset
+
+    def step(*args, **kwargs):
+        return world._physics_step(lambda: orig_step(*args, **kwargs))
+
+    def reset(*args, **kwargs):
+        out = orig_reset(*args, **kwargs)
+        world._on_reset(None)
+        return out
+
+    scene.step = step
+    scene.reset = reset
+
+    def restore() -> None:  # on close, the scene is the one its code built again: the wrappers come off
+        scene.__dict__.pop("step", None)
+        scene.__dict__.pop("reset", None)
+
+    world.backend._restore = restore
 
 
 def _wrap_env(env, world: AttachedWorld) -> None:
