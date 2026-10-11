@@ -110,6 +110,19 @@ class AttachedSubject(Subject):
         return sorted(out)
 
 
+class AttachedJoint(Subject):
+    """A MuJoCo joint by name: its scalar value (a hinge angle in rad, a slide in m), read from the state."""
+
+    def __init__(self, world: AttachedWorld, name: str, qadr: int):
+        self.world = world
+        self.name = name
+        self.qadr = qadr
+
+    @property
+    def value(self) -> float:
+        return float(self.world.data.qpos[self.qadr])
+
+
 class AttachedScene:
     """``world.scene[name]``: the same lookup as a built world's, over the simulation's named things."""
 
@@ -189,6 +202,17 @@ class AttachedWorld(World):
             raise KeyError(f"no body, site or geom named {name!r}; bodies: {', '.join(self.bodies()) or 'none'}")
         kind, i = found
         return AttachedSubject(self, kind, i, name)
+
+    def joint(self, name: str) -> AttachedJoint:
+        """A hinge or slide joint by name, for ``expect(...).to_be_between``: its value, not a position."""
+        j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if j < 0:
+            named = [n for n in (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)) if n]
+            raise KeyError(f"no joint named {name!r}; joints: {', '.join(named) or 'none'}")
+        # int(): numpy's int32 does not compare equal to MuJoCo's enum members
+        if int(self.model.jnt_type[j]) not in (int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)):
+            raise CapabilityError(f"joint {name!r} is not a hinge or slide, so it has one scalar value; use world.body() for its pose")
+        return AttachedJoint(self, name, int(self.model.jnt_qposadr[j]))
 
     # --- time ---------------------------------------------------------------------
     def step(self, n: int = 1):

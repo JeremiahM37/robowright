@@ -12,7 +12,7 @@ import pytest
 import robowright as rw
 from robowright import expect
 from robowright.attached import AttachedRenderer
-from robowright.errors import CapabilityError, InvariantViolation
+from robowright.errors import CapabilityError, ExpectationError, InvariantViolation
 from robowright.render import jpeg_frames
 from robowright.trace import Trace
 
@@ -232,3 +232,19 @@ def test_run_drives_their_step_until_a_condition_then_gives_back_the_loop(toy):
     assert w.step_count == round(w.time / w.dt)
     with pytest.raises(CapabilityError):  # the run was for that call only: nothing waits afterwards
         w.step(1)
+
+
+def test_joint_by_name_is_a_scalar_subject_for_to_be_between(toy):
+    env, w = toy()
+    env.reset(seed=0)
+    slide = env.model.jnt_qposadr[mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_JOINT, "slide")]
+    env.data.qpos[slide] = 0.4  # set directly: the test reads the state, it does not step the model
+    mujoco.mj_forward(env.model, env.data)
+    expect(w.joint("slide")).to_be_between(0.3, 0.5)
+    with pytest.raises(ExpectationError, match="slide = 0.400"):
+        expect(w.joint("slide")).to_be_between(-1.0, 0.0)
+    assert w.joint("slide").value == pytest.approx(0.4)
+    with pytest.raises(KeyError, match="joints: box_free, slide"):
+        w.joint("nope")
+    with pytest.raises(CapabilityError, match="not a hinge or slide"):
+        w.joint("box_free")  # a free joint has seven values, not one

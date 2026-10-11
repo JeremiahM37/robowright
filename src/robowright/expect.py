@@ -118,6 +118,15 @@ class Expectation:
 
         return self._run("to_be_near", check, timeout, hold, {"target": tgt, "tol": tol})
 
+    def to_be_between(self, lo: float, hi: float, *, timeout=None, hold=0.0):
+        """A joint's value within ``[lo, hi]``: a hinge angle in rad or a slide in m (``world.joint(name)``)."""
+
+        def check():
+            v = self.subject.value
+            return lo <= v <= hi, f"{self.subject.name} = {v:.3f} (want {lo:.3f}..{hi:.3f})"
+
+        return self._run("to_be_between", check, timeout, hold, {"lo": lo, "hi": hi})
+
     def to_be_inside(self, container, margin: float = 0.0, *, timeout=None, hold=0.0):
         """Centre within ``container``'s bounds (shrunk by ``margin``)."""
         c = as_subject(self.world, container)
