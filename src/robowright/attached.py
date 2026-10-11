@@ -442,8 +442,8 @@ def attach(
             simulator, env = env, None  # a Simulator, passed by position
         else:
             diagram, env = env, None  # a Diagram, which needs context=
-    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis"):
-        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake' or 'genesis', not {engine!r}")
+    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis", "webots"):
+        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake', 'genesis' or 'webots', not {engine!r}")
     if simulator is not None or diagram is not None or context is not None or plant is not None:
         if env is not None or model is not None or data is not None or client is not None or engine not in (None, "drake"):
             raise ValueError("a Drake simulation is attached with simulator= (or a diagram and context=), not with other arguments")
@@ -521,6 +521,10 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
     from .backends.attached_genesis import genesis_engine_of
     from .backends.attached_sapien import sapien_engine_of
 
+    if engine == "webots":
+        from .backends.attached_webots import webots_engine_of
+
+        return webots_engine_of(env, seed=seed, dt=dt)
     if engine == "genesis" or (engine is None and type(env).__module__.startswith("genesis.")):
         found = genesis_engine_of(env, seed=seed, dt=dt)
         if found is None:
