@@ -164,9 +164,10 @@ def schedule(tr: Trace) -> list[dict]:
     return [item for _, item in sorted(items, key=lambda kv: kv[0])]
 
 
-# Engines whose own code takes the steps (a Drake Simulator, a Genesis scene): replayed by stepping the rebuilt
-# simulation, with the forces the trace kept, instead of env.step(action) for a gymnasium-style environment.
-STEPPED = ("drake", "genesis")
+# Engines whose own code takes the steps (a Drake Simulator, a Genesis scene, a Webots world stepped by its Supervisor):
+# replayed by stepping the rebuilt simulation, with the forces the trace kept, instead of env.step(action) for a
+# gymnasium-style environment.
+STEPPED = ("drake", "genesis", "webots")
 
 
 def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
@@ -184,10 +185,14 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
     plant = None
     if isinstance(built, tuple):  # a Drake simulation may come with its plant, when its diagram holds more than one
         built, plant = built
+    step_fn = None  # a Webots world's step, taken before attach wraps the environment's step
     if recorded == "drake":
         if not _is_drake_simulator(built):
             raise ValueError("this run is a Drake simulation: make_env must return its Simulator, or (Simulator, plant)")
         world = attach(simulator=built, plant=plant, seed=tr.meta["seed"], settings=Settings(trace="off"))
+    elif recorded == "webots":
+        step_fn = built.step
+        world = attach(built, engine="webots", seed=tr.meta["seed"], settings=Settings(trace="off"))
     else:
         world = attach(built, seed=tr.meta["seed"], settings=Settings(trace="off"))
     env = built
@@ -250,6 +255,8 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
                     if recorded == "drake":
                         t = float(a["t"][s])  # the recorded clock, so each AdvanceTo lands on the recorded time
                         world.replay_step(lambda t=t: env.AdvanceTo(t), _recorded_forces(tr, s))
+                    elif recorded == "webots":
+                        world.replay_step(step_fn, _recorded_forces(tr, s))
                     else:
                         world.replay_step(None, _recorded_forces(tr, s))  # the scene's own step
                 elif item["observe"]:

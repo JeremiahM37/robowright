@@ -675,6 +675,8 @@ def _wrap_env(env, world: AttachedWorld) -> None:
 
     def step(*args, **kwargs):
         action = args[0] if args else kwargs.get("action")
+        if action is None and world.backend.engine == "webots":  # a Webots world's step takes no action: its controllers run inside it
+            action = _OBSERVE
         return world._physics_step(lambda: orig_step(*args, **kwargs), action=action)
 
     def reset(*args, **kwargs):
