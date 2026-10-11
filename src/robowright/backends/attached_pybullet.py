@@ -236,12 +236,17 @@ def pybullet_engine_of(env, *, seed: int = 0, dt: float | None = None) -> PyBull
     core = getattr(env, "unwrapped", env)
     sim = getattr(core, "sim", None)
     pc = getattr(sim, "physics_client", None)
-    client = getattr(pc, "_client", None)
+    client = getattr(pc, "_client", None)  # panda-gym: a BulletClient on its sim
+    if not isinstance(client, int):
+        client = getattr(core, "CLIENT", None)  # gym-pybullet-drones: the client id on the env itself
     if not isinstance(client, int):
         return None
-    registry = getattr(sim, "_bodies_idx", None)
+    registry = getattr(sim, "_bodies_idx", None)  # panda-gym's own names; the drones env has none
     if dt is None:
-        sim_dt = getattr(sim, "dt", None)
-        if isinstance(sim_dt, (int, float)):
-            dt = float(sim_dt)
+        sim_dt = getattr(sim, "dt", None)  # panda-gym: timestep * n_substeps
+        ctrl_dt = getattr(core, "CTRL_TIMESTEP", None)  # gym-pybullet-drones: the env's control period
+        for cand in (sim_dt, ctrl_dt):
+            if isinstance(cand, (int, float)):
+                dt = float(cand)
+                break
     return PyBulletEngine(client, seed=seed, dt=dt, bodies=dict(registry) if isinstance(registry, dict) else None)
