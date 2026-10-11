@@ -9,12 +9,18 @@ object positions and injected faults - and then makes the same calls.
 
 from __future__ import annotations
 
+import io
 import keyword
 import pprint
 import re
 from pathlib import Path
 
+import numpy as np
+
 from .trace import Trace, _call
+
+# Action steps up to this many are written into the test; a longer run is saved beside it as an .npz.
+INLINE_ACTIONS = 50
 
 
 def _ident(name: str) -> str:
@@ -138,7 +144,11 @@ def generate(
     """
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     m = tr.meta
-    name = test_name or f"test_{_ident(re.sub(r'^.*::', '', m['name'])).removeprefix('test_')}_regression"
+    if "attached" in m:
+        if backend is not None:
+            raise ValueError("an attached run is generated for the environment it ran in: backend does not apply")
+        return _generate_attached(tr, test_name, stop_at_failure)
+    name = _test_name(m, test_name)
     imports = {"import robowright as rw", "from robowright import expect"}
     body: list[str] = []
     failed_at = None
@@ -248,3 +258,161 @@ def generate(
     )
     lines += ["        " + ln for ln in body] or ["        pass"]
     return "\n".join(lines) + "\n"
+
+
+def _test_name(meta: dict, test_name: str | None) -> str:
+    return test_name or f"test_{_ident(re.sub(r'^.*::', '', meta['name'])).removeprefix('test_')}_regression"
+
+
+def companion(trace: str | Path | Trace, test_name: str | None = None) -> tuple[str, bytes] | None:
+    """The ``.npz`` an attached test reads its actions from, as ``(file name, bytes)``, beside the test; None if it inlines them."""
+    tr = trace if isinstance(trace, Trace) else Trace(trace)
+    if "attached" not in tr.meta:
+        return None
+    rows = [row for _, kind, row in tr.controls if kind == "action"]
+    if len(rows) <= INLINE_ACTIONS:
+        return None
+    buf = io.BytesIO()
+    np.savez_compressed(buf, action=np.stack(rows))
+    return f"{_test_name(tr.meta, test_name)}_controls.npz", buf.getvalue()
+
+
+def _avalue(v) -> str:
+    """An expectation's argument as code: a subject is looked up by name in the attached simulation."""
+    if isinstance(v, dict):
+        if "$ref" in v:
+            return f"world.body({v['$ref']!r})"
+        if "$point" in v:
+            return "(" + ", ".join(repr(float(x)) for x in v["$point"]) + ")"
+    if isinstance(v, list):
+        return "[" + ", ".join(_avalue(x) for x in v) + "]"
+    return repr(v)
+
+
+def _attached_event(e: dict) -> str | None:
+    """One recorded call of the test as a line. None for events that change nothing and need no line."""
+    t, name, a = e["type"], e["name"], e.get("args") or {}
+    if t == "edit" and name == "move_object":
+        return f"world.move_object({a['object']!r}, {_avalue(a['pos'])}, {_avalue(a['quat'])})"
+    if t == "edit" and name == "set_joint":
+        return f"world.set_joint({a['joint']!r}, {_avalue(a['value'])})"
+    if t == "fault" and name == "Push":
+        return f"world.faults.push({a['object']!r}, {_avalue(a['force'])}, at={_avalue(a['at'])}, duration={_avalue(a['duration'])})"
+    if t in ("fault", "edit"):
+        return f"# not replayed, because an attached run has no robot to apply it to: {_call(e)}"
+    if t in ("expect", "invariant") and "matcher" in a:
+        kw = ", ".join(f"{k}={_avalue(v)}" for k, v in a.get("kwargs", {}).items() if k not in ("timeout", "hold") and v is not None)
+        neg = ".not_" if a.get("negate") else ""
+        mode = ".always" if t == "invariant" else ""
+        return f"expect(world.body({a['subject']!r})){mode}{neg}.{a['matcher']}({kw})"
+    return None
+
+
+def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) -> str:
+    from .replay import schedule
+
+    m = tr.meta
+    env_rec = m.get("env") or {}
+    if not env_rec.get("actions_recorded", True):
+        raise ValueError(f"this run cannot be turned into a test: {env_rec.get('note')}")
+    name = _test_name(m, test_name)
+    spec = env_rec.get("spec")
+    rebuilt = bool(spec and spec.get("reproducible"))
+    rows = [row for _, kind, row in tr.controls if kind == "action"]
+    inline = len(rows) <= INLINE_ACTIONS
+    body: list[str] = []
+    row_no = 0
+    failed_at = None
+    items = schedule(tr)
+    i = 0
+    while i < len(items):
+        it = items[i]
+        if it["kind"] == "control":
+            j = i
+            while j + 1 < len(items) and items[j + 1]["kind"] == "control" and items[j + 1]["observe"] == it["observe"]:
+                j += 1
+            count = j - i + 1
+            if it["observe"]:
+                body += ["world.observe()"] if count == 1 else [f"for _ in range({count}):", "    world.observe()"]
+            elif inline:
+                body += [f"env.step(np.array({rows[row_no + k].tolist()!r}))" for k in range(count)]
+            elif count == 1:
+                body.append(f"env.step(actions[{row_no}])")
+            else:
+                body += [f"for k in range({row_no}, {row_no + count}):", "    env.step(actions[k])"]
+            if not it["observe"]:
+                row_no += count
+            i = j + 1
+            continue
+        if it["kind"] == "reset":
+            seed = it["args"].get("seed")
+            if seed is None:
+                body.append("# the recorded reset had no seed: this reproduces its start only if the environment is deterministic")
+            opts = f", options={it['args']['options']!r}" if "options" in it["args"] else ""
+            body.append(f"env.reset(seed={seed!r}{opts})")
+        else:
+            e = it["event"]
+            line = _attached_event(e)
+            if line:
+                body.append(line)
+            if e.get("status") == "failed":
+                failed_at = failed_at or e
+                if stop_at_failure:
+                    break
+        i += 1
+
+    if rebuilt:
+        from .replay import make_spec_call
+
+        env_id, kwargs = make_spec_call(spec)
+        kw = "".join(f", {k}={v!r}" for k, v in kwargs.items())
+        make = f"gymnasium.make({env_id!r}{kw})"
+        stub: list[str] = []
+    else:
+        make = "make_env()"
+        why = (spec or {}).get("reason") or "it was built by hand, not by gymnasium.make"
+        if spec:
+            why = f"it was made with gymnasium.make({spec['id']!r}), but {why}"
+        stub = [
+            "",
+            "",
+            "def make_env():",
+            f"    # Stub: the environment of this run cannot be rebuilt from the trace ({why}).",
+            "    # Build it the way the recorded run did (the same constructor, options and model), then delete this line.",
+            "    raise NotImplementedError('make_env() is a stub: fill in the environment the recorded run used')",
+        ]
+    header = [
+        '"""Regression test generated by `robowright codegen` from ' + Path(tr.path).name + ".",
+        "",
+        f"Original run: {m['name']} (attached), {m['steps']} steps, status {m['status']}.",
+        "The recorded resets, actions and the calls made during the run are repeated in order; expectations are",
+        "checked at the step where they were recorded to pass or fail.",
+    ]
+    if failed_at:
+        header.append(f"It failed at t={failed_at['t']:.2f}s in {failed_at['name']}: {failed_at.get('detail', '').splitlines()[0][:120]}")
+    header += ['"""']
+    npz = name + "_controls.npz"
+    lines = _imports(rebuilt, rows, inline) + stub + ["", "", f"def {name}():"]
+    if not inline and rows:
+        lines.append(f"    actions = np.load(Path(__file__).with_name({npz!r}))['action']")
+    lines += [
+        f"    env = {make}",
+        f"    world = rw.attach(env, seed={m['seed']}, settings=rw.Settings(trace='retain-on-failure'))",
+        "    try:",
+    ]
+    lines += ["        " + ln for ln in body] or ["        pass"]
+    lines += ["    finally:", "        world.close()"]
+    return "\n".join(header + [""] + lines) + "\n"
+
+
+def _imports(rebuilt: bool, rows: list, inline: bool) -> list[str]:
+    groups = [
+        ["from pathlib import Path"] if (rows and not inline) else [],
+        (["import gymnasium"] if rebuilt else []) + (["import numpy as np"] if rows else []),
+        ["import robowright as rw", "from robowright import expect"],
+    ]
+    out: list[str] = []
+    for g in groups:
+        if g:
+            out += g + [""]
+    return out[:-1]

@@ -8,7 +8,8 @@ off the model's structure and motion, the way Playwright finds a button by its r
 than by a hand-written selector:
 
 * a model with no arm, only unlimited wheel joints, is a mobile robot: its wheels are its
-  controlled joints, and nothing is attached or placed for it;
+  controlled joints, and nothing is attached or placed for it (on a fixed base, or on a free one
+  that rolls on the floor);
 * a model with a free joint is a floating-base robot: legged if chains of actuated joints reach the
   ground, its actuated joints being what it moves; otherwise, carrying a gripper, a mobile
   manipulator, whose base is held where it stands so its arm is tested as on a fixed one;
@@ -417,6 +418,10 @@ def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | Non
         if any(_is_gripper(m, a, j) for a, j in moved.items()) and _legs(m, int(m.jnt_bodyid[free[0]]), moved) < 2:
             # (build() holds such a base still first; this is detect() called on the model as it is.)
             raise DetectionError("a free-floating base with a gripper and no legs is a mobile manipulator: load it with robots.load")
+        if _wheeled(m) and _legs(m, int(m.jnt_bodyid[free[0]]), moved) < 2:
+            # Wheels on a free base: a differential-drive robot, its base free to roll on the floor.
+            out.update(_mobile(m, notes, int(m.jnt_bodyid[free[0]])))
+            return Detection(out, notes)
         out.update(_legged(m, free[0], notes))
         return Detection(out, notes)
     if not free and (given.get("family") == "mobile" or _wheeled(m)):
@@ -1169,10 +1174,11 @@ def _wheeled(m: mujoco.MjModel) -> bool:
     return not any(b != c and c in _ancestors(m, b)[1:] for b in bodies for c in bodies)
 
 
-def _mobile(m: mujoco.MjModel, notes) -> dict:
-    """A mobile robot: its wheels are its controlled joints, and its base is the root body."""
+def _mobile(m: mujoco.MjModel, notes, base_body: int = 1) -> dict:
+    """A mobile robot: its wheels are its controlled joints, and its base is the root body (or the
+    body with the free joint, when it rolls on the floor)."""
     joints = [next(iter(js)) for js in _moved_joints(m).values()]
-    base = m.body(1).name  # the first body under the world: where the description's base is
+    base = m.body(base_body).name  # the first body under the world: where the description's base is
     notes.append(f"family: mobile (no arm: {len(joints)} wheel joint(s) {[m.joint(j).name for j in joints]}, base {base!r})")
     return {"family": "mobile", "base_body": base, "arm_joints": tuple(m.joint(j).name for j in joints)}
 

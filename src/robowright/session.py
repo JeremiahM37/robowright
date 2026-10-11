@@ -19,8 +19,12 @@ world, so whatever an agent finds can be replayed and turned into a test.
 
 from __future__ import annotations
 
+import difflib
+import functools
+import inspect
 import io
 import math
+import re
 import tempfile
 from pathlib import Path
 
@@ -61,6 +65,91 @@ def _half_extents(o: ObjectSpec) -> tuple:
     return (o.size[0],) * 3
 
 
+_LIST_CAP = 60  # names per line in sim_subjects: a humanoid's bodies would otherwise fill the reply
+
+
+def _built_only(reason: str):
+    """A call that needs a world robowright built: on an attached simulation it answers why, not a traceback."""
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def inner(self, *args, **kwargs):
+            if self.env is not None:
+                raise RobowrightError(f"{fn.__name__} is not available on an attached simulation because {reason}")
+            return fn(self, *args, **kwargs)
+
+        return inner
+
+    return wrap
+
+
+def _close_env(env) -> None:
+    """Close an environment robowright made, if it can be closed (a bare reset-and-step env may not have close)."""
+    close = getattr(env, "close", None)
+    if callable(close):
+        close()
+
+
+# Environment packages whose ids gymnasium only knows once their module is handed to gymnasium or imported.
+# How each one registers follows its own examples in examples/environments/. Only gymnasium-robotics is
+# verified against the real package; the others register on import and are not installed here.
+_ENV_PACKAGES = (
+    ("gymnasium_robotics", "register"),  # gymnasium.register_envs(module), as its examples do
+    ("mani_skill", "import"),  # ManiSkill registers its ids when mani_skill is imported
+    ("panda_gym", "import"),
+    ("pybullet_envs_gymnasium", "import"),
+    ("gym_aloha", "import"),
+)
+_suites: tuple[list[str], dict[str, str]] | None = None  # per process: packages registered, and imports that failed
+
+
+def _register_installed_suites(gymnasium) -> tuple[list[str], dict[str, str]]:
+    """Import every installed environment package once, so its ids are registered. A package that fails to import
+    is reported and does not stop the others."""
+    global _suites
+    if _suites is None:
+        import importlib
+        import importlib.util
+
+        loaded, failed = [], {}
+        for name, how in _ENV_PACKAGES:
+            if importlib.util.find_spec(name) is None:
+                continue
+            try:
+                module = importlib.import_module(name)
+                if how == "register":
+                    gymnasium.register_envs(module)
+                loaded.append(name)
+            except Exception as e:
+                failed[name] = f"{type(e).__name__}: {e}"
+        _suites = (loaded, failed)
+    return _suites
+
+
+def _registered_like(query: str) -> str:
+    """The registered gymnasium ids that look like ``query``, so an agent can pick one that exists."""
+    try:
+        import gymnasium
+    except ImportError:
+        return ""
+    ids = sorted(gymnasium.registry)
+    tokens = [t.lower() for t in re.split(r"[^A-Za-z0-9]+", query) if len(t) >= 3]
+    hits = [i for i in ids if any(t in i.lower() for t in tokens)]
+    near = difflib.get_close_matches(query, ids, n=5, cutoff=0.5)
+    found = list(dict.fromkeys(near + hits))[:10]
+    if not found:
+        return f"{len(ids)} environment ids are registered; none looks like it"
+    return "registered ids that look like it: " + ", ".join(found)
+
+
+def _suite_note(loaded: list[str], failed: dict[str, str]) -> str:
+    """What was registered from installed packages, and which imports failed."""
+    text = "packages registered: " + (", ".join(loaded) or "none (no known environment package is installed)")
+    if failed:
+        text += "; failed to import: " + "; ".join(f"{k} ({v})" for k, v in failed.items())
+    return text
+
+
 def _views(cam: CameraSpec, objects) -> list[CameraSpec]:
     """A top and a side view of the task area (the objects, else what the default camera sees).
 
@@ -90,6 +179,8 @@ class Session:
         self.trace_dir = Path(trace_dir or tempfile.mkdtemp(prefix="robowright-session-"))
         self._n = 0
         self.last_trace: Path | None = None
+        self.env = None  # the environment someone else built, once sim_attach() has attached to it
+        self.env_label = ""
 
     # --- lifecycle -------------------------------------------------------------
     def launch(
@@ -172,7 +263,9 @@ class Session:
             self.bridge.close()
             self.bridge = None
         self.world = None
+        env, self.env = self.env, None
         self.last_trace = w.close(failed=w.status == "failed")
+        _close_env(env)
         return f"closed; trace saved to {self.last_trace}"
 
     def _w(self) -> World:
@@ -180,9 +273,87 @@ class Session:
             raise RobowrightError("no world is open: call launch first")
         return self.world
 
+    def _attached(self) -> World:
+        if self.env is None:
+            raise RobowrightError("no attached simulation: call sim_attach first")
+        return self._w()
+
+    def sim_attach(self, env_id: str = "", kwargs: dict | None = None, seed: int | None = 0, entry_point: str | None = None) -> str:
+        """Attach to a simulation someone else built (see ``robowright.attach``): a gymnasium environment by
+        ``env_id``, or a ``module:callable`` that returns one (called with ``kwargs``). It is reset with ``seed``
+        and then watched. Their loop is not robowright's: time moves when ``sim_env_step`` steps it."""
+        from .attached import attach
+
+        if self.world is not None:
+            self.close()
+        env = self._make_env(env_id, dict(kwargs or {}), entry_point)
+        label = type(getattr(env, "unwrapped", env)).__name__
+        try:
+            self._n += 1
+            settings = Settings(trace="on", trace_dir=str(self.trace_dir), trace_cameras=[])
+            name = f"session_{self._n}"
+            try:
+                world = attach(env, name=name, seed=seed or 0, settings=settings)
+            except ValueError:  # an environment that builds its simulation on its first reset
+                env.reset()
+                world = attach(env, name=name, seed=seed or 0, settings=settings)
+            # reset after attaching, so the trace has the reset and a generated test repeats it
+            env.reset() if seed is None else env.reset(seed=seed)
+        except Exception as e:
+            _close_env(env)
+            hint = (
+                " robowright reads MuJoCo (gymnasium, dm_control, robosuite), SAPIEN (ManiSkill 3) and PyBullet (panda-gym) environments."
+                if isinstance(e, ValueError)
+                else ""
+            )
+            raise RobowrightError(f"cannot attach to {label}: {type(e).__name__}: {e}.{hint}") from e
+        world.source = "session"
+        spec_id = getattr(getattr(env, "spec", None), "id", None)  # the id gymnasium resolved, e.g. FetchPickAndPlace -> -v4
+        self.world, self.env = world, env
+        self.env_label = f"{spec_id}, {label}" if spec_id else label
+        return self.snapshot()
+
+    @staticmethod
+    def _make_env(env_id: str, kwargs: dict, entry_point: str | None):
+        import importlib
+
+        if entry_point:
+            mod, _, name = entry_point.partition(":")
+            if not mod or not name:
+                raise RobowrightError(f"entry_point is 'module:callable', e.g. 'my_pkg.envs:make_arm'; got {entry_point!r}")
+            try:
+                factory = getattr(importlib.import_module(mod), name)
+            except (ImportError, AttributeError) as e:
+                raise RobowrightError(f"cannot import entry_point {entry_point!r}: {type(e).__name__}: {e}") from e
+            try:
+                return factory(**kwargs)
+            except Exception as e:
+                raise RobowrightError(f"{entry_point} raised {type(e).__name__}: {e}") from e
+        if not env_id:
+            raise RobowrightError("give env_id (a gymnasium id) or entry_point ('module:callable')")
+        try:
+            import gymnasium
+        except ImportError as e:
+            raise RobowrightError(
+                f"cannot make {env_id!r}: gymnasium is not installed here. Install it and the environment's package, "
+                "or pass entry_point='module:callable'"
+            ) from e
+        try:
+            return gymnasium.make(env_id, **kwargs)  # also "module:EnvId": gymnasium imports the module first
+        except Exception:
+            # Not registered yet: the installed suites register their ids, then the lookup is retried.
+            loaded, failed = _register_installed_suites(gymnasium)
+            try:
+                return gymnasium.make(env_id, **kwargs)
+            except Exception as e:
+                reason = f"{type(e).__name__}: {str(e).rstrip('.')}"
+                raise RobowrightError(f"cannot make {env_id!r}: {reason}. {_registered_like(env_id)}. {_suite_note(loaded, failed)}") from e
+
     # --- observation -----------------------------------------------------------
     def snapshot(self) -> str:
         """The world as text: robot state, every object (by ref), contacts and faults."""
+        if self.env is not None:
+            return self._attached_snapshot()
         w = self._w()
         r, b = w.robot, w.backend
         m = b.robot_model
@@ -234,6 +405,27 @@ class Session:
         lines.append("cameras: " + ", ".join(c.name for c in w.spec.cameras))
         return "\n".join(lines)
 
+    def _attached_snapshot(self) -> str:
+        """An attached simulation as text: its time, and every free body by name with its pose and contacts."""
+        w = self._w()
+        lines = [
+            f"world: attached {self.env_label} ({w.backend.engine}), t={w.time:.3f}s, seed={w.seed}, status={w.status}",
+            f"steps taken: {w.step_count} (time moves only when sim_env_step steps the environment)",
+            "objects (free bodies, refs for other calls):",
+        ]
+        for name in w.object_names:
+            h = w.scene[name]
+            s = f"  - {name}: at {_f(h.position)}, yaw {math.degrees(h.yaw):.0f} deg"
+            v = float(np.linalg.norm(h.velocity[:3]))
+            s += ", at rest" if v < 0.01 else f", moving {v:.2f} m/s"
+            if w.has_contacts:
+                s += f", touching {', '.join(sorted(h.contacts())) or 'nothing'}"
+            lines.append(s)
+        if not w.object_names:
+            lines.append("  (none)")
+        lines.append("other named bodies, sites and joints: sim_subjects")
+        return "\n".join(lines)
+
     def _describe(self, o: ObjectSpec) -> str:
         w = self.world
         h = w.scene[o.name]
@@ -262,12 +454,21 @@ class Session:
         from PIL import Image
 
         w = self._w()
-        w.require("render", "screenshots")
-        names = [c.name for c in w.spec.cameras]
-        if camera not in names:
-            raise RobowrightError(f"unknown camera {camera!r}; this world has: {', '.join(names)}")
+        if self.env is None:
+            w.require("render", "screenshots")
+            names = [c.name for c in w.spec.cameras]
+            if camera not in names:
+                raise RobowrightError(f"unknown camera {camera!r}; this world has: {', '.join(names)}")
+            frame = w.backend.render(camera, int(width), int(height))
+        else:  # an attached simulation's cameras are its own: the engine names them if the one asked for is missing
+            try:
+                frame = w.backend.render(camera, int(width), int(height))
+            except NotImplementedError as e:
+                raise RobowrightError(
+                    f"robot_screenshot is not available on this attached simulation: its engine ({w.backend.engine}) renders no cameras"
+                ) from e
         buf = io.BytesIO()
-        Image.fromarray(w.backend.render(camera, int(width), int(height))).save(buf, format="PNG")
+        Image.fromarray(frame).save(buf, format="PNG")
         return buf.getvalue()
 
     # --- actions -----------------------------------------------------------------
@@ -312,16 +513,20 @@ class Session:
             raise RobowrightError(f"{self.world.backend.robot_model.title} is a legged robot: use stand, crouch or move_joints")
         return r
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def pick(self, object: str, approach: str | list = "top") -> str:
         approach = approach if isinstance(approach, str) else tuple(float(v) for v in approach)
         return self._act(self._arm().pick, self._w().scene[object], approach=approach)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def place(self, on, height: float | None = None) -> str:
         return self._act(self._arm().place, self._target(on), height=height)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def move_to(self, target, linear: bool = False, speed: float = 0.15) -> str:
         return self._act(self._arm().arm.move_to, self._target(target), linear=linear, speed=speed)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def gripper(self, action: str, amount: float = 1.0) -> str:
         g = self._arm().gripper
         if action == "open":
@@ -330,9 +535,11 @@ class Session:
             return self._act(g.close)
         raise RobowrightError(f"gripper action is 'open' or 'close', not {action!r}")
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def home(self) -> str:
         return self._act(self._arm().arm.home)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def move_joints(self, joints: dict[str, float]) -> str:
         """Move named joints (radians) to new targets; the others keep theirs."""
         w = self._w()
@@ -347,9 +554,11 @@ class Session:
             q[names.index(k)] = float(v)
         return self._act((r if legged else r.arm).move_joints, q)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def stand(self) -> str:
         return self._act(self._legged().stand)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def crouch(self, depth: float = 0.5) -> str:
         return self._act(self._legged().crouch, depth)
 
@@ -359,10 +568,12 @@ class Session:
             raise RobowrightError(f"{w.backend.robot_model.title} is not a mobile robot: use pick, place, move_to or gripper")
         return w.robot.base
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def drive(self, linear: float, angular: float, duration: float) -> str:
         """Mobile: drive the base at ``linear`` m/s and ``angular`` rad/s for ``duration`` seconds, then stop."""
         return self._act(self._mobile().drive, linear, angular, duration)
 
+    @_built_only("robowright drives only the robots it built, and the environment's own loop moves its robot")
     def go_to(self, x: float, y: float, yaw: float | None = None) -> str:
         """Mobile: send the base to (x, y) in the map frame, with heading ``yaw``, and wait for its navigation stack."""
         return self._act(self._mobile().go_to, (x, y), yaw=yaw)
@@ -374,11 +585,22 @@ class Session:
         return w.robot
 
     def wait(self, seconds: float) -> str:
+        if self.env is not None:
+            raise RobowrightError(
+                "wait is not available on an attached simulation: time passes only when the environment's own step runs; "
+                "use sim_env_step(steps=N)"
+            )
         return self._act(self._w().wait, float(seconds))
 
     def push(self, target: str, force, duration: float = 0.1) -> str:
         """A force (newtons, world frame) on an object or ``robot`` (legged base), for ``duration`` seconds."""
         w = self._w()
+        if self.env is not None:  # the force acts on the steps sim_env_step takes while it lasts
+            if target not in w.object_names:
+                raise RobowrightError(f"push moves free bodies; {target!r} is not one (free bodies: {', '.join(w.object_names) or 'none'})")
+            w.faults.push(target, force=tuple(float(f) for f in force), duration=float(duration))
+            when = "the steps sim_env_step takes in that time"
+            return f"queued a push of {list(force)} N on {target} for {duration} s; it acts on {when}\n\n{self.snapshot()}"
         if target != "robot":
             w.scene[target]  # unknown names fail here, with the list of objects
         w.faults.push(target, force=tuple(float(f) for f in force), duration=float(duration))
@@ -388,8 +610,16 @@ class Session:
         w = self._w()
         w.scene[object]
         quat = None if yaw is None else (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
-        return self._act(w.move_object, object, tuple(float(v) for v in position), quat)
 
+        def move():
+            try:
+                w.move_object(object, tuple(float(v) for v in position), quat)
+            except ValueError as e:  # an engine refuses to move a body that no free joint moves
+                raise RobowrightError(str(e)) from e
+
+        return self._act(move)
+
+    @_built_only("its faults act on the robot robowright drives")
     def fault(self, kind: str, **params) -> str:
         """Inject a fault: joint_noise, action_delay, weak_joint, jitter or camera_dropout."""
         w = self._w()
@@ -400,6 +630,7 @@ class Session:
         return self.snapshot()
 
     # --- the code under test ------------------------------------------------------
+    @_built_only("robowright runs policies on the robot it built, and an attached environment brings its own robot")
     def run_policy(
         self,
         policy: str,
@@ -434,6 +665,7 @@ class Session:
             head = f"{verdict}: {rollout.steps} steps, {rollout.sim_seconds:.2f} s simulated"
         return f"{head}\n\n{self.snapshot()}"
 
+    @_built_only("robowright sends targets only to robots it built, and the environment's own loop sends its own")
     def set_targets(self, joints: dict[str, float] | None = None, gripper: float | None = None) -> str:
         """Set joint targets (radians, by name) and/or the gripper opening (0 closed .. 1 open)
         without waiting for them: the low-level command a controller sends each control step.
@@ -453,9 +685,82 @@ class Session:
             w.trace.event("edit", "set_targets", {"joints": dict(joints or {}), "gripper": gripper})
         return self.snapshot()
 
+    @_built_only("robowright sends targets only to robots it built, and the environment's own loop sends its own")
     def step(self, steps: int = 1) -> str:
         """Advance ``steps`` control periods with the current targets."""
         return self._act(self._w().step, int(steps))
+
+    def sim_env_step(self, action: list | None = None, steps: int = 1, sample: bool = False) -> str:
+        """Step the attached environment's own ``step`` ``steps`` times with ``action`` (None: the zero, no-op
+        action; ``sample``: a random one from its action space). Each step goes through the environment's
+        ``step``, so robowright records and checks it. Returns the reward summed over the steps, whether the
+        episode ended, and which named bodies moved (more than 0.1 mm)."""
+        self._attached()
+        env = self.env
+        space = getattr(env, "action_space", None)
+        if space is None:
+            raise RobowrightError("this environment has no action_space, so robowright cannot choose its action")
+        if sample and action is not None:
+            raise RobowrightError("pass action or sample=true, not both")
+        if action is not None:
+            a = np.asarray(action, dtype=space.dtype)
+            if a.shape != tuple(space.shape):
+                raise RobowrightError(f"action has shape {a.shape}; this environment's action space is {tuple(space.shape)}")
+        elif sample:
+            a = space.sample()
+        else:
+            a = np.zeros(space.shape, dtype=space.dtype)
+        steps = int(steps)
+        if steps < 1:
+            raise RobowrightError("steps must be at least 1")
+        before = self._body_positions()
+        reward, taken, ended = 0.0, 0, ""
+        for _ in range(steps):
+            try:
+                out = env.step(a)
+            except RobowrightError as e:
+                return f"FAILED after {taken} of {steps} steps: {type(e).__name__}: {e}\n\n{self.snapshot()}"
+            reward += float(out[1])
+            taken += 1
+            term, trunc = out[2], (out[3] if len(out) == 5 else False)
+            if term or trunc:
+                ended = "terminated" if term else "truncated"
+                break
+        lines = [f"stepped {taken} of {steps}: reward {reward:.4g}, " + (f"episode {ended}" if ended else "episode continues")]
+        lines.append("moved: " + _listing(self._moved(before), ()))
+        if ended:
+            lines.append("the episode has ended: call sim_attach again to reset it before stepping further")
+        return "\n".join(lines) + "\n\n" + self.snapshot()
+
+    def sim_subjects(self) -> str:
+        """The names an attached simulation's tools take: bodies (a free body is an object, starred), sites,
+        joints and cameras. An engine that does not name a kind leaves its line empty."""
+        w = self._attached()
+        b = w.backend
+
+        def named(kind: str) -> list[str]:
+            try:
+                return list(b.names(kind))
+            except (NotImplementedError, KeyError, ValueError):
+                return []
+
+        cameras = list(b.names_of_cameras()) if hasattr(b, "names_of_cameras") else []
+        return "\n".join(
+            [
+                f"bodies (* = free body, an object): {_listing(w.bodies(), set(w.object_names))}",
+                f"sites: {_listing(named('site'))}",
+                f"joints (hinge and slide): {_listing(list(b.named_joints()))}",
+                f"cameras (robot_screenshot camera=): {_listing(cameras)}",
+            ]
+        )
+
+    def _body_positions(self) -> dict:
+        w = self._w()
+        return {n: w.body(n).position.copy() for n in w.bodies()}
+
+    def _moved(self, before: dict) -> list[str]:
+        after = self._body_positions()
+        return [n for n, p in after.items() if float(np.linalg.norm(p - before[n])) > 1e-4]
 
     # --- the simulator itself (Gazebo, when the ROS 2 backend has gazebo = true) --------
     def _gazebo(self):
@@ -508,6 +813,7 @@ class Session:
             w.trace.event("edit", "sim_remove", {"name": name})
         return self.snapshot()
 
+    @_built_only("the ROS 2 bridge serves a robot robowright built")
     def serve_ros2(
         self,
         namespace: str = "",
@@ -551,6 +857,7 @@ class Session:
         tail = log.read_text()[-3000:] if log.exists() else ""
         return f"stopped (exit {proc.returncode}); its output ended:\n{tail}"
 
+    @_built_only("the live view draws a robowright robot's joints and cameras, which an attached environment does not have")
     def watch(self, port: int = 8765) -> str:
         """Serve the world live in a browser: the camera streaming, joints, objects, contacts."""
         from .live import LiveView
@@ -568,8 +875,9 @@ class Session:
         from .expect import expect
 
         w = self._w()
-        if matcher not in _MATCHERS:
-            raise RobowrightError(f"unknown matcher {matcher!r}; choose from {', '.join(_MATCHERS)}")
+        attached_matchers = ("to_be_between",) if self.env is not None else ()  # a joint's value
+        if matcher not in _MATCHERS + attached_matchers:
+            raise RobowrightError(f"unknown matcher {matcher!r}; choose from {', '.join(_MATCHERS + attached_matchers)}")
         subj = self._subject(subject)
         kw = dict(args or {})
         for k in _SUBJECT_ARGS:
@@ -578,13 +886,28 @@ class Session:
         e = expect(subj, timeout=timeout, world=w)
         if negate:
             e = e.not_
+        # With no advance callable nothing steps the world: the state is checked once, and a hold (time the
+        # state must stay true) cannot pass, so it is not waited for.
+        once = getattr(w, "_advance", 1) is None
+        note = " (checked once: this simulation has no advance callable, so time did not pass and no hold was waited for)" if once else ""
+        if once and "hold" in inspect.signature(getattr(e, matcher)).parameters:
+            kw.setdefault("hold", 0.0)
         try:
             self._attempt(getattr(e, matcher), **kw)
         except ExpectationError as err:
-            return f"FAIL: {err}"
-        return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({', '.join(f'{k}={v!r}' for k, v in (args or {}).items())})"
+            return f"FAIL: {err}{note}"
+        shown = ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
+        return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({shown}){note}"
 
     def _subject(self, name: str):
+        if self.env is not None:  # an attached simulation: its named bodies and joints are the only subjects
+            w = self._w()
+            if name in w.backend.named_joints():
+                return w.joint(name)
+            try:
+                return w.body(name)
+            except KeyError as e:
+                raise RobowrightError(str(e.args[0])) from e
         r = self._w().robot
         if name in ("robot", "base") and self.world.backend.robot_model.family in ("legged", "mobile"):
             return r.base  # a legged or mobile robot's pose, velocity and contacts are its base's
@@ -602,7 +925,7 @@ class Session:
         A step that raised is left out, as a comment (the first line of the result says how many), unless
         ``keep_failed``: then it is asserted to fail again. A failed step can still have moved the world, so
         without it the test may not reproduce the session exactly."""
-        from .codegen import generate
+        from .codegen import companion, generate
 
         w = self._w()
         tmp = self.trace_dir / f"{w.name}_codegen.zip"
@@ -610,8 +933,12 @@ class Session:
         code = generate(tmp, test_name=test_name, keep_failed=keep_failed)
         if path:
             Path(path).write_text(code)
+            # an attached run's long action list is a file beside the test, which loads it by name
+            if self.env is not None and (beside := companion(tmp, test_name)) is not None:
+                Path(path).with_name(beside[0]).write_bytes(beside[1])
         return code
 
+    @_built_only("it replays the session's calls on another engine, which needs a world robowright built")
     def crosscheck(self, backend: str) -> str:
         """Make the session's calls again on another engine and say whether the outcome holds there."""
         from .crosscheck import crosscheck
@@ -625,6 +952,13 @@ class Session:
         w = self._w()
         p = w.trace.save(path or self.trace_dir / f"{w.name}.zip")
         return str(p)
+
+
+def _listing(names, mark=()) -> str:
+    """Names for one line: those in ``mark`` starred, and the rest past ``_LIST_CAP`` counted, not listed."""
+    shown = [n + ("*" if n in mark else "") for n in names[:_LIST_CAP]]
+    more = len(names) - _LIST_CAP
+    return (", ".join(shown) or "none") + (f" (+{more} more)" if more > 0 else "")
 
 
 def _load_policy(ref: str, kwargs: dict):
