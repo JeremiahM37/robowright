@@ -244,9 +244,14 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
 
 
 def _quat_angle(q: np.ndarray, r: np.ndarray) -> np.ndarray:
-    """The rotation angle between each wxyz quaternion in ``q`` and its partner in ``r`` (rows), in radians."""
-    dots = np.abs(np.sum(q * r, axis=1)) / (np.linalg.norm(q, axis=1) * np.linalg.norm(r, axis=1))
-    return 2.0 * np.arccos(np.clip(dots, 0.0, 1.0))
+    """The rotation angle between each wxyz quaternion in ``q`` and its partner in ``r`` (rows), in radians.
+
+    Taken from the chord |q - r| rather than from arccos of the dot product: near identity arccos turns a
+    rounding error of 1e-16 in the dot product into an angle of about 4e-8 rad, which would read as a difference.
+    """
+    sign = np.where(np.sum(q * r, axis=1) < 0.0, -1.0, 1.0)  # q and -q are the same rotation
+    chord = np.linalg.norm(q - sign[:, None] * r, axis=1)
+    return 2.0 * np.arcsin(np.clip(chord / 2.0, 0.0, 1.0))
 
 
 def _stored_bodies(tr: Trace) -> dict | None:
@@ -270,8 +275,9 @@ def make_spec_call(spec: dict) -> tuple[str, dict]:
         if module != "gymnasium":
             env_id = f"{module}:{env_id}"
     kwargs = dict(spec.get("kwargs") or {})
-    if spec.get("max_episode_steps") != spec.get("registered_max_episode_steps"):
-        kwargs["max_episode_steps"] = spec.get("max_episode_steps")  # the make() passed a limit other than the default
+    limit = spec.get("max_episode_steps")
+    if limit is not None and limit != spec.get("registered_max_episode_steps"):
+        kwargs["max_episode_steps"] = limit  # the make() passed a limit other than the default (None: no limit was recorded)
     return env_id, kwargs
 
 
