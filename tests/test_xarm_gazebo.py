@@ -249,10 +249,18 @@ def _pick_and_place(w, cube, bin_, start=None):
 # and the wrist (joint 6) 0.40 to 0.58 rad off. Across the same configuration the per-run errors vary by
 # joint and by tens of centimetres (at the end of each run the cube is 3 cm to 1 m from its start in 12 of 15 runs): not a single
 # lag. The same lift from home aborts with no cube and no contact, and passes 3 of 3 without the gripper.
+# Measured by geometry in Gazebo (2026-10-11; robowright's and Gazebo's hand agree: the TCP is 166 mm along the
+# tool from link6, the tool points down, and the jaws are centred on the TCP to 0.1 mm at the hover). The jaws
+# come down to the cube's centre height with about 9 mm of room a side, then close, and the closing is not
+# symmetric in the simulation as published: over the close the right jaw's pads travel about 32 mm and the left
+# about 21 mm (fingertip band, from Gazebo's pose stream). The jaw midpoint drifts about 5 mm toward +y and the
+# hand about 11 mm, the cube moves the same way (4.5 mm, then 3 to 7 mm), and as the left pad closes on it at
+# 6.0 to 6.2 s it is kicked 4 to 8 cm. The arm, pushed off its target, lags the elbow 0.09 to 0.14 rad, and the
+# controller aborts the lift at its goal_time. Speed does not change this (measured in the previous round).
 PICK_LIFT_CAUSE = (
-    "the lift after the grasp aborts (GOAL_TOLERANCE_VIOLATED or PATH_TOLERANCE_VIOLATED), at its default and at a "
-    "quarter of its speed: a different joint is off each run (elbow 0.001 to 1.7 rad, wrist up to 0.58 rad); "
-    "the same lift from home aborts with no cube, and passes without the gripper"
+    "the jaws close asymmetrically in the simulation as published (right pads travel 32 mm, left 21 mm): the "
+    "closing jaw pushes the cube sideways and kicks it 4 to 8 cm, the arm is pushed off target and the controller "
+    "aborts the lift at its goal_time"
 )
 
 
