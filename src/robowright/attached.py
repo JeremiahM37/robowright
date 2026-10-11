@@ -31,6 +31,8 @@ never waits.
 
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -127,15 +129,20 @@ class AttachedScene:
         return [self.world.body(n) for n in self.world.object_names]
 
 
+# Marks a physics step that the environment's loop took below env.step (world.observe()): no action to record.
+_OBSERVE = object()
+
+
 class AttachedRecorder(Recorder):
-    """The standard trace, plus what the engine keeps so a trace can be redrawn from its state (a MuJoCo model)."""
+    """The standard trace, plus what the engine keeps so a trace can be redrawn from its state (a MuJoCo model),
+    and what the environment needs to be rebuilt and stepped again (its spec, its actions)."""
 
     def meta(self) -> dict:
-        return {**super().meta(), "attached": self.world.backend.trace_meta()}
+        return {**super().meta(), "attached": self.world.backend.trace_meta(), "env": self.world.env_record()}
 
     def save(self, path: str | Path) -> Path:
         path = super().save(path)
-        files = self.world.backend.trace_files()
+        files = {**self.world.backend.trace_files(), **self.world.controls_files()}
         if files:
             with zipfile.ZipFile(path, "a", zipfile.ZIP_DEFLATED) as z:
                 for name, data in files.items():
@@ -174,6 +181,11 @@ class AttachedWorld(World):
         self.trace_path: Path | None = None
         self._advance = advance
         self._dt_known = False
+        # How the environment was made, and what its loop did each step, so codegen and replay can do it again.
+        self.env_spec: dict | None = None
+        self.controls: list[tuple[int, str, np.ndarray | None]] = []  # (step, "action" | "observe", action)
+        self.controls_note: str | None = None  # why the run cannot be stepped again, if it cannot
+        self._action_shape: tuple | None = None
 
     # --- what the simulation is -------------------------------------------------
     @property
@@ -246,6 +258,41 @@ class AttachedWorld(World):
         """Record one physics step that the environment's own loop took below ``env.step``."""
         self._physics_step(None, pushes=False)
 
+    # --- what a trace needs to run the environment again ----------------------------
+    def _note_unreplayable(self, reason: str) -> None:
+        self.controls_note = self.controls_note or reason
+
+    def _note_control(self, action) -> None:
+        if action is _OBSERVE:
+            self.controls.append((self.step_count, "observe", None))
+            return
+        arr = np.array(action, copy=True)
+        if arr.dtype.kind not in "biuf":
+            self._note_unreplayable("the environment's actions are not numeric arrays")
+        elif self._action_shape is None:
+            self._action_shape = arr.shape
+        elif arr.shape != self._action_shape:
+            self._note_unreplayable("the environment's actions change shape during the run")
+        self.controls.append((self.step_count, "action", arr))
+
+    def controls_files(self) -> dict[str, bytes]:
+        """``actions.npz``: every physics step as (step number, observed?, action row). Nothing if a step cannot be kept."""
+        if not self.controls or self.controls_note:
+            return {}
+        rows = [a for _, kind, a in self.controls if kind == "action"]
+        buf = io.BytesIO()
+        np.savez_compressed(
+            buf,
+            steps=np.array([s for s, _, _ in self.controls], dtype=np.int64),
+            observe=np.array([kind == "observe" for _, kind, _ in self.controls], dtype=bool),
+            action=np.stack(rows) if rows else np.zeros((0,)),
+        )
+        return {"actions.npz": buf.getvalue()}
+
+    def env_record(self) -> dict:
+        """What the trace says about the environment: its gymnasium spec, and whether its actions were kept."""
+        return {"spec": self.env_spec, "actions_recorded": self.controls_note is None, "note": self.controls_note}
+
     def _begin(self):
         if not self._began:
             self._began = True
@@ -254,11 +301,18 @@ class AttachedWorld(World):
             if self.trace:
                 self.trace.begin(state0)
 
-    def _on_reset(self, seed):
+    def _on_reset(self, seed, options=None):
         """The trace starts when the environment is first reset, so its first sample is a real start state."""
         self._begin()
         if self.trace:
-            self.trace.event("log", "env.reset", {"seed": seed})
+            args = {"seed": seed}
+            if options is not None:
+                try:
+                    json.dumps(options)
+                    args["options"] = options
+                except (TypeError, ValueError):
+                    self._note_unreplayable("the reset options are not plain values")
+            self.trace.event("log", "env.reset", args)
 
     def _rebind(self, env) -> None:
         """Point at the environment's current simulation when it has replaced it (a reset that rebuilds a MuJoCo model)."""
@@ -272,7 +326,7 @@ class AttachedWorld(World):
         self.backend = AttachedBackend(model, data, seed=self.seed)
         self.backend.set_control_dt(old.control_dt)
 
-    def _physics_step(self, fn, pushes: bool = True):
+    def _physics_step(self, fn, pushes: bool = True, action=_OBSERVE):
         """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
         self._begin()
         forces = self.faults.forces_for_step(self.step_count) if pushes else {}
@@ -293,6 +347,7 @@ class AttachedWorld(World):
         self.step_count += 1
         if self.trace:
             self.trace.record_step(self.step_count, self.backend.ctrl(), forces)
+            self._note_control(action)
         for hook in self._step_hooks:
             hook(self)
         self._check_invariants()
@@ -377,9 +432,11 @@ def attach(
         backend = AttachedBackend(model, data, seed=seed)
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
     if env is not None:
+        world.env_spec = _env_spec(env)
         _wrap_env(env, world)
     elif step is not None:
         world._advance = lambda: world._physics_step(step)
+        world._note_unreplayable("the steps were taken by a bare stepper (step=), not by an environment's step")
     _current.set(world)
     return world
 
@@ -419,17 +476,58 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
     return found
 
 
+def _env_spec(env) -> dict | None:
+    """The gymnasium spec an environment was made from (``gymnasium.make`` sets ``env.spec``), or None.
+
+    ``entry_point`` names the module the environment's class lives in, so a rebuild in a fresh process can import
+    the package that registered it. ``max_episode_steps`` is what this make used, and ``registered_max_episode_steps``
+    the registry's default: a rebuild passes the first only when it differs from the second.
+    """
+    spec = getattr(env, "spec", None) or getattr(getattr(env, "unwrapped", None), "spec", None)
+    env_id = getattr(spec, "id", None)
+    if not isinstance(env_id, str):
+        return None
+    entry = getattr(spec, "entry_point", None)
+    if not isinstance(entry, str) and callable(entry):  # a class object: the module and name it can be imported by
+        entry = f"{entry.__module__}:{entry.__qualname__}"
+    record = {
+        "id": env_id,
+        "kwargs": dict(getattr(spec, "kwargs", None) or {}),
+        "entry_point": entry if isinstance(entry, str) else None,
+        "max_episode_steps": getattr(spec, "max_episode_steps", None),
+        "registered_max_episode_steps": _registered_max_episode_steps(env_id),
+        "reproducible": True,
+    }
+    try:
+        json.dumps(record)
+    except (TypeError, ValueError):
+        return {**record, "kwargs": {}, "reproducible": False, "reason": "the make() kwargs are not plain values"}
+    return record
+
+
+def _registered_max_episode_steps(env_id: str):
+    try:
+        import gymnasium
+
+        return gymnasium.spec(env_id).max_episode_steps
+    except Exception:  # noqa: BLE001 - not registered in this process: the rebuild passes the recorded limit as it is
+        return None
+
+
 def _wrap_env(env, world: AttachedWorld) -> None:
     """Route the environment's own ``step`` and ``reset`` through the world. See the module docstring."""
     orig_step, orig_reset = env.step, env.reset
 
     def step(*args, **kwargs):
-        return world._physics_step(lambda: orig_step(*args, **kwargs))
+        action = args[0] if args else kwargs.get("action")
+        return world._physics_step(lambda: orig_step(*args, **kwargs), action=action)
 
     def reset(*args, **kwargs):
         out = orig_reset(*args, **kwargs)
         world._rebind(env)  # robosuite builds a new MjModel and MjData on every reset
-        world._on_reset(kwargs.get("seed"))
+        seed = kwargs.get("seed", args[0] if args else None)
+        options = kwargs.get("options", args[1] if len(args) > 1 else None)
+        world._on_reset(seed, options)
         return out
 
     env.step = step
