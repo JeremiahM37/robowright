@@ -97,6 +97,57 @@ def load(path: str | Path, name: str | None = None, **overrides) -> RobotModel:
 _LOADED: dict[tuple, RobotModel] = {}
 
 
+def record_options(overrides: dict) -> dict:
+    """The options a model was loaded with, as JSON (tuples become lists): what :func:`reload` needs."""
+    return {str(k): _record(v) for k, v in overrides.items()}
+
+
+def _record(v):
+    if isinstance(v, Attachment):
+        return {"$attachment": {"mjcf": str(v.mjcf()), "site": v.site, "prefix": v.prefix, "body": v.body, "quat": _record(v.quat)}}
+    if isinstance(v, dict):
+        return {str(k): _record(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_record(x) for x in v]
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, Path):
+        return str(v)
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    raise ValueError(f"robot option {v!r} cannot be written to a trace; give the robot as a plain value")
+
+
+def restore_options(recorded: dict) -> dict:
+    """Options as :func:`load` takes them: what :func:`record_options` wrote, with tuples back."""
+    return {k: _restore(v) for k, v in recorded.items()}
+
+
+def _restore(v):
+    if isinstance(v, dict) and "$attachment" in v:
+        a = v["$attachment"]
+        return Attachment(_const(Path(a["mjcf"])), a["site"], a["prefix"], a["body"], _restore(a["quat"]))
+    if isinstance(v, dict):
+        return {k: _restore(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return tuple(_restore(x) for x in v)
+    return v
+
+
+def recorded(model: RobotModel) -> dict | None:
+    """What a model loaded from a file needs to be loaded again (its file, name and options), else None."""
+    if "file" not in model.extra:
+        return None
+    return {"file": model.extra["file"], "name": model.name, "overrides": model.extra.get("overrides", {})}
+
+
+def reload(rec: dict) -> RobotModel:
+    """The robot :func:`recorded` described, loaded again under the same name with the same options."""
+    return load(rec["file"], rec["name"], **restore_options(rec.get("overrides", {})))
+
+
 def _split_query(path) -> tuple[Path, dict]:
     """``arm.urdf.xacro?ur_type=ur5e&name=ur5e``: the file, and the xacro arguments after it."""
     text, _, query = str(path).partition("?")
@@ -128,9 +179,13 @@ def build(path: str | Path, name: str | None = None, **overrides) -> Built:
 
 def _build(path, name, drive: bool, **overrides) -> Built:
     path, query = _split_query(path)
+    given = dict(overrides)  # as passed: what a trace needs to load this model again
     overrides = dict(overrides)
     bare = overrides.pop("gripper", True) is False
     xacro_args = {**query, **overrides.pop("xacro_args", {})}
+    given.pop("xacro_args", None)
+    if xacro_args:
+        given["xacro_args"] = xacro_args
     if not path.exists():
         raise FileNotFoundError(f"no robot model at {path}")
     first = []
@@ -165,7 +220,7 @@ def _build(path, name, drive: bool, **overrides) -> Built:
         _const(mjcf),
         tuple(fields.pop("arm_joints")),
         **fields,
-        extra={"file": str(path), **({"xacro_args": xacro_args} if xacro_args else {})},
+        extra={"file": str(path), "overrides": record_options(given), **({"xacro_args": xacro_args} if xacro_args else {})},
     )
     if model.family == "arm" and ("base_pos" not in overrides or "home" not in overrides):
         try:

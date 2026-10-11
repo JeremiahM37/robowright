@@ -1,7 +1,9 @@
 import json
+import os
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,6 +13,7 @@ from robowright import Trace, condition, expect
 from robowright.codegen import generate
 from robowright.policies import ScriptedPickPlace
 from robowright.replay import replay
+from robowright.scene import default_scene
 
 
 def _run(tmp_path, name="run", backend="mujoco", fail=False, faults=True):
@@ -258,3 +261,110 @@ def test_render_a_trace_to_video(tmp_path, robot):
     assert first.shape == (120, 160, 3) and np.abs(first.astype(int) - last).mean() > 0.1  # it moved
     gif = render_video(tr, tmp_path / "run.gif", size=(160, 120), fps=10)
     assert gif.read_bytes()[:6] == b"GIF89a"
+
+
+def _toy_arm(tmp_path):
+    """A five-joint arm with two slide fingers and one gripper actuator, from its model file alone
+    (the same made-up robot test_detect.py picks and places with)."""
+    link = 'type="capsule" size="0.02" mass="0.3"'
+    xml = f"""
+<mujoco model="toy">
+  <compiler angle="radian"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <default><joint damping="2" armature="0.05" range="-3 3"/><position kp="300" kv="20"/></default>
+  <worldbody>
+    <body name="base"><geom type="cylinder" size="0.05 0.02" pos="0 0 0.02"/>
+      <body name="l1" pos="0 0 0.04"><joint name="j1" axis="0 0 1"/><geom {link} fromto="0 0 0 0 0 0.1"/>
+        <body name="l2" pos="0 0 0.1"><joint name="j2" axis="0 1 0"/><geom {link} fromto="0 0 0 0.2 0 0"/>
+          <body name="l3" pos="0.2 0 0"><joint name="j3" axis="0 1 0"/><geom {link} fromto="0 0 0 0.18 0 0"/>
+            <body name="l4" pos="0.18 0 0"><joint name="j4" axis="0 1 0"/><geom {link} fromto="0 0 0 0.04 0 0"/>
+              <body name="hand" pos="0.04 0 0"><joint name="j5" axis="1 0 0"/>
+                <geom type="box" size="0.01 0.04 0.015" mass="0.2"/>
+                <body name="left_finger" pos="0.035 0.01 0"><joint name="fl" type="slide" axis="0 1 0" range="0 0.03"/>
+                  <geom type="box" size="0.025 0.004 0.01" pos="0 0 0" mass="0.02" friction="1.5"/></body>
+                <body name="right_finger" pos="0.035 -0.01 0"><joint name="fr" type="slide" axis="0 -1 0" range="0 0.03"/>
+                  <geom type="box" size="0.025 0.004 0.01" pos="0 0 0" mass="0.02" friction="1.5"/></body>
+              </body></body></body></body></body></body>
+  </worldbody>
+  <equality><joint joint1="fr" joint2="fl"/></equality>
+  <actuator>
+    <position joint="j1" ctrlrange="-3 3"/><position joint="j2" ctrlrange="-3 3"/><position joint="j3" ctrlrange="-3 3"/>
+    <position joint="j4" ctrlrange="-3 3"/><position joint="j5" ctrlrange="-3 3"/>
+    <position name="grip" joint="fl" kp="200" ctrlrange="0 0.03"/>
+  </actuator>
+</mujoco>"""
+    path = tmp_path / "toy_arm.xml"
+    path.write_text(xml)
+    return path
+
+
+def _run_file_robot(tmp_path):
+    """A pick and place with a robot loaded from a file under a name only this test uses (a backend kept
+    from an earlier test with the same robot name would be reused). Returns the trace and the robot's name."""
+    import warnings
+
+    from robowright import robots
+
+    name = f"toy_{tmp_path.name}"
+    path = _toy_arm(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # MuJoCo's notes on attaching a gripper
+        robots.load(path, name=name, arm_joints=("j1", "j2", "j3", "j4", "j5"), timestep=0.002)
+    with rw.launch(scene=default_scene(name), settings=rw.Settings(trace="on", trace_dir=str(tmp_path / "traces"), trace_cameras=[])) as w:
+        w.robot.pick(w.scene["cube"])
+        w.robot.place(on=w.scene["bin"])
+        expect(w.scene["cube"]).to_be_inside(w.scene["bin"])
+    return w.trace_path, name
+
+
+def test_a_robot_from_a_model_file_is_recorded_with_how_it_was_loaded(tmp_path):
+    path, name = _run_file_robot(tmp_path)
+    meta = Trace(path).meta
+    assert meta["robot_file"] == {
+        "file": str(tmp_path / "toy_arm.xml"),
+        "name": name,
+        "overrides": {"arm_joints": ["j1", "j2", "j3", "j4", "j5"], "timestep": 0.002},
+    }
+    assert meta["backend_options"] == {}
+
+
+def test_codegen_loads_the_file_robot_and_the_generated_test_runs_and_replays_in_a_fresh_process(tmp_path):
+    path, name = _run_file_robot(tmp_path)
+    code = generate(path, test_name="test_toy_arm")
+    load_line = f"ROBOT = rw.robots.load({str(tmp_path / 'toy_arm.xml')!r}, name={name!r}, "
+    assert load_line + "arm_joints=('j1', 'j2', 'j3', 'j4', 'j5'), timestep=0.002)" in code
+    assert code.index("ROBOT = ") < code.index("SCENE = ")
+    test = tmp_path / "test_toy_arm_regression.py"
+    test.write_text(code)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [os.environ.get("PYTHONPATH"), str(Path(rw.__file__).parents[1])]))}
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test), "-q", "-p", "no:cacheprovider"], cwd=tmp_path, env=env, capture_output=True, text=True
+    )
+    assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+    replay_code = (
+        "import sys\nfrom robowright.replay import replay\n"
+        f"r = replay({str(path)!r})\nprint(r.summary())\nsys.exit(0 if r.identical else 1)\n"
+    )
+    rep = subprocess.run([sys.executable, "-c", replay_code], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert rep.returncode == 0, rep.stdout + rep.stderr[-2000:]
+
+
+def test_a_trace_whose_model_file_is_gone_says_which_file(tmp_path, monkeypatch):
+    from robowright import robots
+
+    path, name = _run_file_robot(tmp_path)
+    monkeypatch.delitem(robots.REGISTRY, name, raising=False)  # as in a fresh process
+    (tmp_path / "toy_arm.xml").unlink()
+    with pytest.raises(FileNotFoundError, match="toy_arm.xml"):  # the path, so the user can put it back
+        Trace(path).scene()
+
+
+def test_backend_options_are_recorded_and_passed_to_the_launch_call(tmp_path):
+    w = rw.launch(backend="mujoco", seed=1, name="opts", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    w.backend_options = {"frame": "base_link", "use_sim_time": True, "arm_controller": "arm_controller_with_a_long_name"}
+    path = w.close(trace_path=tmp_path / "opts.zip")
+    assert Trace(path).meta["backend_options"]["frame"] == "base_link"
+    code = generate(path, test_name="test_opts")
+    assert "    with rw.launch(\n        SCENE,\n" in code  # too long for one line
+    assert "        frame='base_link'," in code and "        use_sim_time=True," in code
+    assert "frame=" not in generate(path, test_name="test_opts", backend="drake")  # another engine gets none of them

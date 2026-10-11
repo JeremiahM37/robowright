@@ -51,7 +51,7 @@ def test_actions_assertions_and_a_reproducing_test(session, tmp_path):
     assert session.expect("can", "to_be_inside", {"container": "bin"}).startswith("PASS")
     assert "inside bin" in session.snapshot()
 
-    code = session.generate_test("test_regen")
+    code = session.generate_test("test_regen", keep_failed=True)  # the failed checks reproduce as pytest.raises
     assert "move_to" not in code
     assert "with pytest.raises(ExpectationError):" in code and "timeout=0.3" in code
     assert "robot.reset_to()" in code
@@ -229,3 +229,89 @@ def test_mcp_lists_the_code_under_test_tools():
         pytest.skip("this mcp version keeps its tools elsewhere")
     assert {"robot_run_policy", "robot_set_targets", "robot_step", "robot_serve_ros2", "robot_start_process", "robot_watch"} <= names
     assert "code under test is the user's" in INSTRUCTIONS
+
+
+class _FakeRobot:
+    def __init__(self):
+        self.resets = 0
+
+    def reset_to(self):
+        self.resets += 1
+
+
+class _FakeWorld:
+    def __init__(self, spec):
+        self.spec = spec
+        self.robot = _FakeRobot()
+        self.view = None
+        self.trace = None
+        self.world = None
+        self.status = "running"
+
+    def close(self, failed=None):
+        return None
+
+
+def test_ros2_launch_has_no_objects_unless_asked_and_never_moves_the_robot(monkeypatch):
+    """A robot behind ROS 2 is someone else's running system: no default cube and bin, no start pose."""
+    from robowright import session as session_mod
+    from robowright import world as world_mod
+
+    made = []
+
+    def fake_launch(spec, **kw):
+        made.append(_FakeWorld(spec))
+        return made[-1]
+
+    monkeypatch.setattr(session_mod, "launch", fake_launch)
+    monkeypatch.setattr(Session, "snapshot", lambda self: "snap")
+    s = Session()
+    assert s.launch(robot="so101", backend="ros2", ros2={"frame": "base_link"}) == "snap"
+    assert made[-1].spec.objects == [] and made[-1].robot.resets == 0
+    s.launch(robot="so101", backend="mujoco")  # the simulators still start from the robot's start pose
+    assert made[-1].spec.objects and made[-1].robot.resets == 1
+    s.launch(robot="so101", backend="ros2", objects=[{"name": "tag", "kind": "box", "pos": [0.2, 0.0]}])
+    assert [o.name for o in made[-1].spec.objects] == ["tag"]
+
+    seen = {}
+    monkeypatch.setattr(world_mod, "World", lambda spec, **kw: seen.update(spec=spec))
+    world_mod.launch(backend="ros2")
+    assert seen["spec"].objects == []
+    world_mod.launch(backend="mujoco")
+    assert seen["spec"].objects  # the default tabletop, as before
+
+
+def test_generate_test_leaves_out_the_steps_that_failed_unless_asked(session, monkeypatch, tmp_path):
+    """An agent's wrong attempt is a comment, not an assertion, and the test runs as the session ended."""
+    monkeypatch.chdir(tmp_path)  # the generated test records its own trace
+    session.launch(robot="so101")
+    session.wait(0.1)
+    assert session.expect("cube", "to_be_inside", {"container": "bin"}).startswith("FAIL")
+    code = session.generate_test("test_probe")
+    assert code.startswith("# Left out 1 failed step(s)") and "may not reproduce" in code.splitlines()[0]
+    assert "# left out: expect(cube).to_be_inside(" in code and "pytest.raises" not in code
+    assert "generated from an interactive session" in code and "Original session: session_1" in code
+    exec(compile(code, "test_probe.py", "exec"), {})  # a test that left the failure out passes
+
+    kept = session.generate_test("test_probe", keep_failed=True)
+    assert not kept.startswith("# Left out") and "with pytest.raises(ExpectationError):" in kept
+
+
+class _FakeGazebo:
+    world = "empty"
+    iterations = 4200
+    paused = False
+    real_time_factor = 1.0
+    time = 139.9
+
+    def models(self):
+        return ["ground_plane", "ur"]
+
+
+def test_sim_state_says_whose_clock_is_whose(session, monkeypatch):
+    session.launch(robot="so101")
+    session.world.backend.gazebo = _FakeGazebo()
+    session.world.wait(55.0)
+    text = session.sim_state()
+    assert "its clock t=139.900 s" in text
+    assert f"robowright's world time (the t in snapshots) is {session.world.time:.3f} s, counted from launch" in text
