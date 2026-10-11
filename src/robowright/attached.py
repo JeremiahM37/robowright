@@ -426,8 +426,8 @@ def attach(
     ``dt`` is the control period in seconds: needed for a bare PyBullet client, where nothing in
     PyBullet says how many physics steps make one control step.
     """
-    if engine not in (None, "mujoco", "pybullet", "sapien"):
-        raise ValueError(f"engine must be 'mujoco', 'pybullet' or 'sapien', not {engine!r}")
+    if engine not in (None, "mujoco", "pybullet", "sapien", "webots"):
+        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien' or 'webots', not {engine!r}")
     if env is not None and (model is not None or data is not None or client is not None):
         raise ValueError("attach takes an environment, or a model and data, or a client, not more than one")
     if env is None and client is None and (model is None or data is None):
@@ -459,6 +459,10 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
     """The adapter for an environment: its MuJoCo model and data if it has them, else its SAPIEN scene, else its PyBullet client."""
     from .backends.attached_sapien import sapien_engine_of
 
+    if engine == "webots":
+        from .backends.attached_webots import webots_engine_of
+
+        return webots_engine_of(env, seed=seed, dt=dt)
     if engine == "sapien":
         found = sapien_engine_of(env, seed=seed, dt=dt)
         if found is None:
