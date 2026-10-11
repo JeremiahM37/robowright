@@ -12,8 +12,8 @@ driver (most arms do), and with any simulator that speaks ROS 2 (Gazebo, Isaac S
   ``ActionError`` with its reason). Targets that come one at a time (a policy's) go as
   one-point trajectories reaching them one control period later.
 * **gripper**: in the same forward controller as the arm, its own forward controller, a
-  ``GripperCommand`` action (``gripper_action_controller``, ``parallel_gripper_action_controller``),
-  or not at all.
+  ``GripperCommand`` action (``gripper_action_controller``), a ``ParallelGripperCommand`` action
+  (``parallel_gripper_action_controller``, with ``parallel = true``), or not at all.
 * **objects**: TF frames, which become the world's ``perception`` sources, so object
   assertions and privileged policies read them as they read a simulator's ground truth.
 * **cameras**: ``sensor_msgs/Image`` topics, which policies and traces read through ``render``.
@@ -203,7 +203,14 @@ class Ros2Backend(Backend):
             from rclpy.action import ActionClient
 
             name = grip.get("action") or f"{grip.get('controller', 'gripper_controller')}/gripper_cmd"
-            self._grip_action = ActionClient(self.node, GripperCommand, _topic(ns, name))
+            # A parallel gripper controller serves its own action, whose goal is a JointState
+            if grip.get("parallel"):
+                from control_msgs.action import ParallelGripperCommand
+
+                action = ParallelGripperCommand
+            else:
+                action = GripperCommand
+            self._grip_action = ActionClient(self.node, action, _topic(ns, name))
             self._grip_goal, self._grip_sent = None, None
         else:
             typ, suffix = msg[gi]
@@ -387,13 +394,20 @@ class Ros2Backend(Backend):
             raise ActionError(f"{self.cfg['arm']['controller']} did not carry out the move ({what})")
 
     def _send_grip_goal(self, q: float):
-        from control_msgs.action import GripperCommand
+        from control_msgs.action import GripperCommand, ParallelGripperCommand
 
         if not self._grip_action.server_is_ready():
             return  # sent on a later step, once the controller's action server is up
-        goal = GripperCommand.Goal()
-        goal.command.position = q
-        goal.command.max_effort = float(self.cfg["gripper"].get("max_effort", 0.0))
+        max_effort = float(self.cfg["gripper"].get("max_effort", 0.0))
+        if self.cfg["gripper"].get("parallel"):
+            from sensor_msgs.msg import JointState
+
+            goal = ParallelGripperCommand.Goal()
+            goal.command = JointState(name=[self._grip_joint], position=[q], effort=[max_effort] if max_effort else [])
+        else:
+            goal = GripperCommand.Goal()
+            goal.command.position = q
+            goal.command.max_effort = max_effort
         self._grip_action.send_goal_async(goal)  # a new goal preempts the last
         self._grip_sent = q
 

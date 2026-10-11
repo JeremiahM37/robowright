@@ -10,6 +10,7 @@
 # late /clock stopped a trajectory and then aborted it). The UR rig preloads that build.
 #
 #   scripts/ros2_env.sh create                  # once (about 2 GB)
+#   scripts/ros2_env.sh kortex                  # Kinova's ros2_kortex and Robotiq's descriptions, for the Kinova Gazebo rig
 #   scripts/ros2_env.sh pytest tests/test_ros2.py
 #
 # The environment lives in $ROBOWRIGHT_ROS2_ENV (default ~/.cache/robowright/ros2-jazzy).
@@ -32,6 +33,7 @@ if [ "${1:-}" = "create" ]; then
         ros-jazzy-moveit ros-jazzy-ur-simulation-gz ros-jazzy-ur-moveit-config ros-jazzy-ur-description ros-jazzy-ur-robot-driver uv
     "$ENV/bin/uv" pip install --python "$ENV/bin/python" -e "$REPO[dev,onnx]"
     "$0" pymoveit2
+    "$0" kortex
     "$0" ros2_control
     exit 0
 fi
@@ -41,6 +43,22 @@ if [ "${1:-}" = "pymoveit2" ]; then
     git clone -q https://github.com/AndrejOrsula/pymoveit2.git "$ENV/src/pymoveit2"
     git -C "$ENV/src/pymoveit2" checkout -q "$PYMOVEIT2_COMMIT"
     git -C "$ENV/src/pymoveit2" apply "$REPO"/scripts/patches/pymoveit2-*.patch
+    exit 0
+fi
+if [ "${1:-}" = "kortex" ]; then
+    # Kinova's ros2_kortex, for kortex_bringup's simulation launch (tests/kinova_gz_rig.py), and
+    # the Robotiq 2F-85 description its main branch expects: RoboStack's robotiq_description is
+    # older and has no mock_sensor_commands argument, so the description will not expand with
+    # it. Only the launch files and the descriptions are used here (nothing is built); the rig
+    # makes them visible to ROS 2 through an ament index of its own.
+    fetch() {  # fetch URL COMMIT DIR
+        rm -rf "$3"
+        git init -q "$3"
+        git -C "$3" fetch -q --depth 1 "$1" "$2"
+        git -C "$3" checkout -q FETCH_HEAD
+    }
+    fetch https://github.com/Kinovarobotics/ros2_kortex.git b2aa46b29ae8fadd5b293c57e3500925c61eb8e8 "$ENV/src/ros2_kortex"
+    fetch https://github.com/picknikrobotics/ros2_robotiq_gripper.git a74d007d8f2f06dc6a503ad21038ba869d4999a6 "$ENV/src/ros2_robotiq_gripper"
     exit 0
 fi
 if [ "${1:-}" = "ros2_control" ]; then
