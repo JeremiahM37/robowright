@@ -231,6 +231,20 @@ with rw.launch(
     assert np.linalg.norm(robot.base.estimate.position - in_map(robot.base.position)) < 0.5  # and the belief is true
 ```
 
+It can be driven too, through what its own stack offers, found in the ROS graph like an arm's
+controllers: velocity commands on its `cmd_vel` topic (`Twist` or `TwistStamped`), and goals to
+its navigation stack where it has one.
+
+```python
+robot.base.drive(0.2, 0.0, 1.0)  # 0.2 m/s for 1 s: the TurtleBot 3 moves 0.178 m (it accelerates at 1 m/s^2)
+robot.base.go_to((0.5, -0.5), yaw=0.0, timeout=90)  # a NavigateToPose goal to Nav2; aborted or refused raises ActionError
+```
+
+A goal off the map is refused in Nav2's words (`ActionError: navigate_to_pose aborted:
+GOAL_OUTSIDE_MAP`). A goal inside a wall is not: Nav2 plans to the nearest free space, stops
+0.45 m short and answers SUCCEEDED, with a goal tolerance of 0.25 m. Its answer is not the
+outcome, and `expect(robot.base).to_be_near(goal, tol=0.25)` fails as it should.
+
 With Nav2's examples run as Nav2 launches them, the TurtleBot 4 arrives 0.17 m from
 `example_nav_to_pose`'s final goal and 0.22 to 0.35 m from `example_follow_path`'s (Nav2's own
 goal tolerance is 0.25 m, and the example reports success at 0.35), and Nav2's belief stays
@@ -1404,9 +1418,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   (no grasp that rolls the hand); plain moves interpolate joints without checking for
   collisions (pass `plan=True`). A mobile base drives only where the arm cannot reach
   otherwise, as two idealised joints (no wheel slip).
-- **Mobile robots are watched, not driven:** robowright reads a wheeled robot's pose, belief and
-  topics while its own stack drives it. It does not send velocity commands or navigation goals,
-  and there is no wheeled robot in robowright's own engines.
+- **Mobile robots are behind ROS 2 only:** robowright watches and drives a wheeled robot through
+  its own stack (velocity commands, Nav2 goals) and plans nothing for it itself. There is no
+  wheeled robot in robowright's own engines.
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
 - **Gripper models:** grippers are driven at a published or measured force (Franka Hand, xArm
@@ -1424,8 +1438,7 @@ Each of these builds on the extension points above, not on any one robot or fram
 1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
    from simulation as known divergences, as the engines' are.
 2. **More stacks and simulators:** xArm's and Franka's own Gazebo simulations, Isaac Lab and
-   GPU-batched environments for `rw.attach`, and driving a mobile robot (velocity commands,
-   navigation goals) as arms are driven.
+   GPU-batched environments for `rw.attach`.
 3. **Replay and codegen for attached simulations**, where the environment can be rebuilt from
    its seed.
 
