@@ -197,7 +197,11 @@ def test_the_hand_opens_and_closes_as_pymoveit2_says(world):
     r = world.robot
     # The stack's hand controller is ``panda_hand_controller`` (a GripperCommand action); the example's
     # default action name is for another robot.
-    for action, check in (("open", lambda: expect(r.gripper).to_be_open()), ("close", lambda: expect(r.gripper).to_be_closed())):
+    # The client is a Python process that starts, finds the action server and then sends its goal:
+    # the fingers began to move 0.5 to 2 s after it was launched, in 16 measured runs.
+    budget = {"timeout": 20, "hold": 0.3}
+    checks = (("open", lambda: expect(r.gripper).to_be_open(**budget)), ("close", lambda: expect(r.gripper).to_be_closed(**budget)))
+    for action, check in checks:
         proc = _pymoveit2("ex_gripper.py", f"action:={action}", "gripper_command_action_name:=panda_hand_controller/gripper_cmd")
         _watch(proc, check)
         out, _ = proc.communicate(timeout=60)
