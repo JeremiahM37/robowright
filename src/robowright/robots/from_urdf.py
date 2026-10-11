@@ -34,15 +34,26 @@ import numpy as np
 
 from .model import _collision_geoms, reset_data
 
-VERSION = 1  # bump when the output changes, to invalidate cached conversions
+VERSION = 2  # bump when the output changes, to invalidate cached conversions
 _LOADS = {".stl", ".obj", ".msh"}  # mesh formats MuJoCo reads
 _HINGE_ERR = 0.02  # rad from target at full effort
 _SLIDE_ERR = 0.002  # m
 _PAYLOAD = 1.5  # kg at the end of the arm, for joints whose effort the file leaves out
 _ACCEL = 5.0  # rad/s^2 (m/s^2 for slides) a joint whose effort is guessed can give its load
 _PLACEHOLDER = 50.0  # an effort limit this many times what a joint needs is a placeholder (1000 N m on a hobby servo)
+_PART_MASS = 0.001  # kg: a link lighter than a gram is a frame drawn as a marker, not a part
 _OMEGA_DT = 0.3  # servo natural frequency times the timestep: stable with margin under implicitfast
 _HINGE, _SLIDE = int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)
+# A wheel is driven by its speed, not its angle. A motor's speed error under a resisting torque is
+# that torque over its gain, so the gain is set by how much error is allowed at full effort:
+# kv = effort / (WHEEL_ERR * velocity), the wheel within WHEEL_ERR of its speed limit at full effort,
+# as a hinge is held within _HINGE_ERR of its target. A file without a limit gets these stated
+# defaults: an effort that lets each wheel reach its full traction, mu * (half the base's weight) * r,
+# with mu the wheel's own friction and r its measured radius (a motor that can drive a wheel to the
+# grip it has, and no more), and a speed limit of 10 rad/s.
+_WHEEL_ERR = 0.02
+_G = 9.81  # m/s^2
+_WHEEL_SPEED = 10.0  # rad/s, when the file gives no velocity
 
 
 class URDFError(ValueError):
@@ -103,6 +114,36 @@ def _expand(path: Path, args: dict) -> str:
     return doc.toxml()
 
 
+_MAX_FACES = 200000  # MuJoCo's limit on a mesh's faces
+_PART_FACES = 150000  # a part of a split mesh, with room under the limit
+
+
+def _too_many_faces(file: Path) -> bool:
+    """Whether a mesh file has more faces than MuJoCo reads: a binary STL says so in its header."""
+    if file.suffix.lower() != ".stl":
+        return False
+    with file.open("rb") as f:
+        head = f.read(84)
+    if len(head) < 84 or head[:5] == b"solid":
+        return False  # ASCII STL (or too short to say): MuJoCo's own count applies
+    return int.from_bytes(head[80:84], "little") > _MAX_FACES
+
+
+def _split_mesh(file: Path, meshes: Path) -> list[Path]:
+    """``file`` in OBJ parts of at most ``_PART_FACES`` faces each, written under ``meshes``."""
+    import trimesh
+
+    mesh = trimesh.load(str(file), force="mesh")
+    out = []
+    for i, start in enumerate(range(0, len(mesh.faces), _PART_FACES)):
+        part = mesh.submesh([list(range(start, min(start + _PART_FACES, len(mesh.faces))))], append=True)
+        target = meshes / f"{file.stem}-{hashlib.sha1(str(file).encode()).hexdigest()[:8]}-part{i}.obj"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        part.export(str(target))
+        out.append(target)
+    return out
+
+
 def _write(out: Path, text: str) -> None:
     """Replace ``out`` atomically: several test workers convert the same file at once."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -132,19 +173,19 @@ def _resolved(path: Path, raw: bytes, meshes: Path, notes) -> ET.ElementTree:
     if flat:
         notes.append(f"repair: {flat} box shape(s) with a side of zero given a millimetre (MuJoCo does not read a box with no thickness)")
     # A link drawn but given no collision shape (the SO-100's gripper and jaw) could not touch
-    # anything; its visual meshes are what it is shaped like. Not a massless one: that is a
-    # frame drawn as a marker (an end-effector point), not a part.
+    # anything; its visual meshes are what it is shaped like. Not a light one: that is a frame drawn
+    # as a marker (an end-effector point, or TurtleBot4's base_footprint at 0.1 g), not a part.
     copied = []
     for link in root.iter("link"):
         mass = float((link.find("inertial/mass") if link.find("inertial/mass") is not None else ET.Element("m")).get("value", 0))
-        if mass > 0 and link.find("visual/geometry") is not None and link.find("collision") is None:
+        if mass >= _PART_MASS and link.find("visual/geometry") is not None and link.find("collision") is None:
             for v in link.findall("visual"):
                 c = ET.SubElement(link, "collision")
                 c.extend(copy.deepcopy(e) for e in v if e.tag in ("origin", "geometry"))
             copied.append(link.get("name"))
     if copied:
         notes.append(f"collision: links {copied} have none in the file, so their visual shapes are used")
-    dropped, converted = [], 0
+    dropped, converted, split = [], 0, []
     for kind in ("visual", "collision"):
         for link in root.iter("link"):
             for el in list(link.findall(kind)):
@@ -174,9 +215,22 @@ def _resolved(path: Path, raw: bytes, meshes: Path, notes) -> ET.ElementTree:
                         dropped.append(file.name)
                         continue
                     file, converted = obj, converted + 1
+                if kind == "visual" and _too_many_faces(file):
+                    # MuJoCo reads at most _MAX_FACES to a mesh: a visual over that is drawn in parts, one
+                    # visual element each, with the same placement and material.
+                    parts = _split_mesh(file, meshes)
+                    for part in parts:
+                        v = copy.deepcopy(el)
+                        v.find("geometry/mesh").set("filename", str(part))
+                        link.append(v)
+                    link.remove(el)
+                    split.append(f"{file.name} ({len(parts)} parts)")
+                    continue
                 mesh.set("filename", str(file))
     if converted:
         notes.append(f"meshes: {converted} converted to OBJ (MuJoCo does not read their format)")
+    if split:
+        notes.append(f"meshes: visuals over {_MAX_FACES} faces drawn in parts: {split}")
     if dropped:
         notes.append(f"meshes: visual meshes {sorted(set(dropped))} left out (not found, or a format needing trimesh and pycollada)")
     for el in root.findall("mujoco") + root.findall("gazebo") + root.findall("transmission"):
@@ -455,6 +509,13 @@ def _load(tree: ET.ElementTree, cache: Path) -> mujoco.MjSpec:
         raise URDFError(f"MuJoCo could not read the URDF: {str(e).strip()}") from e
     finally:
         tmp.unlink(missing_ok=True)
+    # MuJoCo makes a collision copy of a link's visual when the link has no <collision> element. A link
+    # the file gives only a visual (TurtleBot4's base_footprint, a 1 mm frame) then collides with the floor
+    # where the file says it does not: those copies are removed.
+    bare = {x.get("name") for x in tree.getroot().iter("link") if x.find("collision") is None}
+    for g in list(spec.geoms):
+        if g.parent is not None and g.parent.name in bare and (g.contype or g.conaffinity):
+            spec.delete(g)
     spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
     # Friction as MuJoCo's own gripper models set it up for holding things: an elliptic cone,
     # with friction kept from slipping (impratio), and torsional friction at the contacts.
@@ -485,9 +546,81 @@ def _keep_speed_limits(tree: ET.ElementTree, spec: mujoco.MjSpec) -> None:
             spec.add_numeric(name=f"speed_limit:{joint.get('name')}", data=[v], size=1)
 
 
+def _is_wheeled(m: mujoco.MjModel) -> bool:
+    """A base whose only movable joints are two or more unlimited hinges, each hanging off the root
+    body through fixed joints alone: wheels. (The same idea as :mod:`.detect`'s test on a finished model.)"""
+    movable = [j for j in range(m.njnt) if m.jnt_type[j] in (_HINGE, _SLIDE)]
+    if len(movable) < 2 or any(m.jnt_type[j] != _HINGE or m.jnt_limited[j] for j in movable):
+        return False
+    wheel_bodies = {int(m.jnt_bodyid[j]) for j in movable}
+    for b in wheel_bodies:
+        chain = []
+        c = b
+        while c > 0:
+            chain.append(c)
+            c = int(m.body_parentid[c])
+        if chain[-1] != 1 or any(int(m.jnt_bodyid[j]) in chain[1:] for j in movable):
+            return False  # a wheel on another wheel, or a chain with a movable joint above it: an arm
+    return True
+
+
+def _wheel_servos(spec: mujoco.MjSpec, m: mujoco.MjModel, notes) -> None:
+    """Velocity servos on a wheeled base's wheels, and a free joint on its root body, so it rolls.
+
+    The gains come from each wheel's ``<limit effort velocity>`` (kept by :func:`_keep_speed_limits`),
+    or the defaults above where the file has none. The wheels' setpoints are wheel speeds in rad/s.
+    """
+    root = m.body(1).name  # the top of the base's fixed links: the free joint rolls them all
+    spec.body(root).add_freejoint(name=f"{root}/free")
+    mass = float(m.body_subtreemass[1])
+    guessed, gains = [], []
+    for j in range(m.njnt):
+        if m.jnt_type[j] != _HINGE:
+            continue
+        name = m.joint(j).name
+        k = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_NUMERIC, f"speed_limit:{name}")
+        speed = float(m.numeric_data[m.numeric_adr[k]]) if k >= 0 else 0.0
+        effort = float(m.jnt_actfrcrange[j, 1]) if m.jnt_actfrclimited[j] else 0.0
+        if effort <= 0 or speed <= 0:
+            guessed.append(name)
+        if effort <= 0:
+            radii = [
+                float(m.geom_size[g][0])
+                for g in range(m.ngeom)
+                if m.geom_bodyid[g] == m.jnt_bodyid[j] and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER
+            ]
+            if not radii:
+                raise URDFError(f"{name} has no effort in the file and no cylinder to take a wheel radius from")
+            g = next(g for g in range(m.ngeom) if m.geom_bodyid[g] == m.jnt_bodyid[j] and m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER)
+            effort = float(m.geom_friction[g][0]) * 0.5 * mass * _G * radii[0]  # the wheel's traction at full grip
+        speed = speed if speed > 0 else _WHEEL_SPEED
+        kv = effort / (_WHEEL_ERR * speed)
+        a = spec.add_actuator(name=name, target=name, trntype=mujoco.mjtTrn.mjTRN_JOINT)
+        a.gaintype = mujoco.mjtGain.mjGAIN_FIXED
+        a.gainprm[0] = kv
+        a.biastype = mujoco.mjtBias.mjBIAS_AFFINE
+        a.biasprm[2] = -kv  # force = kv * (setpoint - speed)
+        a.ctrlrange = [-speed, speed]
+        a.ctrllimited = 1
+        a.forcerange = [-effort, effort]
+        a.forcelimited = 1
+        gains.append(f"{name}: kv {kv:.3g} N m s/rad, torque {effort:g} N m, speed {speed:g} rad/s")
+    notes.append("wheels: velocity servos, as the base's wheels are driven (" + "; ".join(gains) + ")")
+    notes.append(f"base: {root!r} has a free joint, so the base rolls on the floor")
+    if guessed:
+        notes.append(
+            f"wheels: {guessed} lack an effort or velocity limit in the file: effort is the wheel's traction at full grip "
+            f"(friction x half the weight x radius), speed {_WHEEL_SPEED:g} rad/s"
+        )
+
+
 def _add_servos(spec: mujoco.MjSpec, notes) -> None:
-    """A position servo on every joint that is not a ``<mimic>`` follower."""
+    """A position servo on every joint that is not a ``<mimic>`` follower (velocity servos on a
+    wheeled base's wheels)."""
     m = spec.compile()
+    if _is_wheeled(m):
+        _wheel_servos(spec, m, notes)
+        return
     followers = {int(m.eq_obj1id[e]) for e in range(m.neq) if m.eq_type[e] == int(mujoco.mjtEq.mjEQ_JOINT)}
     joints = [j for j in range(m.njnt) if m.jnt_type[j] in (_HINGE, _SLIDE) and j not in followers]
     if not joints:
