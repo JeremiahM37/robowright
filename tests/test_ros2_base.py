@@ -103,3 +103,23 @@ def test_codegen_writes_the_base_actions_as_calls_on_the_base():
     code = generate(_Recorded(events))
     assert "robot.base.drive(linear=0.2, angular=0.0, duration=1.0)" in code
     assert "robot.base.go_to(xy=[1.0, 0.5], timeout=60.0)\n" in code  # yaw=None is the default: codegen leaves it out
+
+
+def test_a_step_after_idle_time_waits_for_the_clock_instead_of_bursting(monkeypatch):
+    """An agent thinks between calls while the simulator runs on: the schedule must not stay behind the clock,
+    or the next steps return without the simulator running at all."""
+    from robowright.backends import ros2_backend
+
+    class Clocked(ros2_backend.Ros2Backend):  # no node: a step on sim time only reads the clock
+        commands = property(lambda self: False)
+        control_dt = property(lambda self: 0.02)
+
+    b = object.__new__(Clocked)
+    clock = [10.0]
+    b._now = lambda: clock[0]
+    monkeypatch.setattr(ros2_backend._time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    b._base_cmd, b.cfg = None, {"use_sim_time": True}
+    b._tick = 2.0  # the schedule was last advanced 8 s of simulated time ago
+    for _ in range(100):
+        b.step()
+    assert clock[0] == pytest.approx(12.0, abs=0.05)  # 100 control steps are 2 s of simulated time
