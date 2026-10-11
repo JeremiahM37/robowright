@@ -136,18 +136,21 @@ def generate(
     stop_at_failure: bool = True,
     backend: str | None = None,
     keep_failed: bool = True,
+    factory: str | None = None,
 ) -> str:
     """The trace as a pytest test. ``backend`` runs it on another engine than the one recorded.
 
     ``keep_failed``: a step that raised, but went on from, becomes ``pytest.raises`` (a failing test's trace);
     False leaves it out as a comment, for an agent's exploratory session whose wrong attempts should not be asserted.
+    ``factory`` (attached runs only) is ``module:function`` or ``path/to/file.py:function``: the test imports it as
+    ``make_env``. Without one, an attached test gets a stub to fill in.
     """
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     m = tr.meta
     if "attached" in m:
         if backend is not None:
             raise ValueError("an attached run is generated for the environment it ran in: backend does not apply")
-        return _generate_attached(tr, test_name, stop_at_failure)
+        return _generate_attached(tr, test_name, stop_at_failure, factory)
     name = _test_name(m, test_name)
     imports = {"import robowright as rw", "from robowright import expect"}
     body: list[str] = []
@@ -289,7 +292,15 @@ def _avalue(v) -> str:
     return repr(v)
 
 
-def _attached_event(e: dict) -> str | None:
+def _push_applied(tr: Trace, a: dict) -> bool:
+    """Whether a recorded push moved anything: a push made in a run whose own loop stepped (observed, not stepped
+    through the world) was never applied, and the test must not apply it either."""
+    ts = tr.arrays["t"]
+    window = np.nonzero((ts >= float(a["at"])) & (ts < float(a["at"]) + float(a["duration"])))[0]
+    return bool(np.any(tr.arrays["forces"][window])) if window.size else False
+
+
+def _attached_event(e: dict, tr: Trace | None = None, stepped: bool = False) -> str | None:
     """One recorded call of the test as a line. None for events that change nothing and need no line."""
     t, name, a = e["type"], e["name"], e.get("args") or {}
     if t == "edit" and name == "move_object":
@@ -297,30 +308,89 @@ def _attached_event(e: dict) -> str | None:
     if t == "edit" and name == "set_joint":
         return f"world.set_joint({a['joint']!r}, {_avalue(a['value'])})"
     if t == "fault" and name == "Push":
-        return f"world.faults.push({a['object']!r}, {_avalue(a['force'])}, at={_avalue(a['at'])}, duration={_avalue(a['duration'])})"
+        line = f"world.faults.push({a['object']!r}, {_avalue(a['force'])}, at={_avalue(a['at'])}, duration={_avalue(a['duration'])})"
+        if stepped and tr is not None and not _push_applied(tr, a):
+            return f"# not replayed: the run's own loop stepped this simulation and applied no force for this push: {_call(e)}"
+        return line
     if t in ("fault", "edit"):
         return f"# not replayed, because an attached run has no robot to apply it to: {_call(e)}"
     if t in ("expect", "invariant") and "matcher" in a:
-        kw = ", ".join(f"{k}={_avalue(v)}" for k, v in a.get("kwargs", {}).items() if k not in ("timeout", "hold") and v is not None)
+        # The time the expectation waited is already in the schedule as steps: it checks the state once, where it was
+        # recorded, rather than stepping on for its own timeout.
+        kw = ", ".join(
+            [f"{k}={_avalue(v)}" for k, v in a.get("kwargs", {}).items() if k not in ("timeout", "hold") and v is not None]
+            + ["timeout=0.0"]
+        )
         neg = ".not_" if a.get("negate") else ""
         mode = ".always" if t == "invariant" else ""
         return f"expect(world.body({a['subject']!r})){mode}{neg}.{a['matcher']}({kw})"
     return None
 
 
-def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) -> str:
-    from .replay import schedule
+# The factory's stub, for each engine whose simulation the trace cannot rebuild: what make_env must return.
+_FACTORY_WHAT = {
+    "drake": "a Drake Simulator, or (Simulator, plant) when the diagram holds more than one plant",
+    "genesis": "a built genesis.Scene",
+}
+
+
+def _factory_lines(factory: str) -> tuple[list[str], list[str]]:
+    """The imports and the ``make_env`` definition for a ``--factory`` given on the command line."""
+    target, _, func = factory.rpartition(":")
+    if target.endswith(".py") or "/" in target or "\\" in target:
+        path = str(Path(target).resolve())
+        return (
+            ["import importlib.util"],
+            [
+                "",
+                "",
+                "def _load_factory():",
+                f"    spec = importlib.util.spec_from_file_location('robowright_factory', {path!r})",
+                "    module = importlib.util.module_from_spec(spec)",
+                "    spec.loader.exec_module(module)",
+                f"    return module.{func}",
+                "",
+                "",
+                "make_env = _load_factory()",
+            ],
+        )
+    return ([f"from {target} import {func} as make_env"], [])
+
+
+def _factory_stub(engine: str | None, why: str) -> list[str]:
+    """The stub a test is written with when no factory was given: the one function the user fills in."""
+    if engine is None:
+        return [
+            "",
+            "",
+            "def make_env():",
+            f"    # Stub: the environment of this run cannot be rebuilt from the trace ({why}).",
+            "    # Build it the way the recorded run did (the same constructor, options and model), then delete this line.",
+            "    raise NotImplementedError('make_env() is a stub: fill in the environment the recorded run used')",
+        ]
+    what = _FACTORY_WHAT[engine]
+    return [
+        "",
+        "",
+        "def make_env():",
+        f"    # Stub: the simulation of this run cannot be rebuilt from the trace ({why}).",
+        f"    # Return {what}, built the way the recorded run did, then delete this line.",
+        "    raise NotImplementedError('make_env() is a stub: fill in the simulation the recorded run used')",
+    ]
+
+
+def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, factory: str | None = None) -> str:
+    from .replay import STEPPED, schedule
 
     m = tr.meta
     env_rec = m.get("env") or {}
     if not env_rec.get("actions_recorded", True):
         raise ValueError(f"this run cannot be turned into a test: {env_rec.get('note')}")
-    if (m.get("attached") or {}).get("engine") in ("drake", "genesis"):
-        # replay rebuilds these from a factory; a generated test would need that factory too, which is not written yet
-        raise ValueError(f"a test cannot be generated for a {m['attached']['engine']} run yet: replay it with make_env=...")
+    engine = (m.get("attached") or {}).get("engine")
+    stepped = engine in STEPPED  # a Drake or Genesis simulation: the test steps it through world.step, as the run did
     name = _test_name(m, test_name)
     spec = env_rec.get("spec")
-    rebuilt = bool(spec and spec.get("reproducible"))
+    rebuilt = bool(spec and spec.get("reproducible")) and factory is None and not stepped
     rows = [row for _, kind, row in tr.controls if kind == "action"]
     inline = len(rows) <= INLINE_ACTIONS
     body: list[str] = []
@@ -332,10 +402,13 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) 
         it = items[i]
         if it["kind"] == "control":
             j = i
-            while j + 1 < len(items) and items[j + 1]["kind"] == "control" and items[j + 1]["observe"] == it["observe"]:
+            # A stepped simulation's steps are one kind: each is a physics step the world takes.
+            while j + 1 < len(items) and items[j + 1]["kind"] == "control" and (stepped or items[j + 1]["observe"] == it["observe"]):
                 j += 1
             count = j - i + 1
-            if it["observe"]:
+            if stepped:
+                body.append("world.step()" if count == 1 else f"world.step({count})")
+            elif it["observe"]:
                 body += ["world.observe()"] if count == 1 else [f"for _ in range({count}):", "    world.observe()"]
             elif inline:
                 body += [f"env.step(np.array({rows[row_no + k].tolist()!r}))" for k in range(count)]
@@ -343,19 +416,25 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) 
                 body.append(f"env.step(actions[{row_no}])")
             else:
                 body += [f"for k in range({row_no}, {row_no + count}):", "    env.step(actions[k])"]
-            if not it["observe"]:
+            if not it["observe"] and not stepped:
                 row_no += count
             i = j + 1
             continue
         if it["kind"] == "reset":
-            seed = it["args"].get("seed")
-            if seed is None:
-                body.append("# the recorded reset had no seed: this reproduces its start only if the environment is deterministic")
-            opts = f", options={it['args']['options']!r}" if "options" in it["args"] else ""
-            body.append(f"env.reset(seed={seed!r}{opts})")
+            if stepped:
+                if engine == "genesis":
+                    body.append("env.reset()  # a Genesis scene resets to its built state; it takes no seed")
+                else:
+                    body.append(f"# not replayed: {engine} has no reset that the run's log recorded")
+            else:
+                seed = it["args"].get("seed")
+                if seed is None:
+                    body.append("# the recorded reset had no seed: this reproduces its start only if the environment is deterministic")
+                opts = f", options={it['args']['options']!r}" if "options" in it["args"] else ""
+                body.append(f"env.reset(seed={seed!r}{opts})")
         else:
             e = it["event"]
-            line = _attached_event(e)
+            line = _attached_event(e, tr, stepped)
             if line:
                 body.append(line)
             if e.get("status") == "failed":
@@ -364,26 +443,6 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) 
                     break
         i += 1
 
-    if rebuilt:
-        from .replay import make_spec_call
-
-        env_id, kwargs = make_spec_call(spec)
-        kw = "".join(f", {k}={v!r}" for k, v in kwargs.items())
-        make = f"gymnasium.make({env_id!r}{kw})"
-        stub: list[str] = []
-    else:
-        make = "make_env()"
-        why = (spec or {}).get("reason") or "it was built by hand, not by gymnasium.make"
-        if spec:
-            why = f"it was made with gymnasium.make({spec['id']!r}), but {why}"
-        stub = [
-            "",
-            "",
-            "def make_env():",
-            f"    # Stub: the environment of this run cannot be rebuilt from the trace ({why}).",
-            "    # Build it the way the recorded run did (the same constructor, options and model), then delete this line.",
-            "    raise NotImplementedError('make_env() is a stub: fill in the environment the recorded run used')",
-        ]
     header = [
         '"""Regression test generated by `robowright codegen` from ' + Path(tr.path).name + ".",
         "",
@@ -393,26 +452,80 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool) 
     ]
     if failed_at:
         header.append(f"It failed at t={failed_at['t']:.2f}s in {failed_at['name']}: {failed_at.get('detail', '').splitlines()[0][:120]}")
+    if stepped and not (m.get("attached") or {}).get("inputs_recorded", True):
+        header.append("The trace does not hold what the run's own code set on the simulation between steps; make_env must set the same.")
     header += ['"""']
+
+    imports_extra: list[str] = []
+    stub: list[str] = []
+    if factory is not None:
+        from .replay import load_factory
+
+        load_factory(factory)  # fail here, with the reason, rather than in the generated test
+        imports_extra, stub = _factory_lines(factory)
+        make = "make_env()"
+    elif rebuilt:
+        from .replay import make_spec_call
+
+        env_id, kwargs = make_spec_call(spec)
+        kw = "".join(f", {k}={v!r}" for k, v in kwargs.items())
+        make = f"gymnasium.make({env_id!r}{kw})"
+    else:
+        make = "make_env()"
+        why = (spec or {}).get("reason") or "it was built by hand, not by gymnasium.make"
+        if spec:
+            why = f"it was made with gymnasium.make({spec['id']!r}), but {why}"
+        stub = _factory_stub(engine if stepped else None, "its model and parameters are not in the trace" if stepped else why)
+
     npz = name + "_controls.npz"
-    lines = _imports(rebuilt, rows, inline) + stub + ["", "", f"def {name}():"]
-    if not inline and rows:
-        lines.append(f"    actions = np.load(Path(__file__).with_name({npz!r}))['action']")
-    lines += [
-        f"    env = {make}",
-        f"    world = rw.attach(env, seed={m['seed']}, settings=rw.Settings(trace='retain-on-failure'))",
-        "    try:",
-    ]
+    lines = _imports(rebuilt, rows, inline, imports_extra) + stub
+    if stepped:
+        dt = float(tr.arrays["t"][1] - tr.arrays["t"][0]) if len(tr.arrays["t"]) > 1 else 0.0
+        lines += ["", "", f"DT = {dt!r}  # the recorded control period: one AdvanceTo per physics step"]
+    lines += ["", "", f"def {name}():"]
+    if stepped:
+        if engine == "drake":
+            lines += [
+                "    built = make_env()",
+                "    env, plant = built if isinstance(built, tuple) else (built, None)",
+                "    world = rw.attach(",
+                "        simulator=env,",
+                "        plant=plant,",
+                "        advance=lambda: env.AdvanceTo(env.get_context().get_time() + DT),",
+                f"        seed={m['seed']},",
+                "        settings=rw.Settings(trace='retain-on-failure'),",
+                "    )",
+            ]
+        else:
+            lines += [
+                "    env = make_env()",
+                "    world = rw.attach(",
+                "        env,",
+                "        advance=lambda: env.step(),",
+                f"        seed={m['seed']},",
+                "        settings=rw.Settings(trace='retain-on-failure'),",
+                "    )",
+            ]
+        lines += ["    try:"]
+    else:
+        if not inline and rows:
+            lines.append(f"    actions = np.load(Path(__file__).with_name({npz!r}))['action']")
+        lines += [
+            f"    env = {make}",
+            f"    world = rw.attach(env, seed={m['seed']}, settings=rw.Settings(trace='retain-on-failure'))",
+            "    try:",
+        ]
     lines += ["        " + ln for ln in body] or ["        pass"]
     lines += ["    finally:", "        world.close()"]
     return "\n".join(header + [""] + lines) + "\n"
 
 
-def _imports(rebuilt: bool, rows: list, inline: bool) -> list[str]:
+def _imports(rebuilt: bool, rows: list, inline: bool, extra: list[str] | None = None) -> list[str]:
     groups = [
         ["from pathlib import Path"] if (rows and not inline) else [],
         (["import gymnasium"] if rebuilt else []) + (["import numpy as np"] if rows else []),
         ["import robowright as rw", "from robowright import expect"],
+        sorted(extra or [], key=lambda s: (s.startswith("from "), s)),
     ]
     out: list[str] = []
     for g in groups:

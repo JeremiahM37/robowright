@@ -179,6 +179,8 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         make_env = _make_from_spec(tr)
     recorded = tr.meta["attached"].get("engine")
     built = make_env()
+    if built is None:
+        raise ValueError("make_env returned None: a factory must return the built simulation or environment")
     plant = None
     if isinstance(built, tuple):  # a Drake simulation may come with its plant, when its diagram holds more than one
         built, plant = built
@@ -285,6 +287,45 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         )
     finally:
         world.close(failed=False)
+
+
+def load_factory(spec: str):
+    """The function a ``module:function`` or ``path/to/file.py:function`` names, for use as ``make_env``.
+
+    A module is imported as any import would be; a file is loaded under a private name, so nothing it defines can
+    shadow a real module. Either way the module's own top-level code runs first, as it would for the test.
+    """
+    import importlib
+    import importlib.util
+    import inspect
+
+    target, sep, func = spec.rpartition(":")
+    if not sep or not target or not func:
+        raise ValueError(f"a factory is given as module:function or path/to/file.py:function, not {spec!r}")
+    try:
+        if target.endswith(".py") or "/" in target or "\\" in target:
+            path = Path(target)
+            if not path.is_file():
+                raise ValueError(f"factory file {target!r} does not exist")
+            file_spec = importlib.util.spec_from_file_location(f"robowright_factory_{path.stem}", path)
+            module = importlib.util.module_from_spec(file_spec)
+            file_spec.loader.exec_module(module)
+        else:
+            module = importlib.import_module(target)
+    except ValueError:
+        raise
+    except Exception as e:  # the module's own code may fail however it likes: say which module it was
+        raise ValueError(f"cannot import the factory's module {target!r}: {type(e).__name__}: {e}") from e
+    if not hasattr(module, func):
+        raise ValueError(f"module {target!r} has no {func!r}: the factory is a function that builds the simulation")
+    fn = getattr(module, func)
+    if not callable(fn):
+        raise ValueError(f"{target}:{func} is not callable: the factory is a function that builds the simulation")
+    try:
+        inspect.signature(fn).bind()
+    except TypeError as e:
+        raise ValueError(f"{target}:{func} must take no arguments and return the simulation: {e}") from None
+    return fn
 
 
 def _recorded_forces(tr: Trace, step: int) -> dict:
