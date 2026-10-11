@@ -113,6 +113,9 @@ class AttachedBackend(Backend):
     def velocity(self, kind: str, i: int) -> np.ndarray:
         """World-frame linear then angular velocity."""
         res = np.zeros(6)
+        # mj_objectVelocity reads the body velocities cached by the last physics step, which lag the
+        # joint state by a substep (0.7 mm/s on a 3.8 mm/s push); comVel refreshes them from qpos/qvel.
+        mujoco.mj_comVel(self.model, self.data)
         mujoco.mj_objectVelocity(self.model, self.data, _KINDS[kind], i, res, 0)
         return np.concatenate([res[3:], res[:3]])
 
