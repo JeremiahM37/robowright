@@ -38,6 +38,11 @@ steps:
     actions:
       - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_moveit_gazebo.py tests/test_moveit_panda.py tests/test_kinova_gazebo.py tests/test_xarm_gazebo.py -q -p no:cacheprovider", timeout: 1800 }
 
+  # Franka's packages are not in RoboStack: `scripts/ros2_env.sh franka` builds them into a third environment.
+  - name: Franka's FR3 Gazebo bringup, observed while its own example controllers move the arm
+    actions:
+      - shell: { cmd: "ROBOWRIGHT_ROS2_ENV=/mnt/bulk/ros2-env/jazzy-franka ROBOWRIGHT_FRANKA_WS=/mnt/bulk/rw-ext/franka-ws ROBOWRIGHT_MICROMAMBA=/mnt/bulk/ros2-env/bin/micromamba capped scripts/ros2_env.sh pytest tests/test_franka_gazebo.py -q -p no:cacheprovider", timeout: 1200 }
+
   - name: Nav2's own TurtleBot simulations and example programs, robowright observing a mobile robot (truth from Gazebo, belief from TF)
     actions:
       - shell: { cmd: "ROBOWRIGHT_ROS2_ENV=$HOME/.cache/robowright/ros2-jazzy-nav2 capped scripts/ros2_env.sh pytest tests/test_nav2_examples.py tests/test_nav2_turtlebot.py -q -p no:cacheprovider", timeout: 1500 }
