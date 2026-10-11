@@ -106,7 +106,8 @@ class Session:
 
         ``backend="ros2"`` connects to a robot behind ROS 2 instead (a real arm, Gazebo, Isaac
         Sim's bridge), with ``ros2`` its settings (topics, controllers, TF frames, ``gazebo``: see
-        ``robowright.backends.ros2_backend``). ``robot_options``: for a robot given as a model
+        ``robowright.backends.ros2_backend``); it gets no objects unless ``objects`` names some, and
+        the robot is not moved. ``robot_options``: for a robot given as a model
         file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``)."""
         if self.world is not None:
             self.close()
@@ -117,6 +118,8 @@ class Session:
         scene = default_scene(model.name)
         if objects is not None:
             scene.objects = [self._object(o) for o in objects]
+        elif backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
+            scene.objects = []
         scene.cameras = list(scene.cameras) + _views(scene.cameras[0], scene.objects)
         self._n += 1
         # No camera frames in the trace: screenshots are taken on request, and rendering
@@ -125,7 +128,8 @@ class Session:
         if backend == "ros2" and not (ros2 or {}).get("gazebo"):
             scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name (in Gazebo, any)
         self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings, **(ros2 or {}))
-        self.world.robot.reset_to()
+        if backend != "ros2":  # a robot behind ROS 2 is already where its own stack has it: never move it
+            self.world.robot.reset_to()
         if self.view is not None:
             self.view.watch(self.world)
         return self.snapshot()

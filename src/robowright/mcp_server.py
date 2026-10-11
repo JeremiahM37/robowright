@@ -114,7 +114,8 @@ def build_server(session: Session | None = None):
         {"name", "kind": box|cylinder|sphere|bin, "size": half-extents in m (box/bin xyz,
         cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
         floor, or [x, y, z] (z is a free object's centre, a bin's base),
-        "color": red|green|blue|yellow|..., "mass": kg}.
+        "color": red|green|blue|yellow|..., "mass": kg}. On ros2 there are no objects unless
+        objects names some, and the robot is not moved to a start pose.
         """
         return await run(
             s.launch, robot=robot, backend=backend, seed=seed, objects=objects, fidelity=fidelity, ros2=ros2, robot_options=robot_options

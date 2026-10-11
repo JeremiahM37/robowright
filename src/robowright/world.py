@@ -258,10 +258,13 @@ def launch(
     """Build a world. ``scene`` defaults to the robot's default scene (for arms,
     the tabletop with a cube and a bin; for legged robots, an open floor).
 
-    ``robot`` picks the robot for the default scene, or overrides ``scene.robot``.
+    ``robot`` picks the robot for the default scene, or overrides ``scene.robot``. On ``ros2`` the
+    default scene has no objects: the robot's world is the one its ROS 2 stack runs.
     """
     if scene is None:
         scene = default_scene(robot or "so101")
+        if backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
+            scene.objects = []
     elif robot is not None and robot != scene.robot:
         import dataclasses
 

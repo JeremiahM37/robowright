@@ -229,3 +229,53 @@ def test_mcp_lists_the_code_under_test_tools():
         pytest.skip("this mcp version keeps its tools elsewhere")
     assert {"robot_run_policy", "robot_set_targets", "robot_step", "robot_serve_ros2", "robot_start_process", "robot_watch"} <= names
     assert "code under test is the user's" in INSTRUCTIONS
+
+
+class _FakeRobot:
+    def __init__(self):
+        self.resets = 0
+
+    def reset_to(self):
+        self.resets += 1
+
+
+class _FakeWorld:
+    def __init__(self, spec):
+        self.spec = spec
+        self.robot = _FakeRobot()
+        self.view = None
+        self.trace = None
+        self.world = None
+        self.status = "running"
+
+    def close(self, failed=None):
+        return None
+
+
+def test_ros2_launch_has_no_objects_unless_asked_and_never_moves_the_robot(monkeypatch):
+    """A robot behind ROS 2 is someone else's running system: no default cube and bin, no start pose."""
+    from robowright import session as session_mod
+    from robowright import world as world_mod
+
+    made = []
+
+    def fake_launch(spec, **kw):
+        made.append(_FakeWorld(spec))
+        return made[-1]
+
+    monkeypatch.setattr(session_mod, "launch", fake_launch)
+    monkeypatch.setattr(Session, "snapshot", lambda self: "snap")
+    s = Session()
+    assert s.launch(robot="so101", backend="ros2", ros2={"frame": "base_link"}) == "snap"
+    assert made[-1].spec.objects == [] and made[-1].robot.resets == 0
+    s.launch(robot="so101", backend="mujoco")  # the simulators still start from the robot's start pose
+    assert made[-1].spec.objects and made[-1].robot.resets == 1
+    s.launch(robot="so101", backend="ros2", objects=[{"name": "tag", "kind": "box", "pos": [0.2, 0.0]}])
+    assert [o.name for o in made[-1].spec.objects] == ["tag"]
+
+    seen = {}
+    monkeypatch.setattr(world_mod, "World", lambda spec, **kw: seen.update(spec=spec))
+    world_mod.launch(backend="ros2")
+    assert seen["spec"].objects == []
+    world_mod.launch(backend="mujoco")
+    assert seen["spec"].objects  # the default tabletop, as before
