@@ -354,6 +354,17 @@ and compared at every step, and the result is reported as within a tolerance (1e
 as identical. Measured on one seed each (panda-gym pick-and-place, 300 steps; ManiSkill PickCube,
 120 steps), fresh-process replays differed by zero, and a changed action was caught one step later.
 
+A Drake or Genesis run has no gymnasium id, so it replays from Python with a factory that builds
+the simulation again: `replay(trace, make_env=build)`, where `build()` returns the Drake
+`Simulator` (or `(simulator, plant)`) or the built Genesis scene. Replay steps it on the recorded
+clock and repeats the resets, moves, joint edits and pushes of the run. What your own code set
+between steps (actuation inputs, controllers outside the diagram, joint targets) is not in the
+trace: the factory has to build the same ones, or the replay diverges and reports where. Measured
+on small scenes (a block on a table, 180 to 230 steps): replays differed by zero on both engines,
+a block started 5 cm higher was caught at step 0, and a changed block mass on Drake at step 9. These
+runs are not turned into tests yet, and `robowright replay` on the command line cannot take a
+factory.
+
 ### What a passing test tells you
 
 A pass in simulation says: *this code did this task on this robot model in this engine.* It
@@ -1479,8 +1490,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   those could not.
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis and Webots simulations (one
   environment at a time, on the CPU). Isaac Lab and GPU-batched environments are not attached
-  to yet. MuJoCo, PyBullet and SAPIEN runs are replayed and turned into tests; Drake, Genesis and
-  Webots runs are not.
+  to yet. MuJoCo, PyBullet and SAPIEN runs are replayed and turned into tests; Drake and Genesis
+  runs are replayed from Python only, with a factory, and not turned into tests; Webots runs are
+  neither.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
@@ -1511,10 +1523,8 @@ Each of these builds on the extension points above, not on any one robot or fram
 
 1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
    from simulation as known divergences, as the engines' are.
-2. **More stacks and simulators:** xArm's and Franka's own Gazebo simulations, Isaac Lab and
-   GPU-batched environments for `rw.attach`.
-3. **Replay and codegen for attached simulations**, where the environment can be rebuilt from
-   its seed.
+2. **More stacks and simulators:** Isaac Lab and GPU-batched environments for `rw.attach`.
+3. **Replay for Webots runs, and generated tests for Drake and Genesis runs.**
 
 ## License
 
