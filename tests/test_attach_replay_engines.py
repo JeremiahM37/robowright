@@ -37,6 +37,13 @@ ENGINES = {
         "bodies": {"panda", "table", "object", "target"},
         "modules": ["pybullet", "panda_gym"],
     },
+    "sapien": {
+        "env_id": "PickCube-v1",
+        "kwargs": {"obs_mode": "state", "render_mode": "rgb_array"},
+        "body": "cube",
+        "bodies": {"cube", "table-workspace", "panda_link0", "panda_hand_tcp"},
+        "modules": ["mani_skill", "mani_skill.envs"],
+    },
 }
 ENGINE = pytest.mark.parametrize("engine", list(ENGINES))
 
@@ -49,8 +56,8 @@ def _require(engine: str) -> dict:
     return cfg
 
 
-def _record(out_dir: Path, engine: str, *, changed_step: int | None = None) -> Path:
-    """A run with seeded random actions and the calls a test would make on it; ``changed_step`` moves one action."""
+def _record(out_dir: Path, engine: str) -> Path:
+    """A run with seeded random actions and the calls a test would make on it."""
     cfg = _require(engine)
     env = gym.make(cfg["env_id"], **cfg["kwargs"])
     world = rw.attach(env, seed=SEED, name=f"{engine}-run", settings=rw.Settings(trace="on", trace_dir=str(out_dir)))
@@ -60,10 +67,7 @@ def _record(out_dir: Path, engine: str, *, changed_step: int | None = None) -> P
         rng = np.random.default_rng(SEED)
         actions = rng.uniform(-1, 1, size=(STEPS, env.action_space.shape[-1])).astype(np.float32) * 0.5
         for i in range(STEPS):
-            a = actions[i].copy()
-            if i == changed_step:
-                a[0] += 0.5
-            env.step(a)
+            env.step(actions[i])
         expect(world.body(cfg["body"])).to_be_above(0.0)
     finally:
         path = world.close()
