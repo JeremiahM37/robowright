@@ -243,15 +243,16 @@ def _pick_and_place(w, cube, bin_, start=None):
     print(f"after place: cube {np.round(cube.position, 4)}, bin {np.round(bin_.position, 4)}")
 
 
-# Measured (2026-10-11, the module's own runs and probes): the approach from home is planned round the table
-# (robowright reads it from Gazebo) and reaches the grasp; the lift after the grasp then aborts with
-# GOAL_TOLERANCE_VIOLATED. The elbow lags 0.13 rad during the 0.34 s lift and is back within 0.01 rad only
-# at +0.503 s, one step past the controller's 0.5 s goal_time. The same lift from home aborts with no cube
-# and no contact (its TCP 20 cm above the table), and passes 3 of 3 without the gripper: the gripper's load
-# under the sim's default position gain (gz_ros2_control's 0.1, which UFACTORY's files do not set).
+# Measured (2026-10-11). The pick runs its lift as move_to(linear=True) at speed 0.15 m/s (0.05 m in 0.32 s,
+# joints peak at 0.76 rad/s against a 3.14 rad/s limit). Speed does not decide it: at a quarter of that
+# speed (1.32 s lift) the pick still aborts 3 of 3 with GOAL_TOLERANCE_VIOLATED, the elbow lag then 0.003 rad
+# and the wrist (joint 6) 0.40 to 0.58 rad off. Across the same configuration the per-run errors vary by
+# joint and by tens of centimetres (at the end of each run the cube is 3 cm to 1 m from its start in 12 of 15 runs): not a single
+# lag. The same lift from home aborts with no cube and no contact, and passes 3 of 3 without the gripper.
 PICK_LIFT_CAUSE = (
-    "the lift after the grasp aborts: the elbow lags 0.13 rad and settles within 0.01 rad only 0.50 s after the "
-    "move, the controller's goal_time; the same lift from home aborts with no cube, and passes without the gripper"
+    "the lift after the grasp aborts (GOAL_TOLERANCE_VIOLATED or PATH_TOLERANCE_VIOLATED), at its default and at a "
+    "quarter of its speed: a different joint is off each run (elbow 0.001 to 1.7 rad, wrist up to 0.58 rad); "
+    "the same lift from home aborts with no cube, and passes without the gripper"
 )
 
 
