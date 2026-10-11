@@ -86,16 +86,51 @@ def test_a_differential_base_refuses_sideways_motion():
         w.robot.base.drive(0.0, 0.0, 0.5, lateral=0.1)
 
 
-# The three drive accuracy tests below are EXPECTED TO FAIL, and are marked strict so that a change which
-# makes them pass is noticed. Measured on this model (2 s, settled rest, MuJoCo, the same every run):
-#   forward 0.1 m/s: 57 % of the distance, yaw drifts -0.17 rad, sideways drift -0.014 m
-#   sideways 0.1 m/s: 42 % of the distance, forward drift 0.013 m
-#   pivot 1.0 rad/s: 80 % of the angle
-# The wheels turn at the speeds the geometry gives (within 2 %), and the rollers under the floor do not hold:
-# the contact points slide at about 0.06 m/s where the base should be still, and the rollers' own spin stays
-# near zero. Changing the solver (noslip iterations, integrator), the floor's friction (x3) or the rollers'
-# frictionloss (0) did not bring the travel up (57 %, 58 %, 38 %, 58 %). The cause is not isolated.
-_UNRESOLVED = "the model's rollers slip under the floor: forward 57 %, sideways 42 %, pivot 80 % (see the comment above)"
+def _implied_twist(w):
+    """The base twist that the wheels' measured spins imply under no slip along each wheel's rolling
+    direction (A x z, at the roller contact radius), solved in the base frame from the model's own geometry."""
+    b, m, d = w.backend, w.backend.model, w.backend.data
+    R = d.xmat[b._base].reshape(3, 3)
+    z = np.array([0.0, 0.0, 1.0])
+    rows, rhs = [], []
+    for j, spin in zip(b._dadr, b.qvel()):
+        jid = int(m.dof_jntid[j])
+        A = d.xmat[m.jnt_bodyid[jid]].reshape(3, 3) @ m.jnt_axis[jid]
+        p = R.T @ (d.xanchor[jid] - d.xpos[b._base])
+        p[2] = 0.0
+        dvec = R.T @ np.cross(A, z)
+        dvec[2] = 0.0
+        dvec /= np.linalg.norm(dvec)
+        rows.append([dvec[0], dvec[1], float(dvec @ np.cross(z, p))])
+        rhs.append(spin * b.wheels["radius"])
+    return np.linalg.lstsq(np.array(rows), np.array(rhs), rcond=None)[0]
+
+
+@pytest.mark.parametrize("cmd", [(0.1, 0.0, 0.0), (0.0, 0.1, 0.0), (0.0, 0.0, 1.0)])
+def test_the_wheels_imply_the_commanded_twist(path, cmd):
+    """No assumption about the map: the spins the servos reach, under no slip along each rolling direction,
+    give the commanded base twist (forward, sideways, pivot): 5 % of the linear command, 0.02 rad/s of turn."""
+    w = _settled(path)
+    w.backend.drive_base(cmd[0], cmd[2], cmd[1])
+    w.step(40)
+    implied = _implied_twist(w)
+    # 5 % of the commanded speed for the linear parts, 0.02 rad/s for the turn (the spins carry about 0.007 rad/s of yaw)
+    assert np.all(np.abs(implied - np.array(cmd)) <= np.array([0.005, 0.005, 0.02]))
+    w.backend.stop_base()
+
+
+# The three drive accuracy tests below are EXPECTED TO FAIL (strict xfail). The wheels do what the map says:
+# the test above shows the spins imply the commanded twist. The base does not move with them, because the
+# rollers slip against the floor. Measured per wheel (wheel 1, 2, 3; slip along each rolling direction, m/s):
+#   forward 0.1 m/s: spins imply vx 0.099; base moves vx 0.060 and yaws -0.10 rad/s; slip -0.025, -0.023, +0.034
+#   sideways 0.1 m/s: spins imply vy 0.099; base moves vy 0.043 and yaws -0.11 rad/s; slip -0.053, +0.044, -0.006
+#   pivot 1.0 rad/s: spins imply wz 0.985; base yaws 0.80 rad/s; slip -0.008, -0.010, -0.008
+# A slip of this size in the published model is what limits it; the cause within MuJoCo's contacts is not isolated
+# (noslip iterations, integrator, floor friction x3 and roller frictionloss 0 did not close it).
+_UNRESOLVED = (
+    "the rollers slip against the floor: forward 60 %, sideways 43 %, pivot 80 % of the commanded motion, "
+    "with per-wheel slip of 0.02-0.05 m/s (see the comment above)"
+)
 
 
 @pytest.mark.xfail(strict=True, reason=_UNRESOLVED)
