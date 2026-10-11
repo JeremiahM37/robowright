@@ -11,6 +11,12 @@ steps:
     actions:
       - shell: ".venv/bin/ruff check . && .venv/bin/ruff format --check ."
 
+  # What GitHub's unit job has installed: no Drake, Genesis, gymnasium or ROS. A test that imports an
+  # optional engine before its skip guard breaks collection there and nowhere else.
+  - name: every test file is collected with only the base and PyBullet extras installed (as in CI)
+    actions:
+      - shell: { cmd: "V=$HOME/.cache/robowright/ci-venv; [ -x $V/bin/python ] || uv venv -q --python 3.12 $V; uv pip install -q --python $V/bin/python -e '.[dev,pybullet]' && $V/bin/python -m pytest tests examples --collect-only -q -p no:cacheprovider | tail -1", timeout: 600 }
+
   # The robot contract and the examples run for every robot (SO-101 included) in the next step.
   - name: tests on both physics engines (SO-101)
     actions:
