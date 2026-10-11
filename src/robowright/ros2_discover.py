@@ -254,9 +254,11 @@ def suggest(g: Graph, arm_joints: list[str] | None = None) -> dict:
     else:
         idle = [c.name for c in g.controllers if not c.active and c.interface and c.interface[0] == "arm"]
         why = f"{', '.join(idle)} not active" if idle else "none robowright can drive is loaded"
-        if g.controllers:
-            g.notes.append(f"no active arm controller ({why}): robowright can observe (command = false)")
-        out["command"] = False
+        # A mobile base has no arm controller by design: it is driven through its command topic or navigation action
+        if not (g.cmd_vel or g.navigate):
+            if g.controllers:
+                g.notes.append(f"no active arm controller ({why}): robowright can observe (command = false)")
+            out["command"] = False
     base = {}
     if g.cmd_vel:
         base["cmd_vel"] = g.cmd_vel[0]

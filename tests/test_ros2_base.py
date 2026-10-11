@@ -50,6 +50,7 @@ def test_suggest_and_the_report_name_what_was_found():
     g.navigate = "/navigate_to_pose"
     out = ros2_discover.suggest(g)
     assert out["base"] == {"cmd_vel": "/cmd_vel", "navigate": "/navigate_to_pose"}
+    assert "command" not in out  # a base that can be driven is not observe-only, though it has no arm controller
     text = ros2_discover.report(g, out)
     assert "base command: /cmd_vel (geometry_msgs/msg/TwistStamped, 1 subscriber)" in text
     assert "navigation: /navigate_to_pose (nav2_msgs/action/NavigateToPose)" in text
