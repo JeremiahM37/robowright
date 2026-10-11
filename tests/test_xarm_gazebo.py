@@ -275,6 +275,12 @@ def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
         _pick_and_place(w, w.scene["cube"], w.scene["bin"])
     except rw.errors.ActionError as e:
         pytest.xfail(f"{PICK_LIFT_CAUSE}. {str(e).splitlines()[0][:160]}")
+    except rw.errors.RobowrightError as e:
+        if "simulation clock" not in str(e):
+            raise
+        # Seen once in a full suite run: after the kicked cube, Gazebo stopped publishing /clock (its process
+        # still alive) and the pick waited on it for half an hour. robowright now gives up on a stopped clock.
+        pytest.xfail(f"{PICK_LIFT_CAUSE}; then the simulation stopped. {str(e)[:160]}")
     finally:
         w.close(failed=False)
 
@@ -301,5 +307,11 @@ def test_robowright_picks_a_cube_after_lifting_clear_of_the_table(xarm):
         _pick_and_place(w, w.scene["cube"], w.scene["bin"], start=lift[: r.n_arm])
     except rw.errors.ActionError as e:
         pytest.xfail(f"{PICK_LIFT_CAUSE}. {str(e).splitlines()[0][:160]}")
+    except rw.errors.RobowrightError as e:
+        if "simulation clock" not in str(e):
+            raise
+        # Seen once in a full suite run: after the kicked cube, Gazebo stopped publishing /clock (its process
+        # still alive) and the pick waited on it for half an hour. robowright now gives up on a stopped clock.
+        pytest.xfail(f"{PICK_LIFT_CAUSE}; then the simulation stopped. {str(e)[:160]}")
     finally:
         w.close(failed=False)

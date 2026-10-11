@@ -118,8 +118,29 @@ def test_a_step_after_idle_time_waits_for_the_clock_instead_of_bursting(monkeypa
     clock = [10.0]
     b._now = lambda: clock[0]
     monkeypatch.setattr(ros2_backend._time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
-    b._base_cmd, b.cfg = None, {"use_sim_time": True}
+    b._base_cmd, b.cfg = None, {"use_sim_time": True, "clock_timeout": 30.0}
     b._tick = 2.0  # the schedule was last advanced 8 s of simulated time ago
     for _ in range(100):
         b.step()
     assert clock[0] == pytest.approx(12.0, abs=0.05)  # 100 control steps are 2 s of simulated time
+
+
+def test_a_simulation_clock_that_stops_is_an_error_not_a_hang(monkeypatch):
+    """A simulator that crashes or hangs publishes no more /clock: a step waiting for the next tick would wait
+    for ever. After ``clock_timeout`` seconds of wall time with the clock standing still, it says so."""
+    from robowright.backends import ros2_backend
+    from robowright.errors import RobowrightError
+
+    class Clocked(ros2_backend.Ros2Backend):
+        commands = property(lambda self: False)
+        control_dt = property(lambda self: 0.02)
+
+    b = object.__new__(Clocked)
+    wall = [0.0]
+    b._now = lambda: 5.0  # the clock never moves
+    monkeypatch.setattr(ros2_backend._time, "sleep", lambda s: wall.__setitem__(0, wall[0] + s))
+    monkeypatch.setattr(ros2_backend._time, "monotonic", lambda: wall[0])
+    b._base_cmd, b.cfg, b._tick, b._t0 = None, {"use_sim_time": True, "clock_timeout": 2.0}, 5.0, 1.0
+    with pytest.raises(RobowrightError, match=r"clock \(/clock\) has not moved for 2 s.*t=4.000 s"):
+        b.step()
+    assert wall[0] == pytest.approx(2.0, abs=0.01)

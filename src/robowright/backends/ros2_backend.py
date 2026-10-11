@@ -66,6 +66,7 @@ _DEFAULTS = {
     "objects": {},
     "cameras": {},
     "use_sim_time": False,
+    "clock_timeout": 30.0,  # wall seconds a simulation clock may stand still before a step gives up
     "timeout": 10.0,  # seconds to wait for the robot's first joint states, and for reset_to
     "reset_speed": 0.5,  # rad/s (or m/s) that reset_to drives at
     # False: observe only. robowright never publishes a command or drives to a reset pose; your own
@@ -586,7 +587,19 @@ class Ros2Backend(Backend):
                 self._tick = self._now()
         self._tick += self.control_dt
         if self.cfg["use_sim_time"]:
-            while self._now() < self._tick - 1e-9:
+            seen, since = self._now(), _time.monotonic()
+            while (now := self._now()) < self._tick - 1e-9:
+                if now != seen:
+                    seen, since = now, _time.monotonic()
+                elif _time.monotonic() - since > self.cfg["clock_timeout"]:
+                    # A simulator that crashed, hung or was paused publishes no more /clock: waiting for the
+                    # next step would never end (an xArm pick hung a suite for half an hour here).
+                    from ..errors import RobowrightError
+
+                    raise RobowrightError(
+                        f"the simulation clock (/clock) has not moved for {self.cfg['clock_timeout']:g} s of wall time, "
+                        f"at t={now - self._t0:.3f} s: the simulator has stopped, crashed or is paused"
+                    )
                 _time.sleep(min(self.control_dt / 10, 0.001))
             return
         late = self._now() - self._tick

@@ -152,6 +152,8 @@ def _run_to_result(world, ex, run: Run, timeout: float) -> None:
 def _report(run: Run) -> None:
     """What the run measured, printed (shown in the test report with ``-rA``)."""
     ok = "Goal succeeded!" in run.ex.log
+    if not len(run.settled_errors):  # a result before the first sample: what the example said is what there is to show
+        raise AssertionError(f"{run.ex.name} gave its result before anything was sampled; its log ends:\n{run.ex.log[-2500:]}")
     print(
         f"\n{run.ex.name}: result {'succeeded' if ok else 'not succeeded'}; wall {run.wall:.1f} s; "
         f"final truth (map) {np.round(run.final[:2], 3).tolist()}, distance to goal {run.distance_to_goal:.3f} m; "
