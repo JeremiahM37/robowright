@@ -279,7 +279,18 @@ def _ros_robot(robot: str | None, options: dict, load: dict | None = None, as_na
 
     # As the stack has it: its own gripper or none (robowright attaches nothing to a robot it does
     # not build), in its own base frame unless told where it stands.
-    model = robots.load(path, as_name, **{"gripper": "own", "base_pos": (0.0, 0.0, 0.0), **(load or {})})
+    from .robots.detect import DetectionError
+
+    given = {"gripper": "own", "base_pos": (0.0, 0.0, 0.0), **(load or {})}
+    try:
+        model = robots.load(path, as_name, **given)
+    except DetectionError as e:
+        if "home" not in str(e) or "home" in given:
+            raise
+        # robowright's usual home (20 cm out, over a tabletop it builds) is not somewhere every arm
+        # reaches from its own base (the Panda does not). Nothing is built here, so home is only
+        # where arm.home() goes: a point in front of the base, which that call checks when made.
+        model = robots.load(path, as_name, **given, home=(0.3, 0.0, 0.4))
     # Where it came from, for a trace: a test generated from it reads the description again
     model.extra["stack"] = {k: options[k] for k in ("namespace", "description") if options.get(k)}
     return model.name
