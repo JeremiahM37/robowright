@@ -167,6 +167,96 @@ Gazebo's own, the scene's objects are spawned into the world, `world.move_object
 scene randomization move them there, it pauses Gazebo and steps it an exact number of physics
 iterations, and screenshots are Gazebo's rendering from cameras it adds to the world.
 
+### Meet a robot that is already running
+
+A robot behind ROS 2 that you did not set up is like a website you did not write: robowright
+asks it what it is. `robowright ros2 inspect` reads the stack's own description, its joints and
+its controller manager, and prints the settings to connect with:
+
+```console
+$ robowright ros2 inspect
+robot description: /robot_description (ur)
+joint states: /joint_states (6 joints, 498 Hz): elbow_joint, shoulder_lift_joint, ...
+controllers (/controller_manager):
+  scaled_joint_trajectory_controller  ur_controllers/ScaledJointTrajectoryController  active  6 joints
+  joint_state_broadcaster             joint_state_broadcaster/JointStateBroadcaster   active
+clock: simulation time (/clock is published)
+Gazebo: world empty
+
+[ros2]
+use_sim_time = true
+arm = { controller = "scaled_joint_trajectory_controller", interface = "trajectory" }
+gripper = { interface = "none" }
+gazebo = true
+```
+
+A launch that names no robot and no controller finds both the same way: the robot is the
+description its stack publishes, loaded as it is (its own gripper, or none), and the arm and
+gripper controllers are the active ones that claim its joints.
+
+```python
+with rw.launch(backend="ros2", use_sim_time=True, gazebo=True) as world:   # UR's Gazebo simulation, nothing named
+    world.robot.arm.move_to((0.4, 0.1, 0.3))      # one goal to UR's own trajectory controller
+    expect(world.robot.tcp).to_be_near((0.4, 0.1, 0.3), tol=0.001)
+```
+
+A move robowright plans goes to a trajectory controller the way MoveIt's do: the whole
+trajectory as one `FollowJointTrajectory` goal, inside the joint speed limits of the robot's
+description, which the controller interpolates and holds to its own tolerances. A move it
+refuses or gives up raises `ActionError` with the controller's reason
+(`PATH_TOLERANCE_VIOLATED: ...`). A controller that is not there, or a command topic nothing
+subscribes to, is an error when the world is launched, not a robot that silently does not move.
+
+Stacks this is tested around, each as its makers ship it, on ROS 2 Jazzy:
+
+| Stack | What runs | Code under test | robowright |
+|---|---|---|---|
+| Universal Robots UR5e ([`test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)) | `ur_simulation_gz` (Gazebo, `gz_ros2_control`), `ur_moveit_config` | pymoveit2's examples, UR's `example_move.py` | observes; drives Gazebo; drives the arm through UR's controller |
+| MoveIt's Panda demo ([`test_moveit_panda.py`](tests/test_moveit_panda.py)) | `moveit_resources_panda_moveit_config` (mock hardware) | pymoveit2's pose, joint and gripper examples | observes; drives arm and hand through the demo's controllers; finds them by itself |
+| Kinova Gen3 + Robotiq 2F-85 ([`test_kinova_gazebo.py`](tests/test_kinova_gazebo.py)) | `ros2_kortex`'s `kortex_sim_control` (Gazebo) | robowright's own pick and place, through Kinova's controllers | drives arm and gripper; picks a cube and sets it in a bin, judged by Gazebo's poses |
+
+### Test in a simulation someone else built
+
+Most robot-learning code runs in an environment its authors built: a Gymnasium, dm_control or
+robosuite environment that owns its MuJoCo model, its scene, its action mapping and its step
+loop. `rw.attach(env)` attaches to that simulation as it is. Nothing in it is changed, and time
+passes when their code steps it:
+
+```python
+env = gym.make("gym_aloha/AlohaTransferCube-v0", obs_type="pixels_agent_pos")
+world = rw.attach(env)                              # their MjModel and MjData, found in the environment
+obs, _ = env.reset(seed=1)
+cube = world.body("box")                            # any body, site, geom or joint, by its name in their model
+expect(cube).always.to_be_above(-0.01)              # checked on every env.step
+for _ in range(400):
+    obs, *_ = env.step(policy(obs))                 # their loop, their policy
+expect(cube).to_be_touching("vx300s_left/10_left_gripper_finger")
+expect(cube).not_.to_be_touching("table")           # the outcome, from the simulation's own contacts
+world.close()                                       # a trace of the episode, redrawn from their model
+```
+
+Give it `advance=lambda: env.step(policy(obs))` and `expect(...)` waits by stepping their
+environment, as it waits everywhere else. `world.move_object` and `world.push` disturb their
+simulation, recorded in the trace.
+
+[`examples/published_policy`](examples/published_policy/test_act_aloha.py) runs LeRobot's
+published ACT checkpoint (`lerobot/act_aloha_sim_transfer_cube_human`, from camera images) in
+gym-aloha with LeRobot's own pre- and post-processing. robowright's reading of the contacts
+agrees with the environment's `is_success` on every seed: four of five seeds hand the cube over,
+and on seed 0 the right gripper lifts the cube to 29 cm and drops it before the left one has
+touched it, the same way in every run (registered as a strict expected failure, with that
+measurement). [`examples/environments`](examples/environments) attaches the same way to:
+
+| Suite | Code under test | Result |
+|---|---|---|
+| Meta-World 3.1 | its own scripted expert policies (pick-place, drawer, button, door) | robowright's reading of the object and the environment's success flag agree on 5 of 5 seeds for three tasks; door-open's flag is false at the end with the door open 1.85 rad (registered) |
+| Gymnasium-Robotics 1.4 | none ships: a reach written in the test | FetchReach agrees with `is_success` 5 of 5; Fetch pick-and-place, Franka Kitchen and the Shadow hand attach |
+| dm_control 1.0 | none ships: a reach written in the test | reacher agrees with the task's reward 5 of 5; walker and a manipulation task attach |
+| robosuite 1.5 | none ships | Lift attaches; robosuite builds a new model on every reset, which robowright follows |
+
+These suites pin different MuJoCo versions, so each runs in its own environment; the examples
+skip where a suite is not installed.
+
 ### What a passing test tells you
 
 A pass in simulation says: *this code did this task on this robot model in this engine.* It
@@ -467,9 +557,30 @@ def test_go2_recovers_from_a_shove(world, robot):
 `robot.base` is a live handle like any object: position, orientation, velocity, contacts.
 `robot.stand()`, `robot.crouch(depth)` and `robot.move_joints(q)` wait until the robot
 settles. Policies get what an IMU and joint encoders give a real robot (`base_quat`,
-`base_ang_vel`, `qpos`, `qvel`). There is no walking controller built in: walking is a
-policy's job, run with `robot.run_policy(...)`. Unitree H1 and Booster T1 are not on the
-list because neither can stand on joint servos alone, without a balance controller.
+`base_ang_vel`, `qpos`, `qvel`, and in the base's own frame `base_ang_vel_body` and
+`projected_gravity`). There is no walking controller built in: walking is a policy's job, run
+with `robot.run_policy(...)`. Unitree H1 and Booster T1 are not on the list because neither
+can stand on joint servos alone, without a balance controller.
+
+**Published walking policies.** [`examples/locomotion`](examples/locomotion/test_g1_walks.py)
+runs Unitree's own checkpoints from [unitree_rl_gym](https://github.com/unitreerobotics/unitree_rl_gym)
+on Unitree's own models with Unitree's own gains (`robots.load(their_mjcf, pd_gains=...)` runs
+the maker's PD loop at every physics step, as their deploy script does), fetched at a pinned
+commit:
+
+```python
+def test_walks_one_metre_upright(published):
+    pub, name = published                                   # unitree_rl_gym's g1.yaml, h1.yaml or h1_2.yaml
+    robot = rw.launch(robot=name, backend="mujoco").robot
+    expect(robot.base).always.to_be_upright(tol_deg=30)     # never falls
+    robot.run_policy(ug.LocomotionPolicy(pub, cmd=(0.5, 0.0, 0.0)), timeout=10.0)
+    assert robot.base.position[0] >= 1.0
+```
+
+Commanded 0.5 m/s for 10 s, the G1 walks 4.58 m, the H1 4.37 m and the H1-2 4.51 m, never more
+than 4.1 degrees from upright, the same to the last digit on every run; shoved sideways with
+0.3 of its weight mid-stride, each recovers. The joints follow their deploy script's own loop
+to 1e-7 rad.
 
 ## Install
 
@@ -809,6 +920,16 @@ moving Gazebo's models and `robot_screenshot` returning Gazebo's own rendering.
 $ claude mcp add robowright -- robowright mcp
 ```
 
+An agent that meets a robot it knows nothing about starts with `ros2_inspect` (what
+`robowright ros2 inspect` prints, and the settings for `robot_launch`). Told only "a robot arm
+is running in a simulator under ROS 2", a small model (Claude Haiku) found UR's arm in Gazebo
+that way, connected, put a cube in the world, moved the tool above it to 0.05 mm, checked it
+and saved a test that passes by itself, in nine turns. Its first two attempts failed, each on
+a fault of robowright's that is now fixed and tested
+([`test_an_agent_meets_the_stack_knowing_nothing_and_its_test_runs`](tests/test_moveit_gazebo.py)).
+A test saved from a session leaves out the steps that failed (as comments) unless asked to keep
+them.
+
 The agent launches a world (any robot, any installed engine, its own objects) and reads it
 as text:
 
@@ -907,7 +1028,8 @@ place, the pads folded under the squeeze. Each backend has to pass the same cont
 # robowright.toml
 [ros2]
 arm = { controller = "forward_position_controller", interface = "position" }   # or a joint_trajectory_controller
-gripper = { controller = "gripper_controller", interface = "action" }          # GripperCommand, or with the arm
+gripper = { controller = "gripper_controller", interface = "action" }          # GripperCommand (parallel = true: ParallelGripperCommand)
+# leave arm and gripper out and they are read from the robot's controller manager (robowright ros2 inspect shows them)
 joints = { shoulder_pan = "joint1" }      # where the driver's names differ
 objects = { cube = "cube", bin = "bin" }  # TF frames: what object assertions read
 cameras = { front = "/camera/image_raw" } # image topics: what policies see
@@ -916,9 +1038,10 @@ command = true                            # false: observe only, for a robot you
 
 On a real arm, start with `command = false`: robowright then reads joint states and TF and never
 sends a command, and any action that would move the robot fails at once. [docs/hardware.md](docs/hardware.md)
-is the order to bring an arm up in. Give robowright the robot's own description, as the driver
-has it: `robots.load("my_arm.urdf.xacro", gripper=False)` for an arm with no gripper (otherwise a
-gripperless arm gets a Robotiq 2F-85, as robowright's own simulations do).
+is the order to bring an arm up in. Name no robot and robowright reads the description the
+driver publishes, as it is. Given a model file instead, say `robots.load("my_arm.urdf.xacro",
+gripper=False)` for an arm with no gripper (in robowright's own simulations a gripperless arm
+gets a Robotiq 2F-85; behind ROS 2 that would be a gripper the robot does not have).
 
 With `gazebo = true` (or `{ world = "name" }`) robowright also talks to Gazebo itself, over its
 transport rather than ROS 2 ([`robowright.gazebo`](src/robowright/gazebo.py), Gazebo Harmonic):
@@ -1237,9 +1360,12 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 
 - **No physical robot yet:** the ROS 2 backend has run against `ros2_control`'s own controllers
   on mock hardware, against robowright's simulation served over ROS 2, against an SO-101 in
-  Gazebo, and against Universal Robots' own Gazebo simulation with MoveIt, on Jazzy only. Nothing
+  Gazebo, and against Universal Robots', MoveIt's and Kinova's own stacks, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
+- **Attached simulations are MuJoCo's:** `rw.attach` reads a MuJoCo model and data. Isaac Lab,
+  ManiSkill (SAPIEN) and PyBullet environments are not attached to yet, and a trace of an
+  attached run is redrawn but not replayed or turned into a test.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
