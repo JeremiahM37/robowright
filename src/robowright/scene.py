@@ -78,7 +78,7 @@ class CameraSpec:
 
 @dataclass
 class SceneSpec:
-    robot: str = "so101"  # a name from robowright.robots
+    robot: str | None = "so101"  # a name from robowright.robots; None on ros2: the robot the stack runs
     objects: list[ObjectSpec] = field(default_factory=list)
     cameras: list[CameraSpec] = field(default_factory=lambda: [CameraSpec("front")])
     control_hz: float = 50.0

@@ -122,6 +122,21 @@ class Arm:
         goal = np.asarray(q, float)
         start = r._target[: r.n_arm].copy()
         speed = speed or self.world.settings.max_joint_speed
+        if getattr(self.world.backend, "fixtures", ([], []))[0]:
+            # The world has fixed geometry the planner knows (a ROS 2 robot's table, from Gazebo): a
+            # joint-space line through it is not sent. The planner's path goes round it, or the move says why it cannot.
+            planner = r.planner
+            planner.sync(r.gripper.holding() if self.world.has_contacts and r.model.has_gripper else None)
+            hits = planner.line_hits(start, goal)
+            if hits:
+                try:
+                    path = planner.plan(start, goal)
+                except UnreachableError as e:
+                    raise UnreachableError(
+                        f"the straight joint move passes through {', '.join(sorted(hits))}, and no path round it was found ({e}). "
+                        "Name a higher waypoint, or use plan=True where the move allows it"
+                    ) from e
+                return self.follow.__wrapped__(self, path, timeout=timeout)
         # Long arms sweep the tool fast for small joint motions; cap tool speed too
         # or a held object is flung out of the gripper. Measure the path the tool
         # actually sweeps: a joint-space move that changes arm configuration arcs far
@@ -735,7 +750,19 @@ class Robot:
     def _top_grasp(self, o, width: float) -> tuple[float, float]:
         """The opening to take ``o`` from above with, and the TCP height to close at (see :func:`top_grasp`)."""
         p = o.position
-        return top_grasp(self.model.derived, p[2], o.top, _bottom(o), width)
+        return top_grasp(self.model.derived, p[2], o.top, _bottom(o), width, floor=self._support_height(o))
+
+    def _support_height(self, o) -> float:
+        """Height of the surface the object rests on, where the world has fixed geometry (a ROS 2 robot's
+        table, from Gazebo): the highest top under its footprint at or below its underside. The floor otherwise."""
+        p, bottom = o.position, _bottom(o)
+        tops = [0.0]
+        for f in getattr(self.world.backend, "fixtures", ([], []))[0]:
+            if f.kind == "box" and abs(p[0] - f.pos[0]) <= f.size[0] and abs(p[1] - f.pos[1]) <= f.size[1]:
+                top = f.pos[2] + f.size[2]
+                if top <= bottom + 1e-3:
+                    tops.append(top)
+        return max(tops)
 
     def _pick_from_side(self, o, approach, lift, timeout):
         if isinstance(o, ObjectHandle):
@@ -1313,17 +1340,19 @@ def home_q(name: str) -> np.ndarray:
     return q
 
 
-def top_grasp(der, centre: float, top: float, bottom: float, width: float) -> tuple[float, float]:
+def top_grasp(der, centre: float, top: float, bottom: float, width: float, floor: float = 0.0) -> tuple[float, float]:
     """The opening to take an object from above with, and the TCP height to close at: the
     object's centre is at height ``centre``, its top and underside at ``top`` and ``bottom``,
     and it is ``width`` across where the jaws close (``der``: the robot's derived geometry).
+    ``floor`` is the height of the surface the fingertips must stay above (0 on robowright's own
+    floor; the table's top in a Gazebo world).
 
     Fully open, at the lowest height that keeps the fingertips off the table - unless jaws that
     swing reach so much further down part-open than shut that, held off the table there, they
     would close above the object (Stretch's fingertips stand 5 cm past where they meet when open,
     1 cm when shut). Then they open only as wide as the object needs.
     """
-    lowest = der.finger_reach + TABLE_CLEARANCE
+    lowest = floor + der.finger_reach + TABLE_CLEARANCE
     if not der.reaches:
         return 1.0, max(centre, lowest)
     f = np.linspace(0.0, 1.0, 101)
@@ -1335,7 +1364,7 @@ def top_grasp(der, centre: float, top: float, bottom: float, width: float) -> tu
     deep = top - min(0.01, (top - bottom) / 2)
 
     def height(i):  # the jaws sweep every opening between this and the object's width
-        return max(centre, float(reach[min(meets, i) : max(meets, i) + 1].max()) + TABLE_CLEARANCE)
+        return max(centre, float(reach[min(meets, i) : max(meets, i) + 1].max()) + floor + TABLE_CLEARANCE)
 
     # Fully open, the tips keep the clearance where they start and finish; passing through a lower
     # opening on the way, they need only stay off the table (the Gen3 lite's dip 3 mm, above it).
@@ -1344,7 +1373,7 @@ def top_grasp(der, centre: float, top: float, bottom: float, width: float) -> tu
     # the TCP) covered only the cube's top half, and the cube was squeezed out from under them.
     # Never higher than shut, though: the Gen3 lite's tips reach 3 mm further down at the cube
     # than shut, and raised by that, it held the cube too high to survive a shove.
-    lowest = min(der.finger_reach, max(reach[-1], reach[meets])) + TABLE_CLEARANCE
+    lowest = floor + min(der.finger_reach, max(reach[-1], reach[meets])) + TABLE_CLEARANCE
     full = max(centre, lowest, float(reach[meets:].max()))
     if full - reach[meets] <= deep:
         return _no_wider(f, gap, meets, width), full

@@ -38,7 +38,22 @@ class Planner:
         self.world = world
         rm = world.robot.model
         spec = build_spec(world.spec)
+        # The world's fixed geometry, where the backend knows it (a ROS 2 robot's table and floor, from
+        # Gazebo): static geoms, named by index, so a path can be checked against them by name.
+        self.fixtures = list(getattr(world.backend, "fixtures", ([], []))[0])
+        for i, o in enumerate(self.fixtures):
+            kind = {
+                "box": mujoco.mjtGeom.mjGEOM_BOX,
+                "cylinder": mujoco.mjtGeom.mjGEOM_CYLINDER,
+                "sphere": mujoco.mjtGeom.mjGEOM_SPHERE,
+                "plane": mujoco.mjtGeom.mjGEOM_PLANE,
+            }[o.kind]
+            size = list(o.size) + [0.0] * (3 - len(o.size))
+            if o.kind == "plane":
+                size = [o.size[0], o.size[1], 0.1]  # MuJoCo's plane: half-lengths and a grid spacing
+            spec.worldbody.add_geom(name=f"fixture{i}", type=kind, size=size, pos=list(o.pos), quat=list(o.quat), contype=1, conaffinity=1)
         self.m = spec.compile()
+        self.fixture_names = {self.m.geom(f"fixture{i}").id: o.name for i, o in enumerate(self.fixtures)}
         self.m.geom_margin[:] = CLEARANCE
         self.d = mujoco.MjData(self.m)
         m = self.m
@@ -126,6 +141,21 @@ class Planner:
                 continue
             out.add((g1, g2))
         return out
+
+    def line_hits(self, a, b) -> set[str]:
+        """The fixtures (by name) a straight joint-space move from ``a`` to ``b`` touches, as it steps along:
+        what touches at both ends is part of the task (see :meth:`plan`) and is not counted."""
+        if not self.fixture_names:
+            return set()
+        self.allowed = set()
+        ends = self.contacts(a) | self.contacts(b)
+        n = max(1, int(np.ceil(np.max(np.abs(b - a)) / _STEP)))
+        hits: set[str] = set()
+        for i in range(1, n + 1):
+            for _, g in self.contacts(a + (b - a) * i / n) - ends:
+                if g in self.fixture_names:
+                    hits.add(self.fixture_names[g])
+        return hits
 
     def clear(self, q) -> bool:
         return not (self.contacts(q) - self.allowed - self.base_contacts)
