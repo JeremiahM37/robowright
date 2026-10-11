@@ -17,7 +17,7 @@
 set -euo pipefail
 ENV="${ROBOWRIGHT_ROS2_ENV:-$HOME/.cache/robowright/ros2-jazzy}"
 TOOLS="$(dirname "$ENV")/micromamba"
-MM="$TOOLS/bin/micromamba"
+MM="${ROBOWRIGHT_MICROMAMBA:-$TOOLS/bin/micromamba}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ "${1:-}" = "create" ]; then

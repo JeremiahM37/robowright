@@ -2,6 +2,7 @@ import pytest
 
 import robowright as rw
 from robowright import Point, condition, expect
+from robowright.locators import Subject
 
 
 def test_already_true_costs_no_time(quiet_world):
@@ -89,3 +90,56 @@ def test_joint_matcher(quiet_world):
     w = quiet_world()
     q = w.robot.joints["shoulder_pan"]
     expect(w.robot).to_have_joint("shoulder_pan", q, tol=0.01)
+
+
+class _Topic(Subject):
+    """A ROS topic's handle as far as ``to_publish`` reads it: a name, a count and a rate."""
+
+    def __init__(self, rate, count=10, name="/scan"):
+        self.name, self._rate, self.count = name, rate, count
+
+    @property
+    def hz(self):
+        return self._rate() if callable(self._rate) else self._rate
+
+
+def test_a_topic_at_its_rate_passes_at_once(quiet_world):
+    w = quiet_world()
+    t0 = w.time
+    expect(_Topic(4.0)).to_publish(hz=4.0, timeout=1)
+    assert w.time == t0
+
+
+def test_a_topic_off_its_rate_fails_with_the_rate_it_measured(quiet_world):
+    w = quiet_world()
+    t0 = w.time
+    with pytest.raises(rw.ExpectationError) as e:
+        expect(_Topic(1.0)).to_publish(hz=4.0, timeout=0.5)
+    assert w.time - t0 == pytest.approx(0.5, abs=w.dt)
+    assert "/scan measured 1.00 Hz (10 messages so far), want 4.0 Hz +/- 25%" in str(e.value)
+
+
+def test_a_topic_within_tolerance_passes(quiet_world):
+    quiet_world()
+    expect(_Topic(3.2)).to_publish(hz=4.0, tol=0.25, timeout=0.1)
+    with pytest.raises(rw.ExpectationError):
+        expect(_Topic(2.9)).to_publish(hz=4.0, tol=0.25, timeout=0)
+
+
+def test_a_topic_with_no_messages_fails_even_at_rate_zero(quiet_world):
+    quiet_world()
+    with pytest.raises(rw.ExpectationError, match="0 messages so far"):
+        expect(_Topic(0.0, count=0)).to_publish(hz=0.0, timeout=0)
+
+
+def test_to_publish_retries_until_the_rate_arrives(quiet_world):
+    w = quiet_world()
+    t0 = w.time
+    expect(_Topic(lambda: 4.0 if w.time - t0 >= 0.5 else 0.0)).to_publish(hz=4.0, timeout=2)
+    assert 0.5 - w.dt <= w.time - t0 <= 0.5 + 2 * w.dt
+
+
+def test_to_publish_needs_a_topic(quiet_world):
+    quiet_world()
+    with pytest.raises(TypeError, match="ROS topic"):
+        expect(Point((0.0, 0.0, 0.0))).to_publish(hz=1.0, timeout=0)

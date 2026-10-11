@@ -28,7 +28,7 @@ import numpy as np
 
 from . import robots
 from .errors import RobowrightError
-from .scene import CameraSpec, ObjectSpec, default_scene
+from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene
 from .world import Settings, World, launch
 
 # Matcher arguments that name another object or subject.
@@ -94,7 +94,7 @@ class Session:
     # --- lifecycle -------------------------------------------------------------
     def launch(
         self,
-        robot: str = "so101",
+        robot: str | None = "so101",
         backend: str = "mujoco",
         seed: int = 0,
         objects: list[dict] | None = None,
@@ -106,16 +106,22 @@ class Session:
 
         ``backend="ros2"`` connects to a robot behind ROS 2 instead (a real arm, Gazebo, Isaac
         Sim's bridge), with ``ros2`` its settings (topics, controllers, TF frames, ``gazebo``: see
-        ``robowright.backends.ros2_backend``); it gets no objects unless ``objects`` names some, and
-        the robot is not moved. ``robot_options``: for a robot given as a model
+        ``robowright.backends.ros2_backend``; ``robot=None`` reads the description the stack publishes);
+        it gets no objects unless ``objects`` names some, and the robot is not moved.
+        ``robot_options``: for a robot given as a model
         file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``)."""
         if self.world is not None:
             self.close()
+        if backend == "ros2":
+            from .world import _ros_robot
+
+            robot = _ros_robot(robot, ros2 or {})
         if robot_options and not robots.is_file(robot):
             raise RobowrightError(f"robot_options are for a robot given as a model file; {robot!r} is a built-in robot")
         opts = {k: tuple(v) if isinstance(v, list) else v for k, v in (robot_options or {}).items()}
         model = robots.load(robot, **opts) if opts else robots.get(robot)
-        scene = default_scene(model.name)
+        # A mobile robot's scene is its own: no table, cube or bin to place (its world is the stack's).
+        scene = SceneSpec(robot=model.name, objects=[]) if model.family == "mobile" else default_scene(model.name)
         if objects is not None:
             scene.objects = [self._object(o) for o in objects]
         elif backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
@@ -179,6 +185,14 @@ class Session:
             ]
             if w.has_contacts:
                 lines.append(f"  base touching: {', '.join(sorted(base.contacts())) or 'nothing'}")
+        elif m.family == "mobile":
+            base = r.base
+            lines += [
+                "robot (mobile):",
+                f"  base: position {_f(base.position)}, yaw {math.degrees(base.yaw):.1f} deg",
+                f"  base velocity: {_f(base.velocity[:3])} m/s",
+                f"  wheels: {', '.join(f'{k} {v:.3f}' for k, v in r.joints.items())}",
+            ]
         else:
             g = r.gripper
             lines += ["robot (arm):", f"  tcp: {_f(r.tcp.position)}"]
@@ -539,8 +553,8 @@ class Session:
 
     def _subject(self, name: str):
         r = self._w().robot
-        if name in ("robot", "base") and self.world.backend.robot_model.family == "legged":
-            return r.base  # a legged robot's pose, velocity and contacts are its base's
+        if name in ("robot", "base") and self.world.backend.robot_model.family in ("legged", "mobile"):
+            return r.base  # a legged or mobile robot's pose, velocity and contacts are its base's
         special = {"robot": r, "gripper": getattr(r, "gripper", None), "tcp": getattr(r, "tcp", None)}
         if name == "base":
             return r.base

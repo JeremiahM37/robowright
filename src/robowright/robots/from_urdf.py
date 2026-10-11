@@ -4,7 +4,7 @@ MuJoCo reads URDF itself (links, joints, limits, inertias, collision shapes, ``<
 joints as equality constraints), so this module only does what its reader cannot:
 
 * **mesh paths.** ``package://name/...`` is resolved the way ROS would, from
-  ``ROS_PACKAGE_PATH`` and then from the directories around the file (a package is a
+  ``ROS_PACKAGE_PATH``, the installed packages (``AMENT_PREFIX_PATH``) and then the directories around the file (a package is a
   directory of that name, or one whose ``package.xml`` gives that name); ``file://`` and
   relative paths are taken as they are.
 * **mesh formats** MuJoCo cannot load (COLLADA ``.dae`` above all) are converted to OBJ with
@@ -141,7 +141,17 @@ def _resolved(path: Path, raw: bytes, meshes: Path, notes) -> ET.ElementTree:
                 mesh = el.find("geometry/mesh")
                 if mesh is None:
                     continue
-                file = _find(mesh.get("filename", ""), path)
+                try:
+                    file = _find(mesh.get("filename", ""), path)
+                except URDFError:
+                    if kind == "collision" or not _package_found(mesh.get("filename", ""), path):
+                        raise
+                    # A visual mesh its package does not ship (Nav2's TurtleBot3 description names
+                    # models/waffle_base.dae; the file is under models/turtlebot3_model/meshes):
+                    # it is only drawn, so the model moves and collides as the file says without it.
+                    link.remove(el)
+                    dropped.append(mesh.get("filename", ""))
+                    continue
                 if file.suffix.lower() not in _LOADS:
                     obj = _convert(file, meshes)
                     if obj is None:
@@ -158,7 +168,7 @@ def _resolved(path: Path, raw: bytes, meshes: Path, notes) -> ET.ElementTree:
     if converted:
         notes.append(f"meshes: {converted} converted to OBJ (MuJoCo does not read their format)")
     if dropped:
-        notes.append(f"meshes: visual meshes {sorted(set(dropped))} left out (pip install trimesh pycollada to convert them)")
+        notes.append(f"meshes: visual meshes {sorted(set(dropped))} left out (not found, or a format needing trimesh and pycollada)")
     for el in root.findall("mujoco") + root.findall("gazebo") + root.findall("transmission"):
         root.remove(el)
     ext = ET.SubElement(root, "mujoco")
@@ -190,13 +200,25 @@ def _find(name: str, urdf: Path) -> Path:
     raise URDFError(f"mesh {name!r} not found (looked in ROS_PACKAGE_PATH and the directories around {urdf.name})")
 
 
+def _package_found(name: str, urdf: Path) -> bool:
+    """Whether the ``package://`` mesh ``name`` names a package that is installed (its directory is
+    there, whatever it holds): a missing package is a setup error, a missing file in one is not."""
+    if not name.startswith("package://"):
+        return False
+    pkg = name[len("package://") :].partition("/")[0]
+    return any(d.is_dir() for d in _package_dirs(pkg, urdf))
+
+
 def _package_dirs(pkg: str, urdf: Path):
-    """Where ROS package ``pkg`` may be: ROS_PACKAGE_PATH, then each directory above the file."""
+    """Where ROS package ``pkg`` may be: ROS_PACKAGE_PATH, the installed packages' share directories
+    (ament's index, where a ROS 2 install keeps a package's meshes), then each directory above the file."""
     for base in filter(None, os.environ.get("ROS_PACKAGE_PATH", "").split(os.pathsep)):
         b = Path(base)
         yield b / pkg
         if b.name == pkg:
             yield b
+    for prefix in filter(None, os.environ.get("AMENT_PREFIX_PATH", "").split(os.pathsep)):
+        yield Path(prefix) / "share" / pkg
     for up in [urdf.parent, *urdf.parent.parents][:8]:
         if up.name == pkg or _package_name(up) == pkg:
             yield up

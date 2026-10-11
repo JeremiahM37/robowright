@@ -7,7 +7,9 @@ which actuator drives the gripper and which end of its range is open. This modul
 off the model's structure and motion, the way Playwright finds a button by its role rather
 than by a hand-written selector:
 
-* a model with a free joint is a mobile robot: legged if chains of actuated joints reach the
+* a model with no arm, only unlimited wheel joints, is a mobile robot: its wheels are its
+  controlled joints, and nothing is attached or placed for it;
+* a model with a free joint is a floating-base robot: legged if chains of actuated joints reach the
   ground, its actuated joints being what it moves; otherwise, carrying a gripper, a mobile
   manipulator, whose base is held where it stands so its arm is tested as on a fixed one;
 * the gripper is the actuator that moves several coupled joints, a slide, or parts named like
@@ -405,6 +407,9 @@ def detect(mjcf: str | Path, attach: Attachment | None = None, given: dict | Non
             # (build() holds such a base still first; this is detect() called on the model as it is.)
             raise DetectionError("a free-floating base with a gripper and no legs is a mobile manipulator: load it with robots.load")
         out.update(_legged(m, free[0], notes))
+        return Detection(out, notes)
+    if not free and (given.get("family") == "mobile" or _wheeled(m)):
+        out.update(_mobile(m, notes))
         return Detection(out, notes)
     if bare:
         out.update(_bare_arm(m, notes, given))
@@ -1136,6 +1141,29 @@ def _fingers(m, hand, gj, act, rng, arm, notes):
     how = "one moving jaw against the hand" if fixed else "the moving parts that reach furthest and close towards each other"
     notes.append(f"fingers: {m.body(a).name!r} / {m.body(b).name!r} ({how})")
     return a, b, opening
+
+
+def _wheeled(m: mujoco.MjModel) -> bool:
+    """A robot with no arm: its actuated joints are all unlimited hinges (wheels, which turn
+    without end), each on a body of its own hanging off the base, and none of its actuators is a
+    gripper. An arm is a chain of joints, one after another, and a mobile manipulator has one."""
+    moved = _moved_joints(m)
+    if not moved or any(_is_gripper(m, a, j) for a, j in moved.items()):
+        return False
+    if not all(len(js) == 1 and m.jnt_type[next(iter(js))] == _HINGE and not m.jnt_limited[next(iter(js))] for js in moved.values()):
+        return False
+    # Wheels hang off the base one each. Joints one after another, each on the body of the last
+    # (an arm's, even with no limits in its description), are a chain: not wheels.
+    bodies = [int(m.jnt_bodyid[next(iter(js))]) for js in moved.values()]
+    return not any(b != c and c in _ancestors(m, b)[1:] for b in bodies for c in bodies)
+
+
+def _mobile(m: mujoco.MjModel, notes) -> dict:
+    """A mobile robot: its wheels are its controlled joints, and its base is the root body."""
+    joints = [next(iter(js)) for js in _moved_joints(m).values()]
+    base = m.body(1).name  # the first body under the world: where the description's base is
+    notes.append(f"family: mobile (no arm: {len(joints)} wheel joint(s) {[m.joint(j).name for j in joints]}, base {base!r})")
+    return {"family": "mobile", "base_body": base, "arm_joints": tuple(m.joint(j).name for j in joints)}
 
 
 def _legged(m: mujoco.MjModel, free: int, notes) -> dict:

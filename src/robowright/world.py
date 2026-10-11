@@ -7,6 +7,8 @@ expectations and policy rollouts.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +21,7 @@ from .errors import CapabilityError, ExpectationError, InvariantViolation
 from .faults import Faults
 from .legged import LeggedRobot
 from .locators import SceneLocator
+from .mobile import MobileRobot
 from .robot import Robot
 from .scene import SceneSpec, default_scene
 from .trace import Recorder
@@ -88,7 +91,8 @@ class World:
         self._soft_failures: list[str] = []
         self.faults = Faults(self)
         with fidelity.using(self.fidelity):  # its kinematics and self-collision model, built as this world was
-            self.robot = (LeggedRobot if self.backend.robot_model.family == "legged" else Robot)(self)
+            family = self.backend.robot_model.family
+            self.robot = {"legged": LeggedRobot, "mobile": MobileRobot}.get(family, Robot)(self)
         self.scene = SceneLocator(self)
         self.trace: Recorder | None = None
         if self.settings.trace != "off":
@@ -96,6 +100,13 @@ class World:
             self.trace = Recorder(self, s.frame_every, s.trace_cameras, s.image_size)
         self._began = False
         self.trace_path: Path | None = None
+
+    @property
+    def ros(self):
+        """The ROS 2 graph (topics, TF frames) of a ``backend="ros2"`` world."""
+        if not hasattr(self.backend, "graph"):
+            raise CapabilityError(f"the {self.backend.name} backend has no ROS 2 graph: world.ros needs backend='ros2'")
+        return self.backend.graph()
 
     # --- capabilities ------------------------------------------------------
     @property
@@ -248,6 +259,25 @@ def _safe(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_.[]=" else "_" for c in name)[:180]
 
 
+def _ros_robot(robot: str | None, options: dict) -> str:
+    """The robot a ROS 2 world runs: ``robot`` (a name or a model file), else the description the
+    stack publishes, written to robowright's cache as the URDF it is (named for the robot)."""
+    from .backends.ros2_backend import robot_description
+    from .robots.urdf import cache_root
+
+    if robot is not None:
+        return robot
+    text = robot_description(options)
+    name = re.search(r'<robot[^>]*\sname="([^"]+)"', text)
+    if name is None:
+        raise ValueError("the robot description has no <robot name=...>: pass robot=<its model file>")
+    folder = cache_root().parent / "ros2_description" / hashlib.sha1(text.encode()).hexdigest()[:12]
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{_safe(name.group(1))}.urdf"
+    path.write_text(text)
+    return str(path)
+
+
 def launch(
     scene: SceneSpec | None = None,
     backend: str = "mujoco",
@@ -263,7 +293,10 @@ def launch(
     ``robot`` picks the robot for the default scene, or overrides ``scene.robot``. On ``ros2`` the
     default scene has no objects: the robot's world is the one its ROS 2 stack runs.
     """
-    if scene is None:
+    if backend == "ros2" and scene is None:
+        # A ROS 2 robot is the stack's own: a model file, or the description its stack publishes.
+        scene = SceneSpec(robot=_ros_robot(robot, kw), objects=[])
+    elif scene is None:
         scene = default_scene(robot or "so101")
         if backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
             scene.objects = []

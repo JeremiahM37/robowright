@@ -147,6 +147,23 @@ class Expectation:
     def to_have_position(self, xyz, tol: float = 0.01, **kw):
         return self.to_be_near(Point(xyz), tol, **kw)
 
+    # topic matchers --------------------------------------------------------------
+    def to_publish(self, hz: float | None = None, *, tol: float = 0.25, timeout=None, hold=0.0):
+        """A ROS topic publishes (at ``hz``, within ``tol`` as a fraction, if given), measured over
+        the last seconds of the world's clock. ``expect(world.ros.topic("/scan")).to_publish(hz=4)``."""
+        t = self.subject
+        if not hasattr(t, "hz"):
+            raise TypeError(f"to_publish needs a ROS topic (world.ros.topic(...)), got {t!r}")
+
+        def check():
+            rate, n = t.hz, t.count
+            if hz is None:
+                return n > 0, f"{t.name}: {n} message(s), {rate:.2f} Hz"
+            ok = n > 0 and abs(rate - hz) <= tol * hz
+            return ok, f"{t.name} measured {rate:.2f} Hz ({n} messages so far), want {hz} Hz +/- {tol * 100:.0f}%"
+
+        return self._run("to_publish", check, timeout, hold, {"hz": hz, "tol": tol})
+
     # state matchers -------------------------------------------------------------
     def to_be_at_rest(self, lin_tol: float = 0.01, ang_tol: float = 0.1, *, timeout=None, hold=0.1):
         """Linear speed below ``lin_tol`` m/s and angular below ``ang_tol`` rad/s."""
