@@ -52,6 +52,19 @@ class Controller:
         return None
 
 
+def gripper_trajectory(g: Graph, arm: str | None, joint: str | None) -> Controller | None:
+    """The active joint trajectory controller that drives the gripper's joint, when the stack has no
+    gripper controller of its own: a gripper that is one more joint of a trajectory controller (xArm's
+    is ``xarm_gripper_traj_controller``, claiming ``drive_joint``) is driven through that. ``arm`` is the
+    arm's controller, which never counts as the gripper."""
+    if not joint:
+        return None
+    for c in g.controllers:
+        if c.active and c.name != arm and c.interface and c.interface[0] == "arm" and joint in c.joints:
+            return c
+    return None
+
+
 @dataclass
 class Graph:
     """What ``inspect`` found."""

@@ -303,6 +303,27 @@ def ros2_robot(name: str | None = None, **options) -> str:
     return _ros_robot(None, options, as_name=name)
 
 
+def ros2_scene(scene: SceneSpec | None, backend: str, robot: str | None, kw: dict, robot_options: dict | None = None) -> SceneSpec | None:
+    """The scene a world is built from, for ``launch``. On ``ros2`` a robot is the stack's own: with no
+    scene, or a scene whose robot is None, it is the description the stack publishes (``robot_options``
+    say where it stands, as ``robots.load`` takes them: ``{"base_pos": [...], "base_yaw": ...}``)."""
+    import dataclasses
+
+    load = {k: tuple(v) if isinstance(v, list) else v for k, v in (robot_options or {}).items()}
+    if backend == "ros2" and scene is None:
+        return SceneSpec(robot=_ros_robot(robot, kw, load), objects=[])
+    if scene is None:
+        scene = default_scene(robot or "so101")
+        if backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
+            scene.objects = []
+        return scene
+    if robot is not None and robot != scene.robot:
+        scene = dataclasses.replace(scene, robot=robot)
+    if backend == "ros2" and scene.robot is None:
+        scene = dataclasses.replace(scene, robot=_ros_robot(None, kw, load))
+    return scene
+
+
 def launch(
     scene: SceneSpec | None = None,
     backend: str = "mujoco",
@@ -310,23 +331,15 @@ def launch(
     name: str = "world",
     settings: Settings | None = None,
     robot: str | None = None,
+    robot_options: dict | None = None,
     **kw,
 ) -> World:
     """Build a world. ``scene`` defaults to the robot's default scene (for arms,
     the tabletop with a cube and a bin; for legged robots, an open floor).
 
     ``robot`` picks the robot for the default scene, or overrides ``scene.robot``. On ``ros2`` the
-    default scene has no objects: the robot's world is the one its ROS 2 stack runs.
+    default scene has no objects: the robot's world is the one its ROS 2 stack runs, and a scene with
+    ``robot=None`` takes that robot too (``robot_options``: see ``ros2_scene``).
     """
-    if backend == "ros2" and scene is None:
-        # A ROS 2 robot is the stack's own: a model file, or the description its stack publishes.
-        scene = SceneSpec(robot=_ros_robot(robot, kw), objects=[])
-    elif scene is None:
-        scene = default_scene(robot or "so101")
-        if backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
-            scene.objects = []
-    elif robot is not None and robot != scene.robot:
-        import dataclasses
-
-        scene = dataclasses.replace(scene, robot=robot)
+    scene = ros2_scene(scene, backend, robot, kw, robot_options)
     return World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)

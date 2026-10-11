@@ -282,6 +282,8 @@ class Ros2Backend(Backend):
                 grip.update(controller=hands[0].name, interface=hands[0].interface[1])
                 if "ParallelGripper" in hands[0].type:
                     grip["parallel"] = True
+            elif (jtc := discover.gripper_trajectory(graph, arm["controller"], self._grip_joint)) is not None:
+                grip.update(controller=jtc.name, interface="trajectory")
             else:
                 grip["interface"] = "none"  # read, never driven: nothing in the stack drives it
         self._heard(arm)

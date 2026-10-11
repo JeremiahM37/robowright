@@ -18,7 +18,7 @@ import pytest
 
 import robowright as rw
 from robowright import expect
-from robowright.scene import SceneSpec
+from robowright.scene import ObjectSpec, SceneSpec
 
 HERE = Path(__file__).parent
 
@@ -43,27 +43,39 @@ os.environ["GZ_PARTITION"] = f"rw-xarm-{_worker}-{os.getpid()}"
 os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
 
 FRAME = "link_base"  # xArm's base link, the frame TF is read in
-GOALS = ((0.3, 0.0, 0.35), (0.25, 0.15, 0.25), (0.3, -0.15, 0.4))
+# The arm stands where xarm_gazebo's launch spawns it, yawed 90 degrees, and robowright's world is
+# Gazebo's: the base is placed there, and its positions are the ones robowright reports.
+BASE = np.array(rig.BASE_POS)
+YAW = np.pi / 2
+ROT = np.array([[np.cos(YAW), -np.sin(YAW), 0], [np.sin(YAW), np.cos(YAW), 0], [0, 0, 1]])
+# robowright's home (where arm.home() goes) is 20 cm out and over the table by default: in the world
+# that is 80 cm below this arm's base, so the arm's own home is given, in its frame, as the goals are
+HOME = BASE + ROT @ np.array((0.3, 0.0, 0.3))
+GOALS = tuple(BASE + ROT @ np.array(p) for p in ((0.3, 0.0, 0.35), (0.25, 0.15, 0.25), (0.3, -0.15, 0.4)))
 
 
 @pytest.fixture(scope="module")
 def xarm(tmp_path_factory):
+    # One simulation for the module, with the gripper when its plugin is built: the arm's tests then
+    # run on the arm the gripper tests need, and a second Gazebo is never started beside it.
     d = tmp_path_factory.mktemp("xarm")
-    with rig.xarm_sim(workdir=d) as sim:
+    with rig.xarm_sim(workdir=d, gripper=rig.gripper_installed()) as sim:
         yield sim
 
 
 def _world(xarm, *, objects=(), command=True, gripper=False, gazebo=True):
-    # Nothing is named: the robot is the one /robot_description describes, and the controllers are
-    # the ones its controller manager runs. No camera: the arm's description has none to render.
-    scene = SceneSpec(robot="robot", objects=list(objects), cameras=[]) if gazebo else SceneSpec(robot="robot", objects=list(objects))
+    # Nothing is named: the robot is the one /robot_description describes (SceneSpec(robot=None)), and
+    # the controllers are the ones its controller manager runs. No camera: the arm's description has
+    # none to render. The base is placed where Gazebo has the arm, facing the same way.
+    scene = SceneSpec(robot=None, objects=list(objects), cameras=[])
     return rw.launch(
-        scene if objects else None,
+        scene,
         backend="ros2",
         command=command,
         frame=FRAME,
         use_sim_time=True,
         gazebo=gazebo,
+        robot_options={"base_pos": [float(v) for v in BASE], "base_yaw": YAW, "home": [float(v) for v in HOME]},
         settings=rw.Settings(trace="on", trace_dir=str(xarm)),
     )
 
@@ -129,7 +141,7 @@ def test_robowright_connects_to_xarm_with_nothing_named(observed):
     """The robot and its trajectory controller are found from the stack: no name, no controller."""
     r = observed.robot
     assert observed.model_changes == []
-    print(f"robot {r.name}: {r.n_arm} arm joints")
+    print(f"robot {r.name}: {r.n_arm} arm joints, base at {np.round(r.model.base_pos, 3).tolist()}")
     assert r.n_arm == 6
 
 
@@ -142,7 +154,7 @@ def test_robowright_reads_xarms_arm_where_the_stacks_tf_puts_it(observed):
         errs = []
         for _ in range(5):
             p, rot = tf.pose()
-            tcp_tf = p + rot @ r.model.derived.tcp_offset
+            tcp_tf = BASE + ROT @ (p + rot @ r.model.derived.tcp_offset)
             errs.append(np.linalg.norm(tcp_tf - r.tcp.position))
             time.sleep(0.2)
         print(f"TCP error vs TF over {len(errs)} reads (m): {[f'{e:.6f}' for e in errs]}")
@@ -171,3 +183,66 @@ def test_robowright_moves_the_arm_through_xarms_controller(driven, xarm):
         print(f"goal {goal}: arrived in {w.time - t0:.2f} s (sim)")
     assert w.backend.moves_sent - moves == len(GOALS)  # one goal per move
     assert rig._read(xarm / "control.log").count("[ERROR]") == errors
+
+
+def test_robowright_opens_and_closes_xarms_gripper_through_its_controller(xarm):
+    """The gripper is one more joint of ``xarm_gripper_traj_controller``, found from the controller
+    manager and driven by its trajectory topic; ``opening`` is read back from ``drive_joint``."""
+    if not rig.gripper_installed():
+        pytest.skip("needs xarm_gazebo's mimic-joint plugin: scripts/ros2_env.sh xarm")
+    w = _world(xarm)
+    try:
+        r = w.robot
+        r.gripper.close()
+        expect(r.gripper).to_be_closed(timeout=8)
+        closed = r.gripper.opening
+        r.gripper.open()
+        expect(r.gripper).to_be_open(timeout=8)
+        opened = r.gripper.opening
+        print(f"opening: closed {closed:.4f}, open {opened:.4f}")
+        assert closed < 0.1 and opened > 0.8
+    finally:
+        w.close(failed=False)
+
+
+# The table is Gazebo's (xarm_gazebo's world): its top is at z = 1.015, and the arm stands on its edge.
+# The cube and the bin go on the table, within the arm's reach: in its own frame, as the goals are.
+TABLE_TOP = 1.015
+CUBE_LOCAL = (-0.45, 0.0)
+BIN_LOCAL = (-0.3, -0.25)
+
+
+def _on_table(local, z):
+    x, y = BASE[:2] + (ROT @ np.array((*local, 0.0)))[:2]
+    return (float(x), float(y), z)
+
+
+SCENE = [
+    ObjectSpec("cube", pos=_on_table(CUBE_LOCAL, TABLE_TOP + 0.0125)),
+    ObjectSpec("bin", kind="bin", size=(0.05, 0.05, 0.02), pos=_on_table(BIN_LOCAL, TABLE_TOP + 0.01), color="blue"),
+]
+
+
+def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
+    """robowright commands the arm and its gripper through UFACTORY's controllers, and Gazebo's physics
+    decides whether the cube comes with the hand: the cube's pose is Gazebo's ground truth."""
+    if not rig.gripper_installed():
+        pytest.skip("needs xarm_gazebo's mimic-joint plugin: scripts/ros2_env.sh xarm")
+    w = _world(xarm, objects=SCENE)
+    try:
+        r = w.robot
+        assert {"cube", "bin"} <= set(w.backend.gazebo.models())
+        cube, bin_ = w.scene["cube"], w.scene["bin"]
+        expect(cube).to_be_near(SCENE[0].pos, tol=0.002, timeout=3)
+        r.pick(cube)
+        print(f"after pick: cube {np.round(cube.position, 4)}, tcp {np.round(r.tcp.position, 4)}, opening {r.gripper.opening:.3f}")
+        assert cube.position[2] > TABLE_TOP + 0.0125 + 0.03
+        expect(cube).to_be_near(r.tcp, tol=0.03, hold=1.0, timeout=3)
+        assert 0.1 < r.gripper.opening < 0.9
+        expect(r).to_be_holding(cube, timeout=2)
+        r.place(on=bin_)
+        expect(r.gripper).to_be_open(timeout=3)
+        expect(cube).to_be_inside(bin_, timeout=5)
+        print(f"after place: cube {np.round(cube.position, 4)}, bin {np.round(bin_.position, 4)}")
+    finally:
+        w.close(failed=False)
