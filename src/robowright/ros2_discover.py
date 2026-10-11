@@ -149,14 +149,21 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
             node.create_subscription(TFMessage, "/tf_static", on_tf, latched)
         deadline = time.monotonic() + timeout
         # Discovery takes a moment; controllers are asked for once their manager is seen
+        settled = time.monotonic()
         while time.monotonic() < deadline:
-            g.topics = {name: list(types) for name, types in node.get_topic_names_and_types()}
+            topics = {name: list(types) for name, types in node.get_topic_names_and_types()}
+            if topics.keys() != g.topics.keys():
+                settled = time.monotonic()
+            g.topics = topics
             g.navigate = find_navigate({n: list(t) for n, t in rclpy_action.get_action_names_and_types(node)}, nav_name)
             if g.manager is None:
                 g.manager = _manager(node, namespace)
             if g.manager and not g.controllers:
                 g.controllers = _controllers(node, g.manager, deadline)
-            if g.description and len(stamps) > 20 and (g.controllers or time.monotonic() > deadline - timeout / 2):
+            # Each process in the stack is discovered on its own: a graph still growing (the bridge that
+            # publishes /clock, seen after the controller manager) is not yet the graph to report
+            quiet = time.monotonic() - settled > 0.5
+            if g.description and len(stamps) > 20 and quiet and (g.controllers or time.monotonic() > deadline - timeout / 2):
                 break
             time.sleep(0.1)
         g.sim_time = node.count_publishers("/clock") > 0
