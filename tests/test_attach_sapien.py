@@ -266,3 +266,12 @@ def test_robowright_attaches_to_an_object_with_a_sapien_scene_and_refuses_one_wi
 def test_an_unknown_engine_name_is_refused_and_the_message_lists_sapien():
     with pytest.raises(ValueError, match="'mujoco', 'pybullet' or 'sapien'"):
         rw.attach(engine="nope", model=None, data=None, name="unit_bad_engine")
+
+
+def test_a_contact_names_a_body_as_the_environment_does_not_as_its_scene_entity():
+    """ManiSkill names an actor's SAPIEN entity ``scene-0_<name>``; a contact against the actor must still match its name."""
+    scene, _, _ = _scene()
+    scene.px.contacts = [_Contact("scene-0_cube", "scene-0_table", [_Point([0.0, 0.0, 0.01], [0.0, 0.0, 1.0])])]
+    eng = _engine(_Core(scene, sim_freq=100))
+    assert eng.contacts_of(eng.resolve("cube")) == ["table"]
+    assert [(a, b) for a, b, _ in eng.contact_pairs()] == [("cube", "table")]

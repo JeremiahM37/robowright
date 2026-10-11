@@ -20,11 +20,21 @@ What SAPIEN gives, and what this adapter says it cannot give:
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 from ..errors import CapabilityError
 from .attached_engine import AttachedEngine
 from .base import CONTACTS, FORCES, GROUND_TRUTH
+
+_SCENE_PREFIX = re.compile(r"^scene-\d+_")
+
+
+def _label(entity_name: str) -> str:
+    """The name the environment gave a body. ManiSkill prefixes an actor's SAPIEN entity with its scene (``scene-0_cube``)
+    and leaves an articulation link's entity as the link name, so a contact must drop the prefix to match a name."""
+    return _SCENE_PREFIX.sub("", entity_name)
 
 
 def _row(t) -> np.ndarray:
@@ -110,7 +120,7 @@ class SapienEngine(AttachedEngine):
         """``(label a, label b, normal force)`` for every PhysX contact record between two different bodies."""
         out = []
         for c in self._scene.px.get_contacts():
-            a, b = c.bodies[0].entity.name, c.bodies[1].entity.name
+            a, b = _label(c.bodies[0].entity.name), _label(c.bodies[1].entity.name)
             if a == b:
                 continue
             normal_impulse = sum(float(np.dot(_row(p.impulse), _row(p.normal))) for p in c.points)
