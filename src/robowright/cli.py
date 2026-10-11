@@ -432,6 +432,18 @@ def _fidelity(args, rest):
     return 0
 
 
+def _ros2(args, _rest) -> int:
+    try:
+        from . import ros2_discover as discover
+
+        graph = discover.inspect(args.namespace, timeout=args.timeout)
+    except ImportError as e:
+        print(f"robowright ros2 needs a ROS 2 environment (rclpy): {e}", file=sys.stderr)
+        return 2
+    print(discover.report(graph, discover.suggest(graph)))
+    return 0 if graph.joints else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="robowright", description="Playwright-style testing for robots.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -490,6 +502,10 @@ def main(argv=None) -> int:
     cc.add_argument("trace")
     cc.add_argument("--backend", required=True)
     sub.add_parser("mcp", help="run the MCP server (stdio) that lets an AI agent drive a simulated robot")
+    ros = sub.add_parser("ros2", help="look at a robot behind ROS 2: its joints and controllers, and the settings to connect with")
+    ros.add_argument("action", choices=["inspect"])
+    ros.add_argument("--namespace", default="", help="the robot's ROS namespace")
+    ros.add_argument("--timeout", type=float, default=5.0, help="seconds to look for (default 5)")
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["test"]:
         return _test(None, argv[1:])
@@ -508,6 +524,7 @@ def main(argv=None) -> int:
         "robots": _robots,
         "mcp": _mcp,
         "init": _init,
+        "ros2": _ros2,
     }
     return commands[args.cmd](args, [])
 

@@ -55,6 +55,17 @@ def _modules():
     return Node, boolean_pb2, entity_factory_pb2, entity_pb2, pose_pb2, pose_v_pb2, world_control_pb2, world_stats_pb2
 
 
+def worlds(timeout: float = 2.0) -> list[str]:
+    """The Gazebo worlds running in this ``GZ_PARTITION`` (found within ``timeout`` seconds)."""
+    node = _modules()[0]()
+    deadline = _time.monotonic() + timeout
+    while True:
+        found = sorted({s.split("/")[2] for s in node.service_list() if s.startswith("/world/") and s.endswith("/control")})
+        if found or _time.monotonic() > deadline:
+            return found
+        _time.sleep(0.05)
+
+
 class _Requests:
     """Gazebo service requests, made by a helper process (``python -m robowright.gazebo``)."""
 
