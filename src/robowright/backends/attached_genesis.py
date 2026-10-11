@@ -226,6 +226,6 @@ def _base_index(entity) -> int:
 
 def genesis_engine_of(scene, *, seed: int = 0, dt: float | None = None) -> GenesisEngine | None:
     """The Genesis adapter for a ``genesis.Scene`` that is built, or None."""
-    if not type(scene).__module__.startswith("genesis"):
+    if not type(scene).__module__.startswith("genesis."):
         return None
     return GenesisEngine(scene, seed=seed, dt=dt)

@@ -521,7 +521,7 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
     from .backends.attached_genesis import genesis_engine_of
     from .backends.attached_sapien import sapien_engine_of
 
-    if engine == "genesis" or (engine is None and type(env).__module__.startswith("genesis")):
+    if engine == "genesis" or (engine is None and type(env).__module__.startswith("genesis.")):
         found = genesis_engine_of(env, seed=seed, dt=dt)
         if found is None:
             raise ValueError(f"cannot attach to {type(env).__name__} as a Genesis scene: pass a genesis.Scene that is built")
