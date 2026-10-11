@@ -17,6 +17,8 @@ from ..scene import SceneSpec
 from .base import CONTACTS, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact
 
 _FREE = mujoco.mjtJoint.mjJNT_FREE
+_HINGE = mujoco.mjtJoint.mjJNT_HINGE
+_SLIDE = mujoco.mjtJoint.mjJNT_SLIDE
 _KINDS = {"body": mujoco.mjtObj.mjOBJ_BODY, "site": mujoco.mjtObj.mjOBJ_SITE, "geom": mujoco.mjtObj.mjOBJ_GEOM}
 
 
@@ -152,6 +154,15 @@ class AttachedBackend(Backend):
         if quat is not None:
             self.data.qpos[a + 3 : a + 7] = quat
         self.data.qvel[dof : dof + 6] = 0
+        mujoco.mj_forward(self.model, self.data)
+
+    def set_joint(self, name: str, value: float) -> None:
+        """A hinge or slide joint moved to ``value``, at rest; for a body built from slide joints, which no free joint moves."""
+        j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if j < 0 or int(self.model.jnt_type[j]) not in (int(_HINGE), int(_SLIDE)):
+            raise ValueError(f"{name!r} is not a hinge or slide joint in this simulation")
+        self.data.qpos[self.model.jnt_qposadr[j]] = value
+        self.data.qvel[self.model.jnt_dofadr[j]] = 0
         mujoco.mj_forward(self.model, self.data)
 
     def apply_force(self, name: str, force) -> None:

@@ -110,6 +110,19 @@ class AttachedSubject(Subject):
         return sorted(out)
 
 
+class AttachedJoint(Subject):
+    """A MuJoCo joint by name: its scalar value (a hinge angle in rad, a slide in m), read from the state."""
+
+    def __init__(self, world: AttachedWorld, name: str, qadr: int):
+        self.world = world
+        self.name = name
+        self.qadr = qadr
+
+    @property
+    def value(self) -> float:
+        return float(self.world.data.qpos[self.qadr])
+
+
 class AttachedScene:
     """``world.scene[name]``: the same lookup as a built world's, over the simulation's named things."""
 
@@ -192,6 +205,17 @@ class AttachedWorld(World):
         kind, i = found
         return AttachedSubject(self, kind, i, name)
 
+    def joint(self, name: str) -> AttachedJoint:
+        """A hinge or slide joint by name, for ``expect(...).to_be_between``: its value, not a position."""
+        j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if j < 0:
+            named = [n for n in (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)) if n]
+            raise KeyError(f"no joint named {name!r}; joints: {', '.join(named) or 'none'}")
+        # int(): numpy's int32 does not compare equal to MuJoCo's enum members
+        if int(self.model.jnt_type[j]) not in (int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)):
+            raise CapabilityError(f"joint {name!r} is not a hinge or slide, so it has one scalar value; use world.body() for its pose")
+        return AttachedJoint(self, name, int(self.model.jnt_qposadr[j]))
+
     # --- time ---------------------------------------------------------------------
     def step(self, n: int = 1):
         """Advance ``n`` physics steps through the advance callable (``advance=``, or ``step=``)."""
@@ -218,6 +242,12 @@ class AttachedWorld(World):
         finally:
             self._advance = saved
 
+    def set_joint(self, name: str, value: float) -> None:
+        """Move a hinge or slide joint to ``value`` now, as a recorded fault: for bodies that no free joint moves."""
+        self.backend.set_joint(name, value)
+        if self.trace:
+            self.trace.event("edit", "set_joint", {"joint": name, "value": float(value)})
+
     def push(self, body: str, force, duration: float = 0.1, at: float | None = None):
         """A world-frame force (N) on a free body from ``at`` for ``duration`` s, applied to the physics steps it covers."""
         if body not in self.object_names:
@@ -240,6 +270,15 @@ class AttachedWorld(World):
         self._begin()
         if self.trace:
             self.trace.event("log", "env.reset", {"seed": seed})
+
+    def _rebind(self, env) -> None:
+        """Point at the environment's current model and data when it has replaced them (a reset that rebuilds the simulation)."""
+        model, data = _physics_of(env)
+        if model is self.backend.model and data is self.backend.data:
+            return
+        old = self.backend
+        self.backend = AttachedBackend(model, data, seed=self.seed)
+        self.backend.set_control_dt(old.control_dt)
 
     def _physics_step(self, fn, pushes: bool = True):
         """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
@@ -275,12 +314,24 @@ def model_bytes(model: mujoco.MjModel) -> bytes:
         return p.read_bytes()
 
 
+def _raw(wrapper, attr: str):
+    """The MuJoCo struct a binding wrapper holds, or the object itself when it already is one."""
+    if isinstance(wrapper, (mujoco.MjModel, mujoco.MjData)):
+        return wrapper
+    return getattr(wrapper, attr, None)
+
+
 def _physics_of(env):
     """The MjModel and MjData of an environment: gymnasium's MuJoCo envs, or dm_control's physics."""
     core = getattr(env, "unwrapped", env)
     model, data = getattr(core, "model", None), getattr(core, "data", None)
     if isinstance(model, mujoco.MjModel) and isinstance(data, mujoco.MjData):
         return model, data
+    sim = getattr(core, "sim", None)  # robosuite: sim.model._model and sim.data._data are the raw MuJoCo structs
+    if sim is not None:
+        model, data = _raw(getattr(sim, "model", None), "_model"), _raw(getattr(sim, "data", None), "_data")
+        if isinstance(model, mujoco.MjModel) and isinstance(data, mujoco.MjData):
+            return model, data
     physics = getattr(core, "physics", None) or getattr(getattr(core, "_env", None), "physics", None)
     if physics is not None:  # dm_control: the raw structs are behind .ptr
         return physics.model.ptr, physics.data.ptr
@@ -331,6 +382,7 @@ def _wrap_env(env, world: AttachedWorld) -> None:
 
     def reset(*args, **kwargs):
         out = orig_reset(*args, **kwargs)
+        world._rebind(env)  # robosuite builds a new MjModel and MjData on every reset
         world._on_reset(kwargs.get("seed"))
         return out
 
@@ -366,7 +418,9 @@ class AttachedRenderer:
         if self._renderer is None or self._renderer_size != tuple(size):
             self._renderer = mujoco.Renderer(self.model, int(size[1]), int(size[0]))
             self._renderer_size = tuple(size)
-        self._renderer.update_scene(self.data, camera=camera or (self.cameras or [None])[0])
+        if camera is None:  # a model with no cameras is drawn from the free camera (id -1)
+            camera = self.cameras[0] if self.cameras else -1
+        self._renderer.update_scene(self.data, camera=camera)
         return self._renderer.render()
 
     def frames(self, camera: str | None = None, size=(640, 480), every: int = 1):
