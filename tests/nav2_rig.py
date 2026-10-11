@@ -18,12 +18,20 @@ about a minute after the stack is configured the navigation bringup gives up and
 (``setInitialPose``) and waits for Nav2 to be active, so the rig's readiness is the localization
 stack being active, which needs no pose, and the test starts the example straight after.
 
+Navigation (``navigation=True``) needs one more thing, which the shipped stack does not do for
+itself: AMCL starts at the origin unless it is told where the robot is. The shipped way to tell it is
+RViz's "2D pose estimate", which publishes on ``/initialpose`` (nav2_bringup's rviz_launch relays that
+topic), so the rig publishes the same message with the spawn pose. Navigation's costmaps wait for the
+``map -> odom`` transform that AMCL publishes once it has that pose, and the navigation lifecycle is
+active only after that (measured: without the pose, the navigation bringup aborts about a minute on).
+
 Run as ``python tests/nav2_rig.py`` to start it on its own (Ctrl-C stops it).
 """
 
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import re
 import shutil
@@ -39,6 +47,20 @@ PACKAGES = ("nav2_bringup", "nav2_minimal_tb3_sim", "nav2_simple_commander", "tu
 # The sandbox world's map is 20 m square, centred on the origin (nav2_bringup's tb3_sandbox.yaml).
 LOCALIZED = re.compile(r"\[lifecycle_manager_localization\]: .*Managed nodes are active")
 ACTIVE = re.compile(r"\[lifecycle_manager_navigation\]: .*Managed nodes are active")
+
+
+def set_initial_pose(x: float, y: float, yaw: float = 0.0) -> None:
+    """Publish the pose AMCL starts from, as RViz's "2D pose estimate" does: ``/initialpose`` in the map
+    frame, with RViz's default covariance (0.25 m^2 in position, about 0.07 rad^2 in heading)."""
+    cov = [0.25, 0, 0, 0, 0, 0, 0, 0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0685]
+    z, w = math.sin(yaw / 2), math.cos(yaw / 2)
+    msg = (
+        f"{{header: {{frame_id: map}}, pose: {{pose: {{position: {{x: {x}, y: {y}, z: 0.0}}, "
+        f"orientation: {{z: {z}, w: {w}}}}}, covariance: {str(cov).replace(' ', '')}}}}}"
+    )
+    # -w 1: wait until AMCL has subscribed, or the one message is published into nothing
+    cmd = ["ros2", "topic", "pub", "--once", "-w", "1", "/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", msg]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=60, env=_environment())
 
 
 def installed() -> bool:
@@ -149,10 +171,18 @@ def observed_world(workdir: Path) -> Path:
 
 
 @contextlib.contextmanager
-def nav2_stack(workdir: Path | None = None, timeout: float = 240.0, spawn: tuple[float, float] | None = None, poses: bool = True):
+def nav2_stack(
+    workdir: Path | None = None,
+    timeout: float = 240.0,
+    spawn: tuple[float, float] | None = None,
+    poses: bool = True,
+    navigation: bool = False,
+):
     """Nav2's TurtleBot3 simulation, started headless, until its localization is active. ``spawn``:
     where the robot is put in the world (``x_pose``, ``y_pose``); default, as the launch file has it.
-    ``poses``: the world with its SceneBroadcaster (:func:`observed_world`); False, as shipped."""
+    ``poses``: the world with its SceneBroadcaster (:func:`observed_world`); False, as shipped.
+    ``navigation``: also tell AMCL where the robot is (:func:`set_initial_pose`, at the spawn pose)
+    and wait until the navigation stack is active, so that it accepts goals."""
     d = Path(workdir or tempfile.mkdtemp(prefix="rw-nav2-"))
     d.mkdir(parents=True, exist_ok=True)
     args = [f"x_pose:={spawn[0]}", f"y_pose:={spawn[1]}"] if spawn is not None else []
@@ -168,6 +198,12 @@ def nav2_stack(workdir: Path | None = None, timeout: float = 240.0, spawn: tuple
         if not stack.wait_for(LOCALIZED, timeout) or not _first_message("/scan", timeout):
             state = "exited" if launch.poll() is not None else "timed out"
             raise RuntimeError(f"Nav2's simulation did not come up ({state}):\n{stack.log[-4000:]}")
+        if navigation:
+            x, y = spawn if spawn is not None else (-2.0, -0.5)  # the launch file's default spawn, in the sandbox
+            set_initial_pose(x, y, 0.0)
+            if not stack.wait_for(ACTIVE, timeout):
+                state = "exited" if launch.poll() is not None else "timed out"
+                raise RuntimeError(f"Nav2's navigation stack did not become active ({state}):\n{stack.log[-4000:]}")
         yield stack
     finally:
         _stop([launch, *stack.examples])

@@ -42,6 +42,11 @@ iterations), sim_spawn and sim_remove act on Gazebo itself; robot_move_object mo
 object positions are Gazebo's own; robot_screenshot is Gazebo's rendering, from cameras robowright
 adds to the world. robot_options={"gripper": false} loads an arm's own description as it is.
 
+An environment someone else built (gymnasium, dm_control, ManiSkill, panda-gym): sim_attach it, then
+sim_subjects names what can be checked. sim_env_step steps their own step, which robowright records and
+checks. robot_snapshot, robot_expect, robot_push, robot_move_object, robot_screenshot and robot_save_trace work
+there; the calls that drive a robot robowright built (robot_pick, robot_run_policy, ...) say why they cannot.
+
 robowright's own reference controller sets up situations and explores: robot_pick,
 robot_place, robot_move_to, robot_gripper, robot_move_joints, robot_home (arms), robot_stand,
 robot_crouch (legged). Disturb the world with robot_push, robot_move_object and robot_fault.
@@ -190,6 +195,35 @@ def build_server(session: Session | None = None):
         return await run(s.sim_remove, name)
 
     @tool
+    async def sim_attach(env_id: str = "", kwargs: dict | None = None, seed: int | None = 0, entry_point: str | None = None) -> str:
+        """Attach to a simulation someone else built, and watch and drive it. env_id: a registered gymnasium id
+        (e.g. "FetchPickAndPlace-v4", "gym_aloha/AlohaTransferCube-v0"; kwargs as gymnasium.make takes them), or
+        gymnasium's own "module:EnvId" form, which imports the module first. If the id is not registered yet,
+        the installed environment packages (gymnasium-robotics, ManiSkill, panda-gym, gym-aloha, ...) are
+        imported to register theirs, then it is retried. entry_point: "module:callable" that returns an
+        environment, called with kwargs (Meta-World: entry_point="metaworld:make_mt_envs",
+        kwargs={"name": "pick-place-v3", "seed": 0}). It is reset with seed (None: not seeded). Closes any open
+        world. Time moves only when sim_env_step steps the environment: their own loop is not robowright's.
+        Returns the snapshot, or why it could not attach: the ids that look like env_id, which packages were
+        registered, and which imports failed."""
+        return await run(s.sim_attach, env_id, kwargs, seed, entry_point)
+
+    @tool
+    async def sim_env_step(action: list[float] | None = None, steps: int = 1, sample: bool = False) -> str:
+        """Step the attached environment's own step this many times. action: its action, with the shape of its
+        action space; None is the zero (no-op) action, or with sample=true a random one from the action space.
+        Returns the reward summed over the steps, whether the episode ended, which named bodies moved, and the
+        snapshot. Every step is recorded (robot_save_trace keeps it)."""
+        return await run(s.sim_env_step, action, steps, sample)
+
+    @tool
+    async def sim_subjects() -> str:
+        """The names an attached simulation takes: bodies (free bodies are objects, starred), sites, joints and
+        cameras. Bodies and sites go to robot_expect, robot_push, robot_move_object; a joint to robot_expect with
+        matcher to_be_between {lo, hi}; a camera to robot_screenshot."""
+        return await run(s.sim_subjects)
+
+    @tool
     async def robot_serve_ros2(
         namespace: str = "",
         arm_controller: str = "arm_controller",
@@ -271,6 +305,17 @@ def build_server(session: Session | None = None):
     async def robot_crouch(depth: float = 0.5) -> str:
         """Legged: bend toward the folded pose, depth 0 (standing) to 1 (fully folded)."""
         return await run(s.crouch, depth)
+
+    @tool
+    async def robot_drive(linear: float, angular: float, duration: float) -> str:
+        """Mobile: drive the base at linear m/s and angular rad/s (turning left is positive) for duration seconds, then stop."""
+        return await run(s.drive, linear, angular, duration)
+
+    @tool
+    async def robot_go_to(x: float, y: float, yaw: float | None = None) -> str:
+        """Mobile: send the base to map-frame (x, y) with heading yaw (radians, default 0). Its own navigation
+        stack plans and drives; the reply says where it ended up, or why the stack could not get it there."""
+        return await run(s.go_to, x, y, yaw)
 
     @tool
     async def robot_wait(seconds: float) -> str:

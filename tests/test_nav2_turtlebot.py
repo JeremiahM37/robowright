@@ -15,11 +15,12 @@ import importlib.util
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import robowright as rw
 from robowright import expect
-from robowright.errors import CapabilityError
+from robowright.errors import ActionError, CapabilityError
 from robowright.session import Session
 
 HERE = Path(__file__).parent
@@ -45,6 +46,13 @@ os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
 
 SPAWN = (-2.0, -0.5, 0.0)  # where nav2_bringup's launch file puts the robot in the sandbox world (z: on the floor)
 SCAN_HZ = 5.0  # the lidar's update_rate in nav2_minimal_tb3_sim's waffle description
+# The sandbox map (nav2_bringup's tb3_sandbox.pgm, 0.05 m cells): (0.5, -0.5) is open floor in the room
+# the robot starts in; (0.0, -2.6) is an occupied cell of the room's south wall; (30.0, 0.0) is off the map.
+OPEN_GOAL = (0.5, -0.5)
+WALL = (0.0, -2.6)
+OFF_MAP = (30.0, 0.0)
+GOAL_TOL = 0.25  # xy_goal_tolerance in nav2_bringup's nav2_params.yaml: where Nav2 itself counts a goal reached
+BELIEF_ERROR = 0.1  # how far AMCL's belief is from Gazebo's truth at rest, with margin (measured: at most 0.035 m)
 
 
 @pytest.fixture
@@ -104,3 +112,90 @@ def test_a_session_observes_the_mobile_robot(stack):
         assert "robot (mobile):" in text and "base: position" in text and "wheels:" in text
     finally:
         s.close()
+
+
+@pytest.fixture
+def navigating(tmp_path):
+    # Navigation needs AMCL's initial pose and the navigation lifecycle active: a stack of its own.
+    with rig.nav2_stack(tmp_path, navigation=True) as st:
+        yield st
+
+
+@pytest.fixture
+def driven(navigating):
+    """The robot with robowright allowed to command its base (and Nav2 running it too, as shipped)."""
+    w = rw.launch(
+        backend="ros2",
+        robot=None,
+        command=True,
+        use_sim_time=True,
+        gazebo=True,
+        base={"frame": "base_footprint", "in": "map"},
+        settings=rw.Settings(trace="off"),
+    )
+    yield w
+    w.close(failed=False)
+
+
+def _heading(base) -> float:
+    return float(base.yaw)
+
+
+def test_the_base_drives_forward_at_the_commanded_speed(driven):
+    """1 s at 0.2 m/s: the distance is v * t (0.2 m) less the time the base takes to get up to speed."""
+    b = driven.robot.base
+    start = np.asarray(b.position, float)
+    b.drive(0.2, 0.0, 1.0)
+    moved = float(np.linalg.norm(np.asarray(b.position, float)[:2] - start[:2]))
+    print(f"\nmeasured: drove 1.0 s at 0.2 m/s, Gazebo's truth moved {moved:.3f} m", flush=True)
+    assert abs(moved - 0.2) <= 0.05, f"moved {moved:.3f} m, expected about 0.2 m"
+
+
+def test_the_base_turns_in_place(driven):
+    """0.5 rad/s for 1 s turns the base about half a radian, and it stays where it is."""
+    b = driven.robot.base
+    start, yaw0 = np.asarray(b.position, float), _heading(b)
+    b.drive(0.0, 0.5, 1.0)
+    turned = (_heading(b) - yaw0 + np.pi) % (2 * np.pi) - np.pi
+    shift = float(np.linalg.norm(np.asarray(b.position, float)[:2] - start[:2]))
+    print(f"\nmeasured: turned {turned:.3f} rad, moved {shift:.3f} m", flush=True)
+    assert abs(turned - 0.5) <= 0.1 and shift <= 0.05
+
+
+def test_the_base_goes_to_a_point_on_the_map(driven):
+    """Nav2 plans to (0.5, -0.5) and drives there: it arrives by Gazebo's truth, and by the belief
+    AMCL gives the robot."""
+    b = driven.robot.base
+    t0 = driven.time
+    b.go_to(OPEN_GOAL, yaw=0.0, timeout=90)
+    elapsed = driven.time - t0
+    truth = np.asarray(b.position, float)[:2]
+    belief = np.asarray(b.estimate.position, float)[:2]
+    e_truth = float(np.linalg.norm(truth - OPEN_GOAL))
+    e_belief = float(np.linalg.norm(belief - OPEN_GOAL))
+    print(f"\nmeasured: arrived in {elapsed:.1f} s (world clock); truth error {e_truth:.3f} m, belief error {e_belief:.3f} m", flush=True)
+    # Nav2 stops as soon as its BELIEF is inside its goal tolerance, so that is what the tolerance
+    # bounds (0.195 to 0.220 m in three runs); the truth may be off by the belief's own error
+    # besides (0.220 to 0.254 m: at most 0.035 m more).
+    expect(b.estimate).to_be_near((*OPEN_GOAL, 0.0), tol=GOAL_TOL, timeout=5)  # the base frame is 1 cm above the floor
+    assert e_truth <= GOAL_TOL + BELIEF_ERROR
+
+
+def test_nav2_says_it_arrived_at_a_goal_inside_a_wall_and_the_robot_is_not_there(driven):
+    """A goal inside a wall of the sandbox. Nav2 does not refuse it: it plans to the nearest free
+    space, stops about 0.4 m short (three runs, truth and belief agreeing) and answers SUCCEEDED.
+    Nav2's answer is not the outcome: the test of where the robot is fails."""
+    b = driven.robot.base
+    b.go_to(WALL, yaw=0.0, timeout=90)  # no ActionError: Nav2 reports success
+    short = float(np.linalg.norm(np.asarray(b.position, float)[:2] - WALL))
+    print(f"\nmeasured: Nav2 succeeded {short:.3f} m from the goal", flush=True)
+    with pytest.raises(rw.errors.ExpectationError, match="to_be_near"):
+        expect(b).to_be_near((*WALL, 0.0), tol=GOAL_TOL, timeout=2)
+    assert short > GOAL_TOL
+
+
+def test_a_goal_off_the_map_is_refused_with_nav2s_reason(driven):
+    with pytest.raises(ActionError) as e:
+        driven.robot.base.go_to(OFF_MAP, yaw=0.0, timeout=90)
+    print(f"\nmeasured: ActionError: {e.value}", flush=True)
+    assert "navigate_to_pose" in str(e.value)

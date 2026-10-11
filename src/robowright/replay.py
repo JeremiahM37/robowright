@@ -9,6 +9,7 @@ exactly at which step.
 
 from __future__ import annotations
 
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,28 +27,43 @@ class ReplayResult:
     first_divergent_step: int | None  # first step above tolerance, if any
     qpos_error: np.ndarray = field(repr=False)
     object_error: np.ndarray = field(repr=False)
+    notes: list[str] = field(default_factory=list)  # what was not replayed, or differs, besides the states
 
     @property
     def identical(self) -> bool:
         return self.max_qpos_error == 0.0 and self.max_object_error == 0.0
 
+    @property
+    def matches(self) -> bool:
+        return self.first_divergent_step is None
+
     def summary(self) -> str:
         if self.identical:
-            return f"replayed {self.steps} steps: bit-identical"
-        div = "" if self.first_divergent_step is None else f", first divergence above tolerance at step {self.first_divergent_step}"
-        return (
-            f"replayed {self.steps} steps: max joint error {self.max_qpos_error:.2e} rad, "
-            f"max object error {self.max_object_error:.2e} m{div}"
-        )
+            text = f"replayed {self.steps} steps: bit-identical"
+        else:
+            div = "" if self.first_divergent_step is None else f", first divergence above tolerance at step {self.first_divergent_step}"
+            text = (
+                f"replayed {self.steps} steps: max joint error {self.max_qpos_error:.2e} rad, "
+                f"max object error {self.max_object_error:.2e} m{div}"
+            )
+        verdict = "final state matches the recorded one" if self.matches else "MISMATCH: the replayed run diverged from the recorded one"
+        return "\n".join([text, verdict, *(f"note: {n}" for n in self.notes)])
 
 
 def _is_edit(e) -> bool:
     return e["type"] == "edit" or (e["type"] == "fault" and e["name"] == "WeakJoint")
 
 
-def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1e-6) -> ReplayResult:
+def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1e-6, make_env=None) -> ReplayResult:
+    """Run a trace again and compare every step with the recorded one.
+
+    An attached run is rebuilt by calling ``make_env()`` (default: ``gymnasium.make`` with the recorded id and kwargs),
+    then its recorded resets, actions and the calls the test made are repeated on it. ``backend`` does not apply.
+    """
     tr = trace if isinstance(trace, Trace) else Trace(trace)
     meta = tr.meta
+    if "attached" in meta:
+        return _replay_attached(tr, make_env, tol)
     from . import fidelity
 
     with fidelity.using(meta.get("fidelity")):  # rebuilt as it ran
@@ -104,3 +120,125 @@ def _apply(b, events):
                 yaw = e["args"].get("yaw", 0.0)
                 b.set_base_pose(e["args"]["base_pos"], (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
             b.set_joint_positions(np.array(e["args"]["q"]))
+
+
+def schedule(tr: Trace) -> list[dict]:
+    """An attached run as the calls that made it, in order: resets, the environment's steps, and the test's own calls.
+
+    Physics step ``s`` happens after step ``s-1`` and before ``s+1``; an event recorded at step ``c`` happens after
+    step ``c``. Ties keep the order they were recorded in. Expectations and invariants are kept at the step where
+    they were recorded, so an expectation is checked against the same state it passed in.
+    """
+    items: list[tuple[tuple, dict]] = []
+    for i, e in enumerate(tr.events):
+        if e["type"] == "log" and e["name"] == "env.reset":
+            items.append(((e["step"], 0, i), {"kind": "reset", "args": e.get("args") or {}}))
+        elif e["type"] in ("expect", "invariant", "edit", "fault"):
+            items.append(((e["step"], 0, i), {"kind": "event", "event": e}))
+    for s, kind, row in tr.controls:
+        items.append(((s - 1, 1, s), {"kind": "control", "observe": kind == "observe", "action": row}))
+    return [item for _, item in sorted(items, key=lambda kv: kv[0])]
+
+
+def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
+    from .attached import attach, model_bytes
+    from .world import Settings
+
+    if not (tr.meta.get("env") or {}).get("actions_recorded", True):
+        raise ValueError(f"this run cannot be replayed: {tr.meta['env']['note']}")
+    if make_env is None:
+        make_env = _make_from_spec(tr)
+    env = make_env()
+    world = attach(env, seed=tr.meta["seed"], settings=Settings(trace="off"))
+    notes: list[str] = []
+    skipped: set[str] = set()
+    names = tr.meta["object_names"]
+    a = tr.arrays
+    n = len(a["t"])
+    qerr, oerr = np.zeros(n), np.zeros(n)
+
+    def compare(i: int) -> None:
+        if i >= n:
+            return
+        qerr[i] = float(np.max(np.abs(world.backend.qpos() - a["qpos"][i])))
+        if names and backends.GROUND_TRUTH in world.backend.capabilities:
+            pos = np.array([world.backend.object_pose(nm)[0] for nm in names])
+            oerr[i] = float(np.max(np.linalg.norm(pos - a["obj_pos"][i], axis=1)))
+
+    try:
+        stored = _stored_model(tr)
+        if stored is not None and model_bytes(world.backend.model) != stored:
+            notes.append("the environment as rebuilt has a different MuJoCo model from the recorded one (another version or options)")
+        rows = iter([row for _, kind, row in tr.controls if kind == "action"])
+        compared_start = False
+        for item in schedule(tr):
+            if item["kind"] == "reset":
+                kw = {"seed": item["args"].get("seed")}
+                if "options" in item["args"]:
+                    kw["options"] = item["args"]["options"]
+                env.reset(**kw)
+                if not compared_start:
+                    compare(world.step_count)  # the start state, before any step
+                    compared_start = True
+            elif item["kind"] == "control":
+                if item["observe"]:
+                    world.observe()
+                else:
+                    env.step(next(rows))
+                compare(world.step_count)
+            else:
+                e = item["event"]
+                if e["type"] == "edit" and e["name"] == "move_object":
+                    world.move_object(e["args"]["object"], e["args"]["pos"], e["args"]["quat"])
+                elif e["type"] == "edit" and e["name"] == "set_joint":
+                    world.set_joint(e["args"]["joint"], e["args"]["value"])
+                elif e["type"] == "fault" and e["name"] == "Push":
+                    world.faults.push(e["args"]["object"], e["args"]["force"], at=e["args"]["at"], duration=e["args"]["duration"])
+                elif e["type"] == "fault" or (e["type"] == "edit"):
+                    skipped.add(f"{e['type']} {e['name']}")
+        if skipped:
+            notes.append("not replayed: " + ", ".join(sorted(skipped)))
+        notes.append("expectations and invariants are not checked again: only the states are compared")
+        bad = np.nonzero((qerr > tol) | (oerr > tol))[0]
+        return ReplayResult(n - 1, float(qerr.max()), float(oerr.max()), int(bad[0]) if bad.size else None, qerr, oerr, notes)
+    finally:
+        world.close(failed=False)
+
+
+def make_spec_call(spec: dict) -> tuple[str, dict]:
+    """The id and keyword arguments ``gymnasium.make`` needs to rebuild a recorded environment in a fresh process.
+
+    A third-party environment is named ``"<module>:<id>"``: gymnasium imports that module first, which registers the
+    environment. Without it a fresh process only knows ids that something else has already imported.
+    """
+    env_id = spec["id"]
+    entry = spec.get("entry_point")
+    if isinstance(entry, str) and ":" in entry:
+        module = entry.split(":", 1)[0].split(".", 1)[0]
+        if module != "gymnasium":
+            env_id = f"{module}:{env_id}"
+    kwargs = dict(spec.get("kwargs") or {})
+    if spec.get("max_episode_steps") != spec.get("registered_max_episode_steps"):
+        kwargs["max_episode_steps"] = spec.get("max_episode_steps")  # the make() passed a limit other than the default
+    return env_id, kwargs
+
+
+def _make_from_spec(tr: Trace):
+    env_rec = tr.meta.get("env") or {}
+    spec = env_rec.get("spec")
+    if not spec or not spec.get("reproducible") or not env_rec.get("actions_recorded", True):
+        why = env_rec.get("note") or (spec or {}).get("reason") or "this run's environment was not made by gymnasium.make"
+        raise ValueError(f"cannot rebuild this run's environment ({why}): pass make_env=... that builds it the way the run did")
+    try:
+        import gymnasium
+    except ImportError as e:
+        raise ValueError(
+            f"this run's environment is {spec['id']!r}, rebuilt with gymnasium, which is not installed: install it or pass make_env=..."
+        ) from e
+    env_id, kwargs = make_spec_call(spec)
+    return lambda: gymnasium.make(env_id, **kwargs)
+
+
+def _stored_model(tr: Trace) -> bytes | None:
+    with zipfile.ZipFile(tr.path) as z:
+        return z.read("model.mjb") if "model.mjb" in z.namelist() else None

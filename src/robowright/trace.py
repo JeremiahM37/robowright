@@ -268,10 +268,26 @@ class Trace:
             self.state0 = np.load(io.BytesIO(z.read("state0.npy"))) if "state0.npy" in z.namelist() else None
             self.contacts = json.loads(z.read("contacts.json"))
             self.frame_names = sorted(n for n in z.namelist() if n.startswith("frames/"))
+            # Attached runs only: every physics step as the environment's loop took it (see attached.AttachedWorld).
+            self.actions = None
+            if "actions.npz" in z.namelist():
+                with z.open("actions.npz") as f:
+                    arr = np.load(io.BytesIO(f.read()))
+                    self.actions = {k: arr[k] for k in arr.files}
 
     @property
     def events(self) -> list[dict]:
         return self.meta["events"]
+
+    @property
+    def controls(self) -> list[tuple[int, str, np.ndarray | None]]:
+        """Each physics step of an attached run in order: ``(step, "action", action)`` for ``env.step(action)`` made
+        by the test's loop, or ``(step, "observe", None)`` for a step the loop took below ``env.step``."""
+        if not self.actions:
+            return []
+        rows = iter(self.actions["action"])
+        steps, observe = self.actions["steps"], self.actions["observe"]
+        return [(int(s), "observe", None) if o else (int(s), "action", next(rows)) for s, o in zip(steps, observe)]
 
     @property
     def failed(self) -> bool:

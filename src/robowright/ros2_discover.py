@@ -29,6 +29,9 @@ from dataclasses import dataclass, field
 # How robowright drives each kind of controller (see robowright.backends.ros2_backend)
 _ARM = (("JointTrajectoryController", "trajectory"), ("JointGroupPositionController", "position"))
 _GRIPPER = (("GripperActionController", "action"), ("ParallelGripper", "action"))
+# A mobile base's velocity command, and the action Nav2 serves its goals on (see robowright.backends.ros2_backend)
+CMD_VEL_TYPES = ("geometry_msgs/msg/Twist", "geometry_msgs/msg/TwistStamped")
+NAVIGATE_TYPE = "nav2_msgs/action/NavigateToPose"
 
 
 @dataclass
@@ -82,7 +85,23 @@ class Graph:
     frames: list[str] = field(default_factory=list)  # TF frames seen
     topics: dict[str, list[str]] = field(default_factory=dict)  # every topic and its types
     gazebo: list[str] = field(default_factory=list)  # Gazebo worlds on this machine's gz transport
+    cmd_vel: tuple[str, str, int] | None = None  # the base's velocity command: (topic, type, subscribers)
+    navigate: str | None = None  # the navigation action's name, when a NavigateToPose server is there
     notes: list[str] = field(default_factory=list)
+
+
+def find_cmd_vel(topics: dict[str, list[str]], subscribers: dict[str, int], name: str) -> tuple[str, str] | None:
+    """``(topic, type)`` for the velocity command ``name`` when something subscribes to it and its
+    type is one robowright publishes (Jazzy's stacks differ: Twist or TwistStamped), else None."""
+    types = [t for t in topics.get(name, []) if t in CMD_VEL_TYPES]
+    if not types or not subscribers.get(name):
+        return None
+    return name, types[0]
+
+
+def find_navigate(actions: dict[str, list[str]], name: str) -> str | None:
+    """``name`` when a server for ``nav2_msgs/action/NavigateToPose`` is on it, else None."""
+    return name if NAVIGATE_TYPE in actions.get(name, []) else None
 
 
 def _topic(ns: str, name: str) -> str:
@@ -92,6 +111,7 @@ def _topic(ns: str, name: str) -> str:
 def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> Graph:
     """Look at the ROS graph under ``namespace`` for up to ``timeout`` seconds (wall clock)."""
     import rclpy
+    import rclpy.action as rclpy_action
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile
     from sensor_msgs.msg import JointState
@@ -129,6 +149,8 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
         node.create_subscription(String, g.description_topic, on_description, latched)
         node.create_subscription(JointState, g.joint_states, on_joints, 50)
         frames: set[str] = set()
+        cmd_name = _topic(namespace, "cmd_vel")
+        nav_name = _topic(namespace, "navigate_to_pose")
         with contextlib.suppress(ImportError):
             from tf2_msgs.msg import TFMessage
 
@@ -140,16 +162,27 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
             node.create_subscription(TFMessage, "/tf_static", on_tf, latched)
         deadline = time.monotonic() + timeout
         # Discovery takes a moment; controllers are asked for once their manager is seen
+        settled = time.monotonic()
         while time.monotonic() < deadline:
-            g.topics = {name: list(types) for name, types in node.get_topic_names_and_types()}
+            topics = {name: list(types) for name, types in node.get_topic_names_and_types()}
+            if topics.keys() != g.topics.keys():
+                settled = time.monotonic()
+            g.topics = topics
+            g.navigate = find_navigate({n: list(t) for n, t in rclpy_action.get_action_names_and_types(node)}, nav_name)
             if g.manager is None:
                 g.manager = _manager(node, namespace)
             if g.manager and not g.controllers:
                 g.controllers = _controllers(node, g.manager, deadline)
-            if g.description and len(stamps) > 20 and (g.controllers or time.monotonic() > deadline - timeout / 2):
+            # Each process in the stack is discovered on its own: a graph still growing (the bridge that
+            # publishes /clock, seen after the controller manager) is not yet the graph to report
+            quiet = time.monotonic() - settled > 0.5
+            if g.description and len(stamps) > 20 and quiet and (g.controllers or time.monotonic() > deadline - timeout / 2):
                 break
             time.sleep(0.1)
         g.sim_time = node.count_publishers("/clock") > 0
+        subs = node.count_subscribers(cmd_name)
+        if (found := find_cmd_vel(g.topics, {cmd_name: subs}, cmd_name)) is not None:
+            g.cmd_vel = (*found, subs)
         g.frames = sorted(frames - {""})
         if len(stamps) > 1:
             g.joint_rate = (len(stamps) - 1) / (stamps[-1] - stamps[0])
@@ -241,9 +274,18 @@ def suggest(g: Graph, arm_joints: list[str] | None = None) -> dict:
     else:
         idle = [c.name for c in g.controllers if not c.active and c.interface and c.interface[0] == "arm"]
         why = f"{', '.join(idle)} not active" if idle else "none robowright can drive is loaded"
-        if g.controllers:
-            g.notes.append(f"no active arm controller ({why}): robowright can observe (command = false)")
-        out["command"] = False
+        # A mobile base has no arm controller by design: it is driven through its command topic or navigation action
+        if not (g.cmd_vel or g.navigate):
+            if g.controllers:
+                g.notes.append(f"no active arm controller ({why}): robowright can observe (command = false)")
+            out["command"] = False
+    base = {}
+    if g.cmd_vel:
+        base["cmd_vel"] = g.cmd_vel[0]
+    if g.navigate:
+        base["navigate"] = g.navigate
+    if base:
+        out["base"] = base  # a mobile base: the frames it localizes in are the project's to give ([ros2] base)
     grips = [c for c in g.controllers if c.active and c.interface and c.interface[0] == "gripper"]
     if grips:
         out["gripper"] = {"controller": grips[0].name, "interface": grips[0].interface[1]}
@@ -275,6 +317,11 @@ def report(g: Graph, settings: dict | None = None) -> str:
     lines.append(f"clock: {'simulation time (/clock is published)' if g.sim_time else 'wall clock (no /clock)'}")
     if g.gazebo:
         lines.append(f"Gazebo: world {', '.join(g.gazebo)}")
+    if g.cmd_vel:
+        topic, typ, subs = g.cmd_vel
+        lines.append(f"base command: {topic} ({typ}, {subs} subscriber{'s' if subs != 1 else ''})")
+    if g.navigate:
+        lines.append(f"navigation: {g.navigate} (nav2_msgs/action/NavigateToPose)")
     if g.frames:
         shown = ", ".join(g.frames[:12]) + (f", ... ({len(g.frames)} in all)" if len(g.frames) > 12 else "")
         lines.append(f"TF frames: {shown}")

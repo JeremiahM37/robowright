@@ -143,7 +143,10 @@ def open_floor(*objects: ObjectSpec, cameras=None, robot: str = "go2", **kw) -> 
 def default_scene(robot: str = "so101") -> SceneSpec:
     from . import robots
 
-    return open_floor(robot=robot) if robots.get(robot).family == "legged" else tabletop(robot=robot)
+    family = robots.get(robot).family
+    if family == "mobile":  # a wheeled robot's world is its floor and whatever is put on it: no table, no arm to frame
+        return open_floor(robot=robot)
+    return open_floor(robot=robot) if family == "legged" else tabletop(robot=robot)
 
 
 def default_camera(robot: str = "so101") -> CameraSpec:
@@ -151,6 +154,9 @@ def default_camera(robot: str = "so101") -> CameraSpec:
     from . import robots
 
     m = robots.get(robot)
+    if m.family == "mobile":  # a few body lengths back, looking at where the base stands
+        d = max(1.5, 4.0 * m.stand_height)
+        return CameraSpec("front", pos=(0.7 * d, -0.7 * d, 0.6 * d), lookat=(0.0, 0.0, 0.5 * m.stand_height), fovy=45.0)
     if m.family == "legged":
         h = m.stand_height
         if "humanoid" in m.tags:  # tall and narrow: a level view of the whole height

@@ -156,6 +156,17 @@ class Expectation:
     def to_have_position(self, xyz, tol: float = 0.01, **kw):
         return self.to_be_near(Point(xyz), tol, **kw)
 
+    def to_have_heading(self, yaw: float, tol: float = 0.05, *, timeout=None, hold=0.0):
+        """Facing ``yaw`` (radians, about the vertical axis) to within ``tol``: a mobile robot's base."""
+        if not hasattr(self.subject, "yaw"):
+            raise TypeError(f"to_have_heading needs a base or a body with a yaw, got {self.subject!r}")
+
+        def check():
+            d = abs(float(np.arctan2(np.sin(self.subject.yaw - yaw), np.cos(self.subject.yaw - yaw))))
+            return d <= tol, f"{self.subject.name} heading {np.degrees(self.subject.yaw):.1f} deg, target {np.degrees(yaw):.1f} deg"
+
+        return self._run("to_have_heading", check, timeout, hold, {"yaw": yaw, "tol": tol})
+
     # topic matchers --------------------------------------------------------------
     def to_publish(self, hz: float | None = None, *, tol: float = 0.25, timeout=None, hold=0.0):
         """A ROS topic publishes (at ``hz``, within ``tol`` as a fraction, if given), measured over
