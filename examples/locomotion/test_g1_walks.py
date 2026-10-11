@@ -23,6 +23,10 @@ import unitree_rl_gym as ug  # noqa: E402  (this directory)
 import robowright as rw  # noqa: E402
 from robowright import expect  # noqa: E402
 
+# One worker for these under pytest-xdist: each worker that ran one loaded torch and the robots'
+# meshes (4 GB), and sixteen of them ran a 40 GB machine out of memory.
+pytestmark = pytest.mark.xdist_group("unitree_rl_gym")
+
 WALK_SECONDS = 10.0
 SHOVE_AT = 5.0  # seconds into the walk
 ROBOTS = ("g1.yaml", "h1.yaml", "h1_2.yaml")
