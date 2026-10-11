@@ -258,7 +258,10 @@ def test_robowright_picks_a_cube_with_kinovas_gripper_in_gazebo(scene_world):
     # Lifted off the floor, with the hand: Gazebo has the cube at the TCP, and the fingers stopped
     # on it (an opening between the two ends) rather than closing on nothing
     assert cube.position[2] > 0.0125 + 0.03
-    assert np.linalg.norm(cube.position - r.tcp.position) < 0.01
+    # In the hand, and staying there. Where between the Robotiq's pads the cube ends up varies with
+    # Gazebo's run: 5 to 16 mm from the TCP in 7 runs, always above it (the pads close in an arc and
+    # the cube rides up them), so this asks for "within the pads' length", not for a point.
+    expect(cube).to_be_near(r.tcp, tol=0.03, hold=1.0, timeout=3)
     assert 0.1 < r.gripper.opening < 0.9
     # The ROS 2 backend reports no contacts, so to_be_holding takes robowright's fallback for hardware:
     # the jaws were told to close and stopped short, and the cube is within reach of the TCP by

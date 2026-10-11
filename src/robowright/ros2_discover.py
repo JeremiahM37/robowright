@@ -234,6 +234,8 @@ def suggest(g: Graph, arm_joints: list[str] | None = None) -> dict:
     grips = [c for c in g.controllers if c.active and c.interface and c.interface[0] == "gripper"]
     if grips:
         out["gripper"] = {"controller": grips[0].name, "interface": grips[0].interface[1]}
+        if "ParallelGripper" in grips[0].type:  # its action is ParallelGripperCommand, not GripperCommand
+            out["gripper"]["parallel"] = True
     elif "arm" in out:
         arm_set = set(arms[0].joints)
         out["gripper"] = {"interface": "with_arm" if arm_joints and len(arm_set) > len(arm_joints) else "none"}

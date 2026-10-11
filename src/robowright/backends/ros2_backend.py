@@ -280,6 +280,8 @@ class Ros2Backend(Backend):
                 grip["interface"] = "with_arm"
             elif hands:
                 grip.update(controller=hands[0].name, interface=hands[0].interface[1])
+                if "ParallelGripper" in hands[0].type:
+                    grip["parallel"] = True
             else:
                 grip["interface"] = "none"  # read, never driven: nothing in the stack drives it
         self._heard(arm)

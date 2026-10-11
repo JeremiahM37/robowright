@@ -314,6 +314,7 @@ class Robot:
         # After a side pick: (approach, yaw, how high above a surface the TCP sets the object down:
         # the object's underside, or a tilted hand's lowest point, whichever is further below it).
         self._held_from = None
+        self._picked = None  # the object the last pick took, until it is set down
         self._grip_open = 1.0  # the opening the held object was taken with, to let go of it with
 
     @property
@@ -805,6 +806,7 @@ class Robot:
 
     def _check_held(self, o):
         w = self.world
+        self._picked = o.name if isinstance(o, ObjectHandle) else None
         if isinstance(o, ObjectHandle) and w.has_contacts:
             if not w.run_until(lambda: self.gripper.holding() == o.name, 0.2):
                 fixed, moving = self.gripper.touching()
@@ -853,6 +855,10 @@ class Robot:
         # once above the spot: on the way the wrist can turn half round (the jaws grip either
         # way up), and the offset with it.
         held = self.gripper.holding() if self.world.has_contacts and self.world.has_ground_truth else None
+        if held is None and self._picked and self.world.has_ground_truth and not self.world.has_contacts:
+            # No contacts to ask (a robot in Gazebo): what was picked, if it is still at the hand
+            near = np.linalg.norm(self.world.scene[self._picked].position - self.tcp.position) < 0.06
+            held = self._picked if near else None
         if held is not None:
             off = (self.world.scene[held].position - self.tcp.position)[:2]
             if np.linalg.norm(off) > 0.003:
@@ -866,6 +872,7 @@ class Robot:
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper, opening)
         self._grip_open = 1.0
+        self._picked = None
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
 
     def _surface_under(self, p) -> float:
