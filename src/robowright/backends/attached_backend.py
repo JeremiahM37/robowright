@@ -143,6 +143,10 @@ class AttachedBackend(AttachedEngine):
         return sorted(out)
 
     # --- joints -------------------------------------------------------------------------
+    def joint_names(self) -> list[str]:
+        out = [mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)]
+        return [n for n in out if n]
+
     def joint_qadr(self, name: str) -> int:
         """The qpos address of a hinge or slide joint, for the core's ``joint()``; the errors name what exists."""
         j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
