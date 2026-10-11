@@ -94,3 +94,15 @@ def test_a_webots_run_replays_in_a_fresh_process_and_agrees_with_the_recording(t
     assert r["steps"] == REPLAY_STEPS
     assert max(r["max_body_error"], r["max_body_angle"]) <= 1e-6, r["summary"]
     assert "within tolerance" in r["summary"]
+
+
+def test_codegen_refuses_a_webots_run_with_the_reason(tmp_path):
+    """The recorded run is needed for the refusal: a generated test would start a Supervisor the trace does not describe."""
+    from robowright.codegen import generate
+
+    if not os.environ.get("DISPLAY"):
+        pytest.skip("needs an X display: set DISPLAY (for example to an Xvfb started with -nolisten tcp)")
+    _child("record_child", str(tmp_path), str(tmp_path / "trace.txt"))
+    trace = (tmp_path / "trace.txt").read_text()
+    with pytest.raises(ValueError, match="a test cannot be generated for a webots run yet"):
+        generate(trace)

@@ -387,6 +387,8 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
     if not env_rec.get("actions_recorded", True):
         raise ValueError(f"this run cannot be turned into a test: {env_rec.get('note')}")
     engine = (m.get("attached") or {}).get("engine")
+    if engine == "webots":  # the test would need engine="webots" and its own Supervisor process: not written yet
+        raise ValueError("a test cannot be generated for a webots run yet: replay it with make_env=... (robowright replay --factory)")
     stepped = engine in STEPPED  # a Drake or Genesis simulation: the test steps it through world.step, as the run did
     name = _test_name(m, test_name)
     spec = env_rec.get("spec")
