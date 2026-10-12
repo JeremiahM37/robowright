@@ -126,9 +126,12 @@ class Arm:
         # floor under any robot): a joint-space line through it is not sent. The planner's path goes
         # round it, or the move says why it cannot. (Unplanned, a MuJoCo arm whose shoulder swings
         # down through the floor was pushed into it until the move timed out.)
-        planner = r.planner
-        planner.sync(r.gripper.holding() if self.world.has_contacts and r.model.has_gripper else None)
-        hits = planner.line_hits(start, goal)
+        # (A ROS 2 robot with no fixtures has nothing to plan round, and no object poses to plan with.)
+        hits = ()
+        if self.world.backend.name != "ros2" or getattr(self.world.backend, "fixtures", ([], []))[0]:
+            planner = r.planner
+            planner.sync(r.gripper.holding() if self.world.has_contacts and r.model.has_gripper else None)
+            hits = planner.line_hits(start, goal)
         if hits:
             try:
                 path = planner.plan(start, goal)

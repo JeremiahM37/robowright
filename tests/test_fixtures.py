@@ -50,5 +50,6 @@ def test_no_fixtures_means_nothing_to_check(world):
     r, a, b = _line(world)
     world.backend.fixtures = ([], [])  # the MuJoCo backend object is reused across worlds: say what this one has
     r._planner = None
-    assert r.planner.fixture_names == {}
+    r.planner.sync()
+    assert set(r.planner.fixture_names.values()) == {"the floor"}  # every world has a floor, and only that
     assert r.planner.line_hits(a, b) == set()

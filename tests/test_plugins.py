@@ -46,8 +46,10 @@ def installed(monkeypatch):
     plugins.plugin_robots.cache_clear()
     robots.REGISTRY.clear()
     robots.REGISTRY.update(before[0])
-    base._REGISTRY.clear()
-    base._REGISTRY.update(before[1])
+    # Only what the pretend packages added goes: an engine first imported during the test registered
+    # itself on import, and would not again (its module stays imported).
+    for added in set(base._REGISTRY) - set(before[1]) - set(base._MODULES):
+        del base._REGISTRY[added]
 
 
 def test_an_engine_from_another_package_runs_robot_tests(installed):
@@ -109,13 +111,13 @@ def _project(tmp_path, config: str, name="robowright.toml") -> Path:
 def test_a_project_names_its_robots_in_robowright_toml(tmp_path, monkeypatch):
     """No code: a name, a model file relative to the settings, and fields robowright would
     otherwise work out (here its title, and its home height)."""
-    _project(tmp_path, '[robots.bench_arm]\nfile = "models/so101/so101.xml"\ntitle = "Bench arm"\nhome = [0.2, 0.0, 0.1]\n')
+    _project(tmp_path, '[robots.bench_arm]\nfile = "models/so101/so101.xml"\ntitle = "Bench arm"\nhome = [0.2, 0.0, 0.06]\n')
     monkeypatch.chdir(tmp_path / "models")  # found from below, too
     assert plugins.project_robots() == {
-        "bench_arm": (str(tmp_path / "models/so101/so101.xml"), {"title": "Bench arm", "home": (0.2, 0.0, 0.1)})
+        "bench_arm": (str(tmp_path / "models/so101/so101.xml"), {"title": "Bench arm", "home": (0.2, 0.0, 0.06)})
     }
     m = robots.get("bench_arm")
-    assert (m.title, m.home) == ("Bench arm", (0.2, 0.0, 0.1))
+    assert (m.title, m.home) == ("Bench arm", (0.2, 0.0, 0.06))
 
 
 def test_pyproject_can_hold_the_settings(tmp_path, monkeypatch):

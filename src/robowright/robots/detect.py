@@ -1442,9 +1442,24 @@ def _no_mounting(model: RobotModel, mount: _Mount, keep_home: bool) -> str:
     )
 
 
-def _bad_home(home, base, mount: _Mount, base_x: float, yaw: float) -> str:
+def _check_home(model: RobotModel, mount: _Mount, base, yaw: float) -> None:
+    """Refuse a home the user gave that the arm cannot reach from ``base``, at any grip angle. Only
+    reach is checked: a home that works is the user's to choose (a base on a table 1 m up, a low home
+    over the task area), so the floor and the task area's own rules are not applied to it."""
+    base = np.asarray(base, float)
+    at = _local(np.asarray(model.home, float) - (0.0, base[1], base[2]), float(base[0]), yaw)
+    err = min(mount.kin.ik(at, s, mount.down, yaw=y, rest=mount.seed)[1] for y in (-yaw, None) for s in mount.seeds)
+    if err > 1e-3:
+        raise DetectionError(_bad_home(model.home, base, mount, float(base[0]), yaw, err))
+
+
+def _bad_home(home, base, mount: _Mount, base_x: float, yaw: float, err: float) -> str:
     """The message for a home the arm cannot reach, with the nearest one it can."""
-    err = mount.miss(_local(home, base_x, yaw), yaw)
+    if base[1] or base[2]:  # the search below is over the task area, for a base on the floor on the x axis
+        return (
+            f"home pose {tuple(float(v) for v in home)} unreachable at base_pos={tuple(float(v) for v in base)} "
+            f"(closest {err * 1000:.1f} mm)"
+        )
     near, _, closest = _nearest_home(mount, base_x, yaw, home)
     if near is not None:
         where = f"the nearest home it reaches is home={near}"
@@ -1473,9 +1488,7 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
     here, not a failure later, with the nearest home it does reach."""
     mount = _Mount(model)
     if keep_base and keep_home:
-        base_x, yaw = float(model.base_pos[0]), float(model.base_yaw)
-        if not mount.reaches(_local(model.home, base_x, yaw), yaw):
-            raise DetectionError(_bad_home(model.home, model.base_pos, mount, base_x, yaw))
+        _check_home(model, mount, model.base_pos, float(model.base_yaw))
         return model
 
     base, yaw = np.asarray(model.base_pos, float), float(model.base_yaw)
@@ -1501,9 +1514,7 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
             score = {
                 x: sum(mount.reaches(_local(p, x, y), y) for p in _AROUND)
                 for x in xs
-                if clear(x, y)
-                and all(mount.reaches(_local(p, x, y), y) for p in _NEEDED)
-                and (not keep_home or mount.reaches(_local(model.home, x, y), y))
+                if clear(x, y) and all(mount.reaches(_local(p, x, y), y) for p in _NEEDED)
             }
             if not score:
                 continue
@@ -1543,7 +1554,9 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
             f" from {run[-1]:+.3f} to {run[0]:+.3f})"
         )
     home = model.home
-    if not keep_home:
+    if keep_home:
+        _check_home(model, mount, base, yaw)
+    else:
         home = next(((0.2, 0.0, h) for h in _HOME_HEIGHTS if mount.reaches(_local((0.2, 0.0, h), base[0], yaw), yaw)), None)
         if home is None:
             near, _, closest = _nearest_home(mount, base[0], yaw, (0.2, 0.0, 0.15))

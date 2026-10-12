@@ -235,11 +235,16 @@ def test_tcp_agrees_with_tf_while_the_arm_moves(controller):
         r = w.robot
         errs = []
         for _ in range(6):
-            # Both at the same Gazebo time: robowright's TCP and TF's transform at that instant. The two
-            # streams reach this node at different delays, which at the arm's speed is millimetres: TF's
-            # latest value and robowright's latest joints are not the same instant (measured, 15 mm at speed).
-            t_read = tf.now_ns()
-            tcp = np.asarray(r.tcp.position, float)
+            # Both at the same Gazebo time: robowright's TCP, and TF's transform at the stamp of the joint state
+            # that TCP was computed from. (Asking TF for "now" instead compares joints and TF from different
+            # instants, since the two streams reach this node at different delays: up to 20 mm at the arm's speed
+            # was measured.) The stamp is read before and after, so a joint state arriving between
+            # the two is not mistaken for the one the TCP came from.
+            while True:
+                t_read = w.backend.joints_stamp_ns
+                tcp = np.asarray(r.tcp.position, float)
+                if w.backend.joints_stamp_ns == t_read:
+                    break
             p, rot = tf.pose("fr3_link8", at_ns=t_read)
             tcp_tf = p + rot @ r.model.derived.tcp_offset
             errs.append(float(np.linalg.norm(tcp_tf - tcp)))

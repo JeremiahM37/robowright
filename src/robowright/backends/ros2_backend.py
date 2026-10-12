@@ -175,6 +175,7 @@ class Ros2Backend(Backend):
             self.node.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, True)])
         self._lock = threading.Lock()
         self._pos: dict[str, float] = {}
+        self.joints_stamp_ns = 0  # the header stamp of the joint state the readings are from (0: unstamped)
         self._vel: dict[str, float] = {}
         self._fresh = threading.Event()
         ns = cfg["namespace"]
@@ -375,6 +376,7 @@ class Ros2Backend(Backend):
 
     def _on_joints(self, msg):
         with self._lock:
+            self.joints_stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
             for i, n in enumerate(msg.name):
                 if i < len(msg.position):
                     self._pos[n] = msg.position[i]
