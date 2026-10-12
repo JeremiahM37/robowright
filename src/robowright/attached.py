@@ -834,6 +834,12 @@ def _is_gymnasium_env(env) -> bool:
     return base is not None and isinstance(env, base)
 
 
+def _rng_seeded(env) -> bool:
+    """Whether a gymnasium environment's random generator has been seeded: a reset without a seed draws from it, and
+    an unseeded generator is seeded from the operating system, so such a reset starts somewhere a replay cannot know."""
+    return getattr(getattr(env, "unwrapped", env), "_np_random", None) is not None
+
+
 def _wrap_env(env, world: AttachedWorld) -> None:
     """Route the environment's own ``step`` and ``reset`` through the world. See the module docstring."""
     orig_step, orig_reset = env.step, env.reset
@@ -846,9 +852,15 @@ def _wrap_env(env, world: AttachedWorld) -> None:
         return world._physics_step(lambda: orig_step(*args, **kwargs), action=action)
 
     def reset(*args, **kwargs):
+        seed = kwargs.get("seed", args[0] if args else None)
+        if seed is None and world._resets_first and not _rng_seeded(env):
+            # The first reset of a gymnasium environment with no seed: its start is random, and the trace cannot say what it was.
+            world._note_unreplayable(
+                "the environment was first reset without a seed, so its start is random and cannot be repeated: "
+                "call env.reset(seed=...) (or vec.reset(seed=[...])) before the first step"
+            )
         out = orig_reset(*args, **kwargs)
         world._rebind(env)  # robosuite builds a new MjModel and MjData on every reset
-        seed = kwargs.get("seed", args[0] if args else None)
         options = kwargs.get("options", args[1] if len(args) > 1 else None)
         world._on_reset(seed, options)
         return out
