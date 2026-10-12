@@ -340,6 +340,15 @@ def launch(
     ``robot`` picks the robot for the default scene, or overrides ``scene.robot``. On ``ros2`` the
     default scene has no objects: the robot's world is the one its ROS 2 stack runs, and a scene with
     ``robot=None`` takes that robot too (``robot_options``: see ``ros2_scene``).
+
+    On a simulator robowright runs, the robot is placed at its home pose (``robot.reset_to()``).
     """
     scene = ros2_scene(scene, backend, robot, kw, robot_options)
-    return World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)
+    world = World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)
+    home = None if backend == "ros2" else getattr(world.robot, "reset_to", None)  # a mobile robot has none
+    if home is not None:
+        # The robot starts at its home pose, as in a test's ``world`` fixture: a model's zero pose is often lying
+        # flat (a UR5e's is, and a pick planned from there dragged its forearm across the floor). A robot behind
+        # ROS 2 is already where its own stack has it, and is never moved here.
+        home()
+    return world

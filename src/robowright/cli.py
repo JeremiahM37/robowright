@@ -397,7 +397,6 @@ def _sim(args, rest):
 
         robot = robots.load(robot).name
     w = rw.launch(default_scene(robot), backend=args.backend, seed=args.seed, settings=rw.Settings(trace="off", fidelity=args.fidelity))
-    w.robot.reset_to()
     print(f"{robot} on {args.backend} (fidelity {w.fidelity}), running in real time; Ctrl-C stops it")
     bridge = view = None
     try:

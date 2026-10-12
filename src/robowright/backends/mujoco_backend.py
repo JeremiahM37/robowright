@@ -62,9 +62,9 @@ def build_spec(spec: SceneSpec) -> mujoco.MjSpec:
     )
     mat = s.add_material(name="table", texrepeat=[8, 8], texuniform=True, specular=0.05, shininess=0.1)
     mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
-    wb.add_light(
-        pos=[0.3, -0.3, 1.5], dir=[-0.2, 0.2, -1], type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL, castshadow=1, diffuse=[0.5, 0.5, 0.5]
-    )
+    # A directional light: `type` from MuJoCo 3.3.3 on, the `directional` flag before it (gymnasium-robotics pins older).
+    kind = {"type": mujoco.mjtLightType.mjLIGHT_DIRECTIONAL} if hasattr(mujoco, "mjtLightType") else {"directional": True}
+    wb.add_light(pos=[0.3, -0.3, 1.5], dir=[-0.2, 0.2, -1], castshadow=1, diffuse=[0.5, 0.5, 0.5], **kind)
     s.add_texture(
         name="sky",
         type=mujoco.mjtTexture.mjTEXTURE_SKYBOX,

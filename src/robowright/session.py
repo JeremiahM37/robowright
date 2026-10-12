@@ -229,8 +229,6 @@ class Session:
             scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name (in Gazebo, any)
         self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings, **(ros2 or {}))
         self.world.source = "session"
-        if backend != "ros2":  # a robot behind ROS 2 is already where its own stack has it: never move it
-            self.world.robot.reset_to()
         if self.view is not None:
             self.view.watch(self.world)
         return self.snapshot()

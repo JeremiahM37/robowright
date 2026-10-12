@@ -268,17 +268,16 @@ def test_ros2_launch_has_no_objects_unless_asked_and_never_moves_the_robot(monke
     s = Session()
     assert s.launch(robot="so101", backend="ros2", ros2={"frame": "base_link"}) == "snap"
     assert made[-1].spec.objects == [] and made[-1].robot.resets == 0
-    s.launch(robot="so101", backend="mujoco")  # the simulators still start from the robot's start pose
-    assert made[-1].spec.objects and made[-1].robot.resets == 1
+    s.launch(robot="so101", backend="mujoco")  # rw.launch itself puts a simulated robot at its start pose
+    assert made[-1].spec.objects and made[-1].robot.resets == 0
     s.launch(robot="so101", backend="ros2", objects=[{"name": "tag", "kind": "box", "pos": [0.2, 0.0]}])
     assert [o.name for o in made[-1].spec.objects] == ["tag"]
 
-    seen = {}
-    monkeypatch.setattr(world_mod, "World", lambda spec, **kw: seen.update(spec=spec))
-    world_mod.launch(backend="ros2", robot="so101")
-    assert seen["spec"].objects == []
-    world_mod.launch(backend="mujoco")
-    assert seen["spec"].objects  # the default tabletop, as before
+    monkeypatch.setattr(world_mod, "World", lambda spec, **kw: _FakeWorld(spec))
+    w = world_mod.launch(backend="ros2", robot="so101")
+    assert w.spec.objects == [] and w.robot.resets == 0
+    w = world_mod.launch(backend="mujoco")
+    assert w.spec.objects and w.robot.resets == 1  # the default tabletop, and the robot at its start pose
 
 
 def test_generate_test_leaves_out_the_steps_that_failed_unless_asked(session, monkeypatch, tmp_path):

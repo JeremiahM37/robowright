@@ -85,3 +85,14 @@ def test_run_policy_stops_when_condition_met(quiet_world):
     w = quiet_world()
     r = w.robot.run_policy(lambda obs: obs["qpos"], until=lambda: w.time > 0.3, timeout=5)
     assert r.success and 0.3 < r.sim_seconds < 0.4
+
+
+@pytest.mark.parametrize("name", ["so101", "ur5e"])
+def test_a_plain_script_starts_at_home_and_can_pick(name):
+    """``rw.launch`` outside pytest, with no fixture: the robot is at its home pose, not the model's zero pose.
+    A UR5e's zero pose lies flat, and a pick planned from there dragged its forearm across the floor."""
+    with rw.launch(robot=name, settings=rw.Settings(trace="off")) as w:
+        r = w.robot
+        assert np.allclose(np.asarray(w.backend.qpos())[: r.n_arm], r.home_q, atol=1e-6)
+        r.pick(w.scene["cube"])
+        expect(r).to_be_holding(w.scene["cube"])
