@@ -71,7 +71,10 @@ robowright show-trace robowright-traces/*.zip --no-open -o trace.html
 
 The same file runs on other robots and engines (`--rw-robot panda,ur5e`, `--rw-backend
 mujoco,drake`), and a policy is judged as a rate across randomized scenes with
-`@pytest.mark.trials(20, min_success=0.9)`.
+`@pytest.mark.trials(20, min_success=0.9)`. A robot does not pass on every engine: the SO-101's
+scripted pick-and-place passes on MuJoCo and not reliably on PyBullet, so this example fails there, and
+[the matrix](#the-matrix-every-robot-on-every-engine) has every pair. Outside pytest, `import
+robowright as rw` and `rw.launch()` give the same world to a plain script.
 
 ### Test your ROS 2 stack
 
@@ -284,7 +287,7 @@ sideways speed, `drive(linear, angular, duration, lateral=...)`, with the wheel 
 the rollers. On Menagerie's Robot Soccer Kit the wheels turn at the commanded speeds and the map
 is right (the spins imply the commanded motion to 2%), but the rollers slip on MuJoCo's floor: the
 base moves 60% of a forward command, 43% sideways and 80% of a pivot, which is not explained. `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
-for tests that need no particular robot.
+for tests that need no particular robot: `rw.launch(robot=str(robowright.assets.diffdrive_mjcf()))`.
 
 ### Test in a simulation someone else built
 
@@ -394,7 +397,12 @@ vector env's own `step`. An invariant broken in one sub-environment is reported 
 an autoreset inside `step` is recorded as a reset on that index's trace. With 8 HalfCheetah
 sub-environments attaching costs 0.02 ms per vector step with traces off and 0.14 ms with them on
 (0.20 ms unattached). An `AsyncVectorEnv` is refused: its sub-environments live in worker
-processes, where robowright cannot read them. Vector runs are not replayed or written as tests.
+processes, where robowright cannot read them. Each sub-environment's trace replays and is written as a
+test like any other attached run, autoresets included (the same state at every step over three
+sub-environments, in both of gymnasium's autoreset modes). The first reset must be given a seed
+(`vec.reset(seed=0)`): gymnasium seeds an unseeded environment from the operating system, so such a
+run cannot be repeated, and `replay` and `codegen` refuse its trace and say so. The same holds for a
+single gymnasium environment.
 
 ### What a passing test tells you
 
@@ -605,7 +613,14 @@ $ pytest --rw-robot "ur_description/urdf/ur.urdf.xacro?ur_type=ur5e&name=ur5e"
 COLLADA visuals are left out and concave jaws stay hulls, both with a warning, and a xacro file
 is refused with how to expand it by hand.
 
-Each decision is listed by `--inspect`. `robowright robots add my_arm.xml --name my_arm`
+The arm is mounted, and its home chosen, where no link presses into the floor, checked with the
+engine's own contacts (a bounding-box check passed ROBOTIS's OMY with its shoulder 3 mm into the
+floor, and 9 of its 15 contract tests failed; all 15 pass now). A `home` you give is checked for reach
+when the robot is loaded. Grasps are straight down, and an arm whose wrist cannot point down at table
+height is refused with its reach and how near it gets: Seeed's reBot DevArm comes within about
+12 mm of the hardest task point from the best mounting found, which is not near enough to grasp.
+
+Each decision is listed by `--inspect`, with the arm's reach. `robowright robots add my_arm.xml --name my_arm`
 gives the robot a name in the project's `robowright.toml`, where any decision can be
 overridden, and detection works from what is given (a model whose gripper range is a
 placeholder full turn, say, is read once `gripper_open` and `gripper_closed` say where it
@@ -979,6 +994,7 @@ world.faults.action_delay(steps=3)  # 60 ms command latency
 world.faults.weak_joint("shoulder_lift", 0.3)  # a tired servo
 world.faults.push("cube", force=(0, 1.5, 0), duration=0.1)  # now; at=world.time + 0.8 schedules it into the next motion
 world.faults.camera_dropout(p=0.1)
+world.faults.push("robot", force=(0, 40, 0), duration=0.1)  # a legged or mobile robot's base; a fixed arm is refused
 world.faults.jitter("cube", xy_std=0.02)  # domain randomisation, seeded
 ```
 
@@ -1533,8 +1549,8 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU). Isaac Lab and GPU-batched environments are not attached
   to yet, and vector environments only in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that
-  rebuilds the simulation; Webots runs are replayed and not turned into tests; vector runs are
-  neither.
+  rebuilds the simulation; Webots runs are replayed and not turned into tests. A gymnasium run
+  first reset without a seed is neither.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
   (the FR3 v2's Euler integrator oscillates, Google Robot's and TIAGo's held cubes creep), and
@@ -1566,7 +1582,7 @@ Each of these builds on the extension points above, not on any one robot or fram
 1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
    from simulation as known divergences, as the engines' are.
 2. **More stacks and simulators:** Isaac Lab and GPU-batched environments for `rw.attach`.
-3. **Replay and generated tests for vector environments; attaching to sub-environments in other processes.**
+3. **Attaching to sub-environments in other processes** (`AsyncVectorEnv`).
 
 ## License
 

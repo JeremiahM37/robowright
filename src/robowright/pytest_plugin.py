@@ -94,6 +94,13 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    if config.getoption("--rw-robot", "so101") != "so101":
+        # Named here, not when a test first asks for the robot: a test that builds its own world never
+        # does, and a misspelt name then ran nothing on the robot meant and passed.
+        try:
+            _robot_names(config)
+        except (ValueError, KeyError) as e:
+            raise pytest.UsageError(f"--rw-robot: {e}") from None
     mode = config.getoption("--rw-fidelity", None)
     if mode:
         # For this run, and the xdist workers it starts; put back after, as a run inside another

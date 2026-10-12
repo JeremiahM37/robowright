@@ -102,3 +102,12 @@ def test_used_randomness():
     w.faults.jitter("cube", 0.01)
     assert w.faults.used_randomness()
     w.backend.close()
+
+
+def test_pushing_a_fixed_arm_says_what_push_robot_is_for(quiet_world):
+    """It reached the engine and failed there on a missing attribute."""
+    import pytest
+
+    w = quiet_world()
+    with pytest.raises(ValueError, match="fixed to the floor"):
+        w.faults.push("robot", (0, 5.0, 0))

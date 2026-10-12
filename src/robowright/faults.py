@@ -102,6 +102,12 @@ class Faults:
         ``robot.place`` blocks until it ends, so a push meant to land during it is scheduled before it starts:
         ``world.faults.push("cube", (0, 1.5, 0), at=world.time + 0.8)``.
         """
+        model = getattr(self.world.backend, "robot_model", None)
+        if object == "robot" and model is not None and not model.floating:
+            raise ValueError(
+                f'push("robot") pushes the free base of a legged or mobile robot; {model.title} is fixed to the floor. '
+                "Push an object by name, or weaken a joint with weak_joint()"
+            )
         at = self.world.time if at is None else at
         return self._add(Push(object, tuple(map(float, force)), float(at), float(duration)))
 

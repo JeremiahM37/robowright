@@ -137,3 +137,11 @@ def test_pick_trials(robot, scene):
     r = pytester.runpytest("-p", "no:cacheprovider", "-rs")
     r.assert_outcomes(skipped=2)
     r.stdout.fnmatch_lines(["*crate is 120 mm across; this gripper opens * mm: too wide for this robot's gripper*"])
+
+
+def test_an_unknown_robot_name_stops_the_run_even_when_no_test_asks_for_the_robot(pytester):
+    """A test that builds its own world never asks for the robot fixture: a misspelt --rw-robot passed."""
+    pytester.makepyfile(test_own="def test_builds_its_own_world():\n    assert True\n")
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-robot", "nosuchbot")
+    assert r.ret == 4  # a usage error
+    r.stderr.fnmatch_lines(["*--rw-robot: *nosuchbot*"])
