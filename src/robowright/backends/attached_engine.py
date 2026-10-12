@@ -84,8 +84,17 @@ class AttachedEngine(Backend):
         raise NotImplementedError
 
     def named_joints(self) -> list[str]:
-        """The joints an agent can name with ``world.joint``; an engine that names none returns []."""
-        return []
+        """The joints an agent can name with ``world.joint``: the engine's own joint list, or [] for an engine that names none."""
+        return list(self.joint_names)
+
+    def ensure_bound(self) -> bool:
+        """Bind to the simulation if it was not reachable when attached. True when this call bound it."""
+        return False
+
+    @property
+    def pending(self) -> bool:
+        """True while the simulation has not been found yet (an engine that binds lazily, see ``ensure_bound``)."""
+        return False
 
     def set_joint(self, name: str, value: float) -> None:
         raise NotImplementedError

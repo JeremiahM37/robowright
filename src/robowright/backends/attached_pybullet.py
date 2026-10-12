@@ -14,6 +14,9 @@ Two things PyBullet does not give, and this adapter says so rather than inventin
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
+
 import numpy as np
 
 from ..errors import CapabilityError
@@ -36,13 +39,16 @@ class PyBulletEngine(AttachedEngine):
     engine = "pybullet"
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, FORCES})
 
-    def __init__(self, client: int, *, seed: int = 0, dt: float | None = None, bodies: dict | None = None):
+    def __init__(self, client: int | None = None, *, seed: int = 0, dt: float | None = None, bodies: dict | None = None, env=None):
         import pybullet as p
 
         self.p = p
-        self.client = int(client)
-        self._physics_dt = float(p.getPhysicsEngineParameters(physicsClientId=self.client)["fixedTimeStep"])
-        super().__init__(seed, dt=dt if dt is not None else self._physics_dt)
+        self.client: int | None = None  # None until the simulation is found (see ensure_bound)
+        self._env = env  # searched for its client, and for its control period and names, once it is found
+        self._dt_given = dt
+        self._bodies_given = bodies
+        super().__init__(seed, dt=dt)
+        self._physics_dt = 0.0
         self._steps = 0
         self._name_of: dict[int, str] = {}  # body id -> name
         self._bodies: dict[str, int] = {}  # name -> body id
@@ -50,23 +56,61 @@ class PyBulletEngine(AttachedEngine):
         self._joints: dict[str, tuple[int, int]] = {}  # joint name -> (body id, joint index)
         self._joint_order: list[tuple[int, int, str]] = []  # the qpos order: every revolute or prismatic joint
         self._mass: dict[int, float] = {}
-        self._scan(bodies or {})
+        if client is not None:
+            self._bind(int(client))
+
+    @property
+    def pending(self) -> bool:
+        return self.client is None
+
+    def ensure_bound(self) -> bool:
+        """Find the client if it was not known at attach time: an environment often makes its client on its first reset."""
+        if self.client is not None:
+            return False
+        cid = _client_of(self._env) if self._env is not None else None
+        if cid is None:
+            cid = _only_connected(self.p)  # no handle anywhere: the one connection pybullet knows of
+        if cid is None:
+            return False
+        self._bind(cid)
+        return True
+
+    def rebind(self, env) -> None:
+        if self._env is None:
+            self._env = env
+        self.ensure_bound()
+
+    def _bind(self, client: int) -> None:
+        self.client = client
+        self._physics_dt = float(self.p.getPhysicsEngineParameters(physicsClientId=client)["fixedTimeStep"])
+        core = getattr(self._env, "unwrapped", self._env)
+        if self._dt_given is not None:
+            self._dt = float(self._dt_given)
+        else:
+            self._dt = _env_dt(core) or self._physics_dt  # the environment's control period, else one physics step
+        registry = self._bodies_given if self._bodies_given is not None else _registry_of(core)
+        self._scan(registry or {})
 
     def _scan(self, registry: dict) -> None:
         p, c = self.p, self.client
         registry_names = {bid: name for name, bid in registry.items()}
-        for bid in range(p.getNumBodies(physicsClientId=c)):
+        # Names the environment gave win; the rest are named by URDF in body order, and a repeated name is suffixed (name#2)
+        # so that every body is listed (a repeated name used to collapse them into one).
+        order = sorted(range(p.getNumBodies(physicsClientId=c)), key=lambda bid: (bid not in registry_names, bid))
+        for bid in order:
             info = p.getBodyInfo(bid, physicsClientId=c)
-            name = registry_names.get(bid) or _text(info[1]) or _text(info[0]) or f"body{bid}"
+            base = registry_names.get(bid) or _text(info[1]) or _text(info[0]) or f"body{bid}"
+            name = _unique(base, self._bodies)
             self._name_of[bid] = name
-            self._bodies.setdefault(name, bid)
+            self._bodies[name] = bid
             self._mass[bid] = float(p.getDynamicsInfo(bid, -1, physicsClientId=c)[0])
+        for bid in range(p.getNumBodies(physicsClientId=c)):
             for j in range(p.getNumJoints(bid, physicsClientId=c)):
                 ji = p.getJointInfo(bid, j, physicsClientId=c)
-                jname = _text(ji[1])
                 self._links.setdefault(_text(ji[12]), (bid, j))
                 if ji[2] in (p.JOINT_REVOLUTE, p.JOINT_PRISMATIC):
-                    self._joints.setdefault(jname, (bid, j))
+                    jname = _unique(_text(ji[1]) or f"joint{j}", self._joints)
+                    self._joints[jname] = (bid, j)
                     self._joint_order.append((bid, j, jname))
         self.joint_names = [n for _, _, n in self._joint_order]
         # A free body is a dynamic one with no joints: the things a test can place and push (not the table or the robot).
@@ -227,26 +271,111 @@ def _link_name(p, client: int, bid: int, link: int) -> str:
     return _text(p.getJointInfo(bid, link, physicsClientId=client)[12])
 
 
+_CLIENT_NAMES = (
+    "physicsClientId",
+    "_physicsClientId",
+    "bullet_client_id",
+    "_bullet_client_id",
+    "CLIENT",
+    "PYB_CLIENT",
+    "physics_client_id",
+)
+_NOT_WALKED = (int, float, str, bytes, bool, type, list, tuple, dict, set)
+
+
+def _unique(name: str, taken) -> str:
+    if name not in taken:
+        return name
+    k = 2
+    while f"{name}#{k}" in taken:
+        k += 1
+    return f"{name}#{k}"
+
+
+def _connected(p, cid: int) -> bool:
+    return bool(p.isConnected(physicsClientId=int(cid)))
+
+
+def _only_connected(p) -> int | None:
+    """The one connected physics client, or None when none is. Several is an error: the caller must say which."""
+    ids = [i for i in range(256) if _connected(p, i)]
+    if len(ids) > 1:
+        raise ValueError(f"several PyBullet clients are connected (ids {ids}): pass rw.attach(engine='pybullet', client=<id>)")
+    return ids[0] if ids else None
+
+
+def _client_of(env) -> int | None:
+    """The physics client an environment holds, found by walking its attributes breadth first (wrappers included).
+
+    panda-gym keeps a ``BulletClient`` on ``env.unwrapped.sim.physics_client`` (its ``_client`` is the id); others keep the
+    bare id on the environment (``CLIENT``, ``bullet_client_id``, ``physicsClientId``). A wrapper's inner environment is
+    reached through its own attributes. An id that is no longer connected is ignored.
+    """
+    import pybullet as p
+
+    seen: set[int] = set()
+    queue: list[tuple[object, int]] = [(env, 0)]
+    while queue and len(seen) < 500:  # wrappers stack (TimeLimit, OrderEnforcing, ...): depth and count are both bounded
+        obj, depth = queue.pop(0)
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        for name, value in _attributes(obj):
+            cid = None
+            if isinstance(value, int) and not isinstance(value, bool) and name in _CLIENT_NAMES:
+                cid = value
+            elif type(value).__name__ == "BulletClient" and isinstance(getattr(value, "_client", None), int):
+                cid = value._client
+            if cid is not None and _connected(p, cid):
+                return cid
+            if depth < 6 and _walkable(value):
+                queue.append((value, depth + 1))
+    return None
+
+
+def _attributes(obj):
+    try:
+        items = list(vars(obj).items())
+    except TypeError:
+        return []
+    return [(k, v) for k, v in items if not k.startswith("__")]
+
+
+def _walkable(value) -> bool:
+    if isinstance(value, _NOT_WALKED) or inspect.ismodule(value) or inspect.isroutine(value):
+        return False
+    return hasattr(value, "__dict__")
+
+
+def _env_dt(core) -> float | None:
+    """The control period an environment reports: panda-gym's ``sim.dt``, or the ``CTRL_TIMESTEP``/``dt`` of the env itself."""
+    sim = getattr(core, "sim", None)
+    for cand in (getattr(sim, "dt", None), getattr(core, "CTRL_TIMESTEP", None), getattr(core, "dt", None)):
+        if isinstance(cand, (int, float)) and not isinstance(cand, bool) and cand > 0:
+            return float(cand)
+    return None
+
+
+def _registry_of(core) -> dict | None:
+    """panda-gym's own body names (``sim._bodies_idx``), or None."""
+    registry = getattr(getattr(core, "sim", None), "_bodies_idx", None)
+    return dict(registry) if isinstance(registry, dict) else None
+
+
 def pybullet_engine_of(env, *, seed: int = 0, dt: float | None = None) -> PyBulletEngine | None:
     """The PyBullet adapter for an environment that holds a PyBullet client, or None.
 
-    panda-gym keeps a ``BulletClient`` on ``env.unwrapped.sim`` and names its bodies in ``sim._bodies_idx``;
-    its control period is ``sim.dt``.
+    The client is found by :func:`_client_of`, else it is the one connection pybullet knows of (racecar_gym keeps no handle).
+    When there is none yet (an environment that makes its client on its first
+    reset), the environment is taken as a PyBullet one if it has a client-shaped slot that is still unset, such as
+    bullet-safety-gym's ``bullet_client_id``; the adapter then binds at the first reset or step.
     """
-    core = getattr(env, "unwrapped", env)
-    sim = getattr(core, "sim", None)
-    pc = getattr(sim, "physics_client", None)
-    client = getattr(pc, "_client", None)  # panda-gym: a BulletClient on its sim
-    if not isinstance(client, int):
-        client = getattr(core, "CLIENT", None)  # gym-pybullet-drones: the client id on the env itself
-    if not isinstance(client, int):
+    if importlib.util.find_spec("pybullet") is None:
         return None
-    registry = getattr(sim, "_bodies_idx", None)  # panda-gym's own names; the drones env has none
-    if dt is None:
-        sim_dt = getattr(sim, "dt", None)  # panda-gym: timestep * n_substeps
-        ctrl_dt = getattr(core, "CTRL_TIMESTEP", None)  # gym-pybullet-drones: the env's control period
-        for cand in (sim_dt, ctrl_dt):
-            if isinstance(cand, (int, float)):
-                dt = float(cand)
-                break
-    return PyBulletEngine(client, seed=seed, dt=dt, bodies=dict(registry) if isinstance(registry, dict) else None)
+    core = getattr(env, "unwrapped", env)
+    cid = _client_of(env)
+    if cid is None:
+        cid = _only_connected(importlib.import_module("pybullet"))  # no handle (racecar_gym): the one connection there is
+    if cid is None and not any(n in _CLIENT_NAMES or "bullet" in n for n in vars(core)):
+        return None
+    return PyBulletEngine(cid, seed=seed, dt=dt, env=env)

@@ -9,6 +9,7 @@ exactly at which step.
 
 from __future__ import annotations
 
+import importlib
 import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -385,15 +386,31 @@ def _make_from_spec(tr: Trace):
     spec = env_rec.get("spec")
     if not spec or not spec.get("reproducible") or not env_rec.get("actions_recorded", True):
         why = env_rec.get("note") or (spec or {}).get("reason") or "this run's environment was not made by gymnasium.make"
-        raise ValueError(f"cannot rebuild this run's environment ({why}): pass make_env=... that builds it the way the run did")
+        raise ValueError(
+            f"cannot rebuild this run's environment ({why}): "
+            "pass make_env=... (or --factory module:func) that builds it the way the run did"
+        )
+    # An environment registered with the old gym 0.x package is rebuilt with gym.make, not gymnasium.make.
+    library = spec.get("library", "gymnasium")
     try:
-        import gymnasium
+        make = importlib.import_module(library).make
     except ImportError as e:
         raise ValueError(
-            f"this run's environment is {spec['id']!r}, rebuilt with gymnasium, which is not installed: install it or pass make_env=..."
+            f"this run's environment is {spec['id']!r}, rebuilt with {library}, which is not installed: install it or pass make_env=..."
         ) from e
     env_id, kwargs = make_spec_call(spec)
-    return lambda: gymnasium.make(env_id, **kwargs)
+
+    def build():
+        try:
+            return make(env_id, **kwargs)
+        except Exception as e:  # a package that registers the id may fail to import here: say which, and the way out
+            raise ValueError(
+                f"cannot rebuild this run's environment ({spec['id']!r} with {library}.make: "
+                f"{type(e).__name__}: {e}); "
+                "pass make_env=... (or --factory module:func) that builds it the way the run did"
+            ) from e
+
+    return build
 
 
 def _stored_model(tr: Trace) -> bytes | None:

@@ -37,6 +37,159 @@ def _label(entity_name: str) -> str:
     return _SCENE_PREFIX.sub("", entity_name)
 
 
+class _Pose:
+    """ManiSkill's pose holder: the raw (x, y, z, w, x, y, z) row the adapter reads, as a batched tensor would be."""
+
+    def __init__(self, raw):
+        self.raw_pose = raw
+
+
+def _raw_of(pose) -> np.ndarray:
+    """A SAPIEN 3 pose (position, then wxyz quaternion) as the raw row ManiSkill's pose holds."""
+    return np.concatenate([np.asarray(pose.p, dtype=float).reshape(-1), np.asarray(pose.q, dtype=float).reshape(-1)])
+
+
+def _is_sapien3_scene(obj) -> bool:
+    """A plain SAPIEN 3 ``Scene``, as SAPIEN's own examples build it: actors and articulations are listed, not held as dicts."""
+    return all(hasattr(obj, a) for a in ("get_all_actors", "get_all_articulations", "physx_system"))
+
+
+class _Sapien3Actor:
+    """A rigid body of a SAPIEN 3 scene, with the reads and writes the adapter makes of a ManiSkill actor."""
+
+    def __init__(self, entity):
+        import sapien.physx as px
+
+        self._px = px
+        self.entity = entity
+
+    @property
+    def name(self) -> str:
+        return self.entity.name
+
+    def _dynamic(self):
+        return self.entity.find_component_by_type(self._px.PhysxRigidDynamicComponent)
+
+    @property
+    def px_body_type(self) -> str:
+        dyn = self._dynamic()
+        if dyn is None:
+            return "static"
+        return "kinematic" if dyn.kinematic else "dynamic"
+
+    @property
+    def pose(self) -> _Pose:
+        return _Pose(_raw_of(self.entity.pose))
+
+    @property
+    def linear_velocity(self) -> np.ndarray:
+        dyn = self._dynamic()
+        return np.zeros(3) if dyn is None else np.asarray(dyn.linear_velocity, dtype=float)
+
+    @property
+    def angular_velocity(self) -> np.ndarray:
+        dyn = self._dynamic()
+        return np.zeros(3) if dyn is None else np.asarray(dyn.angular_velocity, dtype=float)
+
+    def apply_force(self, force) -> None:
+        dyn = self._dynamic()
+        dyn.add_force_at_point(np.asarray(force, dtype=np.float32), np.asarray(self.entity.pose.p, dtype=np.float32))
+
+    def set_pq(self, pos, quat) -> None:
+        from sapien import Pose
+
+        self.entity.set_pose(Pose(p=np.asarray(pos, dtype=float), q=np.asarray(quat, dtype=float)))
+
+    def set_zero_velocity(self) -> None:
+        dyn = self._dynamic()
+        if dyn is not None:
+            dyn.set_linear_velocity(np.zeros(3, dtype=np.float32))
+            dyn.set_angular_velocity(np.zeros(3, dtype=np.float32))
+
+
+class _Sapien3Link:
+    """A link of a SAPIEN 3 articulation (its component carries the pose and velocity)."""
+
+    def __init__(self, comp):
+        self.comp = comp
+
+    @property
+    def name(self) -> str:
+        return self.comp.name
+
+    @property
+    def pose(self) -> _Pose:
+        return _Pose(_raw_of(self.comp.get_entity_pose()))
+
+    @property
+    def linear_velocity(self) -> np.ndarray:
+        return np.asarray(self.comp.linear_velocity, dtype=float)
+
+    @property
+    def angular_velocity(self) -> np.ndarray:
+        return np.asarray(self.comp.angular_velocity, dtype=float)
+
+
+class _Sapien3Articulation:
+    """An articulation of a SAPIEN 3 scene. Its joint values are one row, as ManiSkill's batched ones are, read with ``_row``."""
+
+    def __init__(self, art, name: str):
+        self.art = art
+        self.name = name
+
+    @property
+    def links(self) -> list[_Sapien3Link]:
+        return [_Sapien3Link(c) for c in self.art.get_links()]
+
+    @property
+    def active_joints(self) -> list:
+        return list(self.art.get_active_joints())
+
+    @property
+    def qpos(self) -> np.ndarray:
+        return np.asarray(self.art.get_qpos(), dtype=float).reshape(-1)
+
+    @property
+    def qvel(self) -> np.ndarray:
+        return np.asarray(self.art.get_qvel(), dtype=float).reshape(-1)
+
+    def set_joint_value(self, i: int, value: float) -> None:
+        q = self.qpos.copy()
+        q[i] = float(value)
+        self.art.set_qpos(q)
+        qv = self.qvel.copy()
+        qv[i] = 0.0
+        self.art.set_qvel(qv)
+
+
+class _Sapien3View:
+    """A plain SAPIEN 3 scene read through the three names ManiSkill's scene has: ``px``, ``actors`` and ``articulations``.
+
+    SAPIEN 3 lists its actors and articulations rather than keeping them by name, so they are named here: an actor by its
+    entity name, an articulation by its own name or its root link, and a repeated name by a suffix. Taken once, when the
+    engine binds, so a handle keeps meaning the same thing.
+    """
+
+    def __init__(self, scene):
+        self.px = scene.physx_system
+        self.actors: dict[str, _Sapien3Actor] = {}
+        for i, entity in enumerate(scene.get_all_actors()):
+            self.actors[_unique(entity.name or f"actor{i}", self.actors)] = _Sapien3Actor(entity)
+        self.articulations: dict[str, _Sapien3Articulation] = {}
+        for i, art in enumerate(scene.get_all_articulations()):
+            base = art.name or (art.get_root().name if art.get_links() else "") or f"articulation{i}"
+            self.articulations[_unique(base, self.articulations)] = _Sapien3Articulation(art, base)
+
+
+def _unique(name: str, taken) -> str:
+    if name not in taken:
+        return name
+    k = 2
+    while f"{name}#{k}" in taken:
+        k += 1
+    return f"{name}#{k}"
+
+
 def _row(t) -> np.ndarray:
     """A batched torch tensor (or array) of one environment, as a float64 numpy row."""
     if hasattr(t, "detach"):
@@ -56,26 +209,32 @@ class SapienEngine(AttachedEngine):
 
     def __init__(self, env, *, seed: int = 0, dt: float | None = None):
         self.core = getattr(env, "unwrapped", env)
-        num_envs = int(getattr(self.core, "num_envs", 1))
+        self._bare = _is_sapien3_scene(self.core)  # a plain SAPIEN 3 scene, which is stepped by its own loop
+        self._bare_view = _Sapien3View(self.core) if self._bare else None
+        num_envs = 1 if self._bare else int(getattr(self.core, "num_envs", 1))
         if num_envs != 1:
             raise CapabilityError(
                 f"attach reads one SAPIEN scene, and this environment runs {num_envs} in parallel: build it with num_envs=1"
             )
-        self._physics_dt = 1.0 / float(self.core.sim_freq)
-        control_dt = 1.0 / float(self.core.control_freq)
+        if self._bare:
+            self._physics_dt = float(self.core.timestep)
+            control_dt = self._physics_dt  # one control step is one scene step unless the caller says otherwise
+        else:
+            self._physics_dt = 1.0 / float(self.core.sim_freq)
+            control_dt = 1.0 / float(self.core.control_freq)
         super().__init__(seed, dt=dt if dt is not None else control_dt)
         self._steps = 0
         self._refresh()
 
     def _refresh(self) -> None:
         """The free bodies and joints of the scene as it is now."""
-        scene = self.core.scene
+        scene = self._scene
         self.free_bodies = [name for name, a in scene.actors.items() if a.px_body_type == "dynamic"]
         self.joint_names = [j.name for art in scene.articulations.values() for j in art.active_joints]
 
     @property
     def _scene(self):
-        return self.core.scene
+        return self._bare_view if self._bare else self.core.scene
 
     # --- naming ---------------------------------------------------------------------
     def names(self, kind: str = "body") -> list[str]:
@@ -164,6 +323,9 @@ class SapienEngine(AttachedEngine):
 
     def set_joint(self, name: str, value: float) -> None:
         art, i = self._joint(name)
+        if isinstance(art, _Sapien3Articulation):
+            art.set_joint_value(i, value)
+            return
         q = art.qpos.clone()
         q[0, i] = float(value)
         art.set_qpos(q)
@@ -180,11 +342,15 @@ class SapienEngine(AttachedEngine):
     def set_object_pose(self, name: str, pos, quat=None) -> None:
         if name not in self.free_bodies:
             raise ValueError(f"{name!r} is not a free body, so its pose cannot be set (free bodies: {', '.join(self.free_bodies)})")
-        from mani_skill.utils.structs.pose import Pose
-
         actor = self._scene.actors[name]
         if quat is None:
             quat = _row(actor.pose.raw_pose)[3:7]
+        if isinstance(actor, _Sapien3Actor):
+            actor.set_pq(pos, quat)
+            actor.set_zero_velocity()
+            return
+        from mani_skill.utils.structs.pose import Pose
+
         p = np.asarray(pos, dtype=np.float32)[None]
         q = np.asarray(quat, dtype=np.float32)[None]
         actor.set_pose(Pose.create_from_pq(p=p, q=q))
@@ -223,6 +389,8 @@ def sapien_engine_of(env, *, seed: int = 0, dt: float | None = None) -> SapienEn
     """The SAPIEN adapter for an environment with a SAPIEN scene (ManiSkill's ``env.unwrapped.scene``), or None."""
     core = getattr(env, "unwrapped", env)
     scene = getattr(core, "scene", None)
-    if scene is None or not all(hasattr(scene, attr) for attr in ("px", "actors", "articulations")):
-        return None
-    return SapienEngine(env, seed=seed, dt=dt)
+    if scene is not None and all(hasattr(scene, attr) for attr in ("px", "actors", "articulations")):
+        return SapienEngine(env, seed=seed, dt=dt)
+    if _is_sapien3_scene(core):  # a plain SAPIEN 3 scene, as its own examples build one
+        return SapienEngine(core, seed=seed, dt=dt)
+    return None

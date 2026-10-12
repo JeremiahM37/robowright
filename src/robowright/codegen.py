@@ -466,21 +466,27 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
         load_factory(factory)  # fail here, with the reason, rather than in the generated test
         imports_extra, stub = _factory_lines(factory)
         make = "make_env()"
-    elif rebuilt:
+    library = (spec or {}).get("library", "gymnasium")
+    if rebuilt and factory is None:
         from .replay import make_spec_call
 
         env_id, kwargs = make_spec_call(spec)
         kw = "".join(f", {k}={v!r}" for k, v in kwargs.items())
-        make = f"gymnasium.make({env_id!r}{kw})"
+        make = f"{library}.make({env_id!r}{kw})"
     else:
         make = "make_env()"
         why = (spec or {}).get("reason") or "it was built by hand, not by gymnasium.make"
         if spec:
-            why = f"it was made with gymnasium.make({spec['id']!r}), but {why}"
+            why = f"it was made with {library}.make({spec['id']!r}), but {why}"
+        if engine in ("pybullet", "sapien") and not stepped and factory is None:
+            # A PyBullet or SAPIEN run has no stub that could be filled in from here: the test would only raise.
+            raise ValueError(
+                f"this run cannot become a test: its environment cannot be rebuilt ({why}); pass --factory module:func that builds it"
+            )
         stub = _factory_stub(engine if stepped else None, "its model and parameters are not in the trace" if stepped else why)
 
     npz = name + "_controls.npz"
-    lines = _imports(rebuilt, rows, inline, imports_extra) + stub
+    lines = _imports(rebuilt, rows, inline, imports_extra, library) + stub
     if stepped:
         dt = float(tr.arrays["t"][1] - tr.arrays["t"][0]) if len(tr.arrays["t"]) > 1 else 0.0
         lines += ["", "", f"DT = {dt!r}  # the recorded control period: one AdvanceTo per physics step"]
@@ -522,10 +528,10 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
     return "\n".join(header + [""] + lines) + "\n"
 
 
-def _imports(rebuilt: bool, rows: list, inline: bool, extra: list[str] | None = None) -> list[str]:
+def _imports(rebuilt: bool, rows: list, inline: bool, extra: list[str] | None = None, library: str = "gymnasium") -> list[str]:
     groups = [
         ["from pathlib import Path"] if (rows and not inline) else [],
-        (["import gymnasium"] if rebuilt else []) + (["import numpy as np"] if rows else []),
+        ([f"import {library}"] if rebuilt else []) + (["import numpy as np"] if rows else []),
         ["import robowright as rw", "from robowright import expect"],
         sorted(extra or [], key=lambda s: (s.startswith("from "), s)),
     ]
