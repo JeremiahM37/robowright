@@ -361,9 +361,25 @@ clock and repeats the resets, moves, joint edits and pushes of the run. What you
 between steps (actuation inputs, controllers outside the diagram, joint targets) is not in the
 trace: the factory has to build the same ones, or the replay diverges and reports where. Measured
 on small scenes (a block on a table, 180 to 230 steps): replays differed by zero on both engines,
-a block started 5 cm higher was caught at step 0, and a changed block mass on Drake at step 9. These
-runs are not turned into tests yet, and `robowright replay` on the command line cannot take a
-factory.
+a block started 5 cm higher was caught at step 0, and a changed block mass on Drake at step 9. On
+the command line the factory is named: `robowright replay trace.zip --factory my_module:build`
+(or `path/to/file.py:build`), and `robowright codegen trace.zip --factory my_module:build -o
+test_run.py` writes the run as a test that steps the simulation, repeats the pushes and moves and
+checks the run's expectations at the steps they were made (without `--factory` the test has a
+marked stub to fill in). A test generated from a failing Drake or Genesis run fails at the same
+expectation. A Webots run replays the same way, the factory starting the world: three fresh runs
+of a UR arm world with its controller (1875 steps) agreed with each other to zero, and a 300-step
+recording replayed with zero error. Webots replays once per process (a controller connects once),
+and Webots runs are not written as tests.
+
+A vector environment is attached whole: `worlds = rw.attach(vec_env)` for a `SyncVectorEnv`
+(`gymnasium.make_vec(..., vectorization_mode="sync")`), and `worlds[i]` is an ordinary world for
+sub-environment `i`, with its own subjects, expectations, invariants and trace, checked on the
+vector env's own `step`. An invariant broken in one sub-environment is reported with its index, and
+an autoreset inside `step` is recorded as a reset on that index's trace. With 8 HalfCheetah
+sub-environments attaching costs 0.02 ms per vector step with traces off and 0.14 ms with them on
+(0.20 ms unattached). An `AsyncVectorEnv` is refused: its sub-environments live in worker
+processes, where robowright cannot read them. Vector runs are not replayed or written as tests.
 
 ### What a passing test tells you
 
@@ -701,6 +717,12 @@ pip install "git+https://github.com/JeremiahM37/robowright"      # core: MuJoCo,
 To work on robowright itself: `git clone https://github.com/JeremiahM37/robowright && cd robowright && pip install -e ".[dev]"`
 (MuJoCo, xdist, ruff and the test tools; any Python 3.10-3.13, no compiler). Add PyBullet with
 `pip install -e ".[dev,pybullet]"`; without it the PyBullet tests skip.
+
+MuJoCo versions: `rw.launch` builds its simulations with MuJoCo 3.7 or newer and is tested on 3.13
+and newer (on 3.7 to 3.12 two or three of 450 unit tests fail: a URDF robot's pick and a PyBullet
+pick); on an older one it stops with a message that says so. `rw.attach` reads a simulation your
+code built and runs on older versions too (tested on 3.3.0, which gymnasium-robotics' Fetch
+environments need).
 
 ### Which engine?
 
@@ -1488,10 +1510,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   Gazebo, and against Universal Robots', MoveIt's, Kinova's and Nav2's own stacks, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
-- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis and Webots simulations (one
-  environment at a time, on the CPU). Isaac Lab and GPU-batched environments are not attached
-  to yet. MuJoCo, PyBullet and SAPIEN runs are replayed and turned into tests; Drake and Genesis
-  runs are replayed from Python only, with a factory, and not turned into tests; Webots runs are
+- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis and Webots simulations (on the CPU). Isaac Lab and GPU-batched environments are not attached
+  to yet, and vector environments only in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
+  SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that
+  rebuilds the simulation; Webots runs are replayed and not turned into tests; vector runs are
   neither.
 - **A pass is about the model, not the arm:** see [What a passing test tells you](#what-a-passing-test-tells-you).
   Published models are what their makers shipped: several of them fail tests as published
@@ -1524,7 +1546,7 @@ Each of these builds on the extension points above, not on any one robot or fram
 1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
    from simulation as known divergences, as the engines' are.
 2. **More stacks and simulators:** Isaac Lab and GPU-batched environments for `rw.attach`.
-3. **Replay for Webots runs, and generated tests for Drake and Genesis runs.**
+3. **Replay and generated tests for vector environments; attaching to sub-environments in other processes.**
 
 ## License
 

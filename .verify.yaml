@@ -47,6 +47,16 @@ steps:
     actions:
       - shell: { cmd: "ROBOWRIGHT_ROS2_ENV=$HOME/.cache/robowright/ros2-jazzy-nav2 capped scripts/ros2_env.sh pytest tests/test_nav2_examples.py tests/test_nav2_turtlebot.py -q -p no:cacheprovider", timeout: 1500 }
 
+  # Other people's simulations, each in the environment its suite is installed in (machine-local: see the script).
+  - name: rw.attach on other people's environments (gymnasium-robotics, Meta-World, robosuite, dm_control, panda-gym, pybullet-drones, ManiSkill), vector environments, replay and the MCP attach tools
+    actions:
+      - shell: { cmd: "capped scripts/attach_suites.sh", timeout: 900 }
+
+  - name: rw.attach and replay on Drake, Genesis and Webots simulations
+    actions:
+      - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_attach_drake.py tests/test_attach_genesis.py tests/test_attach_replay_drake.py tests/test_attach_replay_genesis.py tests/test_attach_factory.py -q -p no:cacheprovider", timeout: 900 }
+      - shell: { cmd: "[ -e /tmp/.X11-unix/X97 ] || (setsid Xvfb :97 -nolisten tcp -screen 0 1280x720x24 >/dev/null 2>&1 &); sleep 2; WEBOTS_HOME=/mnt/bulk/rw-ext/webots/install/webots DISPLAY=:97 LD_LIBRARY_PATH=/mnt/bulk/rw-ext/webots/env-glu/lib capped .venv/bin/python -m pytest tests/test_attach_webots.py tests/test_attach_webots_replay.py -q -p no:cacheprovider", timeout: 600 }
+
   - name: fidelity - the default is the model as published, and every change is on record
     actions:
       - shell: ".venv/bin/robowright fidelity --robot panda --backend mujoco | grep -q 'sourced: grip force' && ! .venv/bin/robowright fidelity --robot panda | grep -q '^  adjusted'"
