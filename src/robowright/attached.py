@@ -470,6 +470,7 @@ def attach(
     name: str = "attached",
     seed: int = 0,
     settings: Settings | None = None,
+    world_name: str | None = None,
 ) -> AttachedWorld:
     """Attach to an environment (``env``), a bare ``model``/``data`` pair, a PyBullet client, or a Drake simulation.
 
@@ -494,7 +495,18 @@ def attach(
     ``attach(vec_env)``, which returns one world per sub-environment: ``worlds[i]`` is index ``i``, and each is
     an ordinary world, so its subjects, expectations, invariants and trace are its own. ``advance`` then steps the
     whole vector. An ``AsyncVectorEnv`` is refused: its sub-environments run in other processes.
+
+    A Gazebo (gz sim) world is ``attach(engine="gazebo")``, with no environment: it attaches to the world running
+    in this ``GZ_PARTITION`` (``world_name=`` when several run), over Gazebo's transport and without ROS. A paused
+    world is stepped by ``world.step()`` through Gazebo's control service; a running world is observed, and
+    ``world.step()`` waits for its own physics steps. See :mod:`robowright.backends.attached_gazebo`.
     """
+    if engine == "gazebo":
+        if any(x is not None for x in (env, model, data, client, step, simulator, plant, context)):
+            raise ValueError('a Gazebo world is attached by name: attach(engine="gazebo", world_name=...), with no environment or model')
+        return _attach_gazebo(advance=advance, world_name=world_name, seed=seed, settings=settings, name=name)
+    if world_name is not None:
+        raise ValueError("world_name is for a Gazebo world: pass engine='gazebo'")
     diagram = None
     if env is not None and _is_drake_system(env):
         if _is_drake_simulator(env):
@@ -508,8 +520,8 @@ def attach(
                 "a vector environment is attached by itself: attach(vec_env, advance=...), not with model, data, client or step"
             )
         return _attach_vector(vector, advance=advance, engine=engine, dt=dt, name=name, seed=seed, settings=settings)
-    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis", "webots"):
-        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake', 'genesis' or 'webots', not {engine!r}")
+    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis", "webots", "gazebo"):
+        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake', 'genesis', 'webots' or 'gazebo', not {engine!r}")
     if simulator is not None or diagram is not None or context is not None or plant is not None:
         if env is not None or model is not None or data is not None or client is not None or engine not in (None, "drake"):
             raise ValueError("a Drake simulation is attached with simulator= (or a diagram and context=), not with other arguments")
@@ -664,6 +676,22 @@ def _is_drake_diagram(obj) -> bool:
     except ImportError:
         return False
     return isinstance(obj, Diagram)
+
+
+def _attach_gazebo(*, advance, world_name: str | None, seed: int, settings, name: str) -> AttachedWorld:
+    """A running Gazebo world as an ordinary world. ``advance=`` (if given) is one step of the world's own loop; it is
+    run instead of robowright's stepping, and is observed the same way."""
+    from .backends.attached_gazebo import gazebo_engine_of
+
+    backend = gazebo_engine_of(world_name, seed=seed)
+    world = AttachedWorld(backend, None, name=_safe(name), seed=seed, settings=settings)
+    world._begin()  # the trace starts where the world is now, as for a Drake simulation
+    if advance is not None:
+        world._advance = lambda: world._physics_step(advance)
+    else:
+        world._advance = lambda: world._physics_step(backend.advance)
+    _current.set(world)
+    return world
 
 
 def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> AttachedEngine:
