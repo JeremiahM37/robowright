@@ -376,6 +376,17 @@ of a UR arm world with its controller (1875 steps) agreed with each other to zer
 recording replayed with zero error. Webots replays once per process (a controller connects once),
 and Webots runs are not written as tests.
 
+A Gazebo world needs no ROS to be attached to: `world = rw.attach(engine="gazebo")` (or
+`world_name="..."`) reads a running `gz sim` over Gazebo's own transport. Models and links are
+subjects with ground-truth poses, joints are read from the world's `JointStatePublisher` system
+(without it, asking for a joint says which system to load), and time is the world's clock. A paused
+world is stepped by robowright (100 steps advanced the clock by exactly 0.1000 s, about 17 ms of
+wall time per step); a running one is observed as it runs. Tested on two worlds Gazebo ships
+(`lift_drag.sdf`, `diff_drive.sdf`): a joint under constant torque turned four times as far in
+twice the steps (measured 3.977), and an invariant on its angle fired at the step it was crossed.
+Pushing, moving things, contacts and saving state are refused there, by name; in a running world
+poses and joints arrive on separate streams and are not from the same step.
+
 A vector environment is attached whole: `worlds = rw.attach(vec_env)` for a `SyncVectorEnv`
 (`gymnasium.make_vec(..., vectorization_mode="sync")`), and `worlds[i]` is an ordinary world for
 sub-environment `i`, with its own subjects, expectations, invariants and trace, checked on the
@@ -1519,7 +1530,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   Gazebo, and against Universal Robots', MoveIt's, Kinova's and Nav2's own stacks, on Jazzy only. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
-- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis and Webots simulations (on the CPU). Isaac Lab and GPU-batched environments are not attached
+- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU). Isaac Lab and GPU-batched environments are not attached
   to yet, and vector environments only in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that
   rebuilds the simulation; Webots runs are replayed and not turned into tests; vector runs are

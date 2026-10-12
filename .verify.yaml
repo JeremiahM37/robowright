@@ -52,10 +52,11 @@ steps:
     actions:
       - shell: { cmd: "capped scripts/attach_suites.sh", timeout: 900 }
 
-  - name: rw.attach and replay on Drake, Genesis and Webots simulations
+  - name: rw.attach and replay on Drake, Genesis and Webots simulations, and rw.attach on a Gazebo world with no ROS
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_attach_drake.py tests/test_attach_genesis.py tests/test_attach_replay_drake.py tests/test_attach_replay_genesis.py tests/test_attach_factory.py -q -p no:cacheprovider", timeout: 900 }
       - shell: { cmd: "[ -e /tmp/.X11-unix/X97 ] || (setsid Xvfb :97 -nolisten tcp -screen 0 1280x720x24 >/dev/null 2>&1 &); sleep 2; WEBOTS_HOME=/mnt/bulk/rw-ext/webots/install/webots DISPLAY=:97 LD_LIBRARY_PATH=/mnt/bulk/rw-ext/webots/env-glu/lib capped .venv/bin/python -m pytest tests/test_attach_webots.py tests/test_attach_webots_replay.py -q -p no:cacheprovider", timeout: 600 }
+      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_attach_gazebo.py -q -p no:cacheprovider", timeout: 600 }
 
   - name: fidelity - the default is the model as published, and every change is on record
     actions:
