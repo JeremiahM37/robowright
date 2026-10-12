@@ -582,6 +582,7 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
 
     imports_extra: list[str] = []
     stub: list[str] = []
+    library = (spec or {}).get("library", "gymnasium")  # an environment of the old gym 0.x package is rebuilt with gym
     if factory is not None:
         from .replay import load_factory
 
@@ -593,21 +594,22 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
 
         env_id, kwargs = make_spec_call(spec)
         kw = "".join(f", {k}={v!r}" for k, v in kwargs.items())
-        make = f"gymnasium.make({env_id!r}{kw})"
+        make = f"{library}.make({env_id!r}{kw})"
     else:
-        # No stub: a test that raises NotImplementedError is not a test. The environment is named, and the way to
-        # give one is named, so the refusal is the one sentence the user needs.
         why = (spec or {}).get("reason") or "it was built by hand, not by gymnasium.make"
         if spec:
-            why = f"it was made with gymnasium.make({spec['id']!r}), but {why}"
-        if stepped:
-            why = "its model and parameters are not in the trace"
-        raise ValueError(
-            f"cannot write a test for this run's environment ({why}): pass --factory module:func that builds it the way the run did"
-        )
+            why = f"it was made with {library}.make({spec['id']!r}), but {why}"
+        if not stepped:
+            # No stub: a test that raises NotImplementedError is not a test. The environment is named, and the way to
+            # give one is named, so the refusal is the one sentence the user needs.
+            raise ValueError(
+                f"cannot write a test for this run's environment ({why}): pass --factory module:func that builds it the way the run did"
+            )
+        # A stepped run (Drake, Genesis, Webots) keeps its model in the trace but not its simulation: the stub is filled in.
+        stub = _factory_stub(engine, "its model and parameters are not in the trace")
 
     npz = name + "_controls.npz"
-    lines = _imports(rebuilt, rows, inline, imports_extra) + stub
+    lines = _imports(rebuilt, rows, inline, imports_extra, library) + stub
     if stepped:
         dt = float(tr.arrays["t"][1] - tr.arrays["t"][0]) if len(tr.arrays["t"]) > 1 else 0.0
         lines += ["", "", f"DT = {dt!r}  # the recorded control period: one AdvanceTo per physics step"]
@@ -649,10 +651,10 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
     return "\n".join(header + [""] + lines) + "\n"
 
 
-def _imports(rebuilt: bool, rows: list, inline: bool, extra: list[str] | None = None) -> list[str]:
+def _imports(rebuilt: bool, rows: list, inline: bool, extra: list[str] | None = None, library: str = "gymnasium") -> list[str]:
     groups = [
         ["from pathlib import Path"] if (rows and not inline) else [],
-        (["import gymnasium"] if rebuilt else []) + (["import numpy as np"] if rows else []),
+        ([f"import {library}"] if rebuilt else []) + (["import numpy as np"] if rows else []),
         ["import robowright as rw", "from robowright import expect"],
         sorted(extra or [], key=lambda s: (s.startswith("from "), s)),
     ]

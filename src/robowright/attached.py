@@ -226,6 +226,8 @@ class AttachedWorld(World):
         self._env = None  # the environment this world wraps, so a rebuilt simulation can be found again
         self._observed_time = backend.time  # the simulation time the last observed step ended at
         self._warned_unobserved = False
+        self._in_step = False  # set while a wrapped step runs, so a step nested inside it (env -> unwrapped) is not recorded twice
+        self._wrapped_last = False  # the last physics step was recorded by a wrapped step: the next observe() has nothing to add
 
     # --- what the simulation is -------------------------------------------------
     def _adopt(self) -> None:
@@ -239,8 +241,11 @@ class AttachedWorld(World):
         Reads are live (they read the engine's data when asked), so they are never stale. What an unobserved step
         lacks is its trace record, so that is what is reported, once per world.
         """
-        if self._env is not None:
-            self._rebind(self._env)
+        if self.backend.engine == "mujoco":
+            if self._env is not None:
+                self._rebind(self._env)
+        elif self.backend.ensure_bound():  # not the engine's rebind: SAPIEN's rebind restarts its clock, and is for resets only
+            self._adopt()
         if not self._warned_unobserved and not isinstance(self.backend, PendingBackend) and self._observed_time is not None:
             if self.backend.time > self._observed_time + 1e-12:
                 self._warned_unobserved = True
@@ -348,7 +353,14 @@ class AttachedWorld(World):
         return self.faults.push(body, force, at=at, duration=duration)
 
     def observe(self) -> None:
-        """Record one physics step that the environment's own loop took below ``env.step``."""
+        """Record one physics step that the environment's own loop took below ``env.step``.
+
+        A step the loop took through the engine's own step (the unwrapped environment's, or a bare scene's), which robowright
+        wraps, is already recorded, so an ``observe()`` right after it is a no-op: the loop may call either and get one record.
+        """
+        if self._wrapped_last:
+            self._wrapped_last = False
+            return
         self._physics_step(None, pushes=False)
 
     def replay_step(self, advance: Callable[[], object] | None, forces: dict) -> None:
@@ -440,7 +452,10 @@ class AttachedWorld(World):
         was there and no longer is raises, rather than letting the world report the old one's values.
         """
         if self.backend.engine != "mujoco":
+            # PyBullet and SAPIEN: a reset is where they are told the environment, and where a lazily bound one is found.
             self.backend.rebind(env)
+            if self.backend.ensure_bound():
+                self._adopt()
             return
         try:
             model, data = _physics_of(env)
@@ -465,8 +480,14 @@ class AttachedWorld(World):
         except InvariantViolation as e:  # the vector step stops here, so the message must say which index broke
             raise InvariantViolation(f"sub-environment {self.index}: {e}") from e
 
-    def _physics_step(self, fn, pushes: bool = True, action=_OBSERVE):
+    def _physics_step(self, fn, pushes: bool = True, action=_OBSERVE, own: bool = False):
         """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
+        if self.backend.ensure_bound():
+            self._adopt()
+        if self.backend.pending:
+            raise CapabilityError(
+                "the simulation has no physics client yet: reset the environment first, or pass rw.attach(engine='pybullet', client=...)"
+            )
         self._begin()
         forces = self.faults.forces_for_step(self.step_count) if pushes else {}
         saved = self.backend.data.xfrc_applied.copy() if forces and self.backend.engine == "mujoco" else None
@@ -485,6 +506,7 @@ class AttachedWorld(World):
             self._dt_known = True
         self.step_count += 1
         self._observed_time = self.backend.time
+        self._wrapped_last = own  # a step the engine's own step took and robowright recorded: observe() must not add it again
         if self.trace:
             self.trace.record_step(self.step_count, self.backend.ctrl(), forces)
             self._note_control(action)
@@ -606,7 +628,16 @@ def attach(
     if env is not None and (model is not None or data is not None or client is not None):
         raise ValueError("attach takes an environment, or a model and data, or a client, not more than one")
     if env is None and client is None and simulator is None and diagram is None and (model is None or data is None):
-        raise ValueError("attach needs an environment, or model= and data=, or engine='pybullet' with client=, or a Drake simulator")
+        if engine in (None, "pybullet") and model is None and data is None:  # no argument: the one PyBullet connection, if there is one
+            from .backends.attached_pybullet import _only_connected
+
+            try:
+                import pybullet
+            except ImportError:
+                pybullet = None
+            client = _only_connected(pybullet) if pybullet is not None else None
+        if client is None:
+            raise ValueError("attach needs an environment, or model= and data=, or engine='pybullet' with client=, or a Drake simulator")
     if client is not None and (engine == "mujoco" or model is not None or data is not None):
         raise ValueError("a PyBullet client is not a MuJoCo model: pass engine='pybullet' and client=, or model= and data=")
     if step is not None and advance is not None:
@@ -646,6 +677,10 @@ def attach(
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
     if env is not None and backend.engine == "genesis":
         _wrap_scene(env, world)  # a Genesis scene has no reset that rebuilds anything: the step is the one hook
+    elif env is not None and not callable(getattr(env, "step", None)):
+        pass  # an object that holds the simulation's client and has no step of its own: its loop calls observe()
+    elif env is not None and backend.engine == "sapien" and _is_bare_sapien(env):
+        _wrap_env(env, world, own=True)  # a plain SAPIEN scene: its own step is the one hook, and it has no reset to route
     elif env is not None:
         world.env_spec = _env_spec(env)
         _wrap_env(env, world)
@@ -881,8 +916,9 @@ def _env_spec(env) -> dict | None:
         "id": env_id,
         "kwargs": dict(getattr(spec, "kwargs", None) or {}),
         "entry_point": entry if isinstance(entry, str) else None,
+        "library": _make_library(spec),
         "max_episode_steps": getattr(spec, "max_episode_steps", None),
-        "registered_max_episode_steps": _registered_max_episode_steps(env_id),
+        "registered_max_episode_steps": _registered_max_episode_steps(env_id, _make_library(spec)),
         "reproducible": True,
     }
     try:
@@ -892,11 +928,16 @@ def _env_spec(env) -> dict | None:
     return record
 
 
-def _registered_max_episode_steps(env_id: str):
-    try:
-        import gymnasium
+def _make_library(spec) -> str:
+    """``"gym"`` for an environment registered with the old gym 0.x package, else ``"gymnasium"``: the make() a rebuild uses."""
+    return "gym" if type(spec).__module__.split(".")[0] == "gym" else "gymnasium"
 
-        return gymnasium.spec(env_id).max_episode_steps
+
+def _registered_max_episode_steps(env_id: str, library: str = "gymnasium"):
+    try:
+        import importlib
+
+        return importlib.import_module(library).spec(env_id).max_episode_steps
     except Exception:  # noqa: BLE001 - not registered in this process: the rebuild passes the recorded limit as it is
         return None
 
@@ -945,23 +986,46 @@ def _is_gymnasium_env(env) -> bool:
     return base is not None and isinstance(env, base)
 
 
+def _is_bare_sapien(env) -> bool:
+    from .backends.attached_sapien import _is_sapien3_scene
+
+    return _is_sapien3_scene(getattr(env, "unwrapped", env))
+
+
+def _is_gym_env(env) -> bool:
+    """An environment of the old gym 0.x package, which, like gymnasium's, cannot step before its first reset."""
+    base = getattr(sys.modules.get("gym"), "Env", None)
+    return base is not None and isinstance(env, base)
+
+
 def _rng_seeded(env) -> bool:
     """Whether a gymnasium environment's random generator has been seeded: a reset without a seed draws from it, and
     an unseeded generator is seeded from the operating system, so such a reset starts somewhere a replay cannot know."""
     return getattr(getattr(env, "unwrapped", env), "_np_random", None) is not None
 
 
-def _wrap_env(env, world: AttachedWorld) -> None:
-    """Route the environment's own ``step`` and ``reset`` through the world. See the module docstring."""
-    orig_step, orig_reset = env.step, env.reset
-    world._resets_first = _is_gymnasium_env(env)
+def _wrap_env(env, world: AttachedWorld, own: bool = False) -> None:
+    """Route the environment's own ``step`` and ``reset`` through the world. See the module docstring.
+
+    ``own`` marks a step that is the engine's own (a bare scene's ``step``): see :meth:`AttachedWorld.observe`.
+    A bare simulation has no reset to route (a SAPIEN scene is reset by rebuilding it): its ``step`` is wrapped alone.
+    """
+    orig_step = env.step
+    orig_reset = getattr(env, "reset", None)
+    world._resets_first = _is_gymnasium_env(env) or _is_gym_env(env)
 
     def step(*args, **kwargs):
         action = args[0] if args else kwargs.get("action")
-        if action is None and world.backend.engine == "webots":  # a Webots world's step takes no action: its controllers run inside it
+        if action is None:  # no action argument: a Webots world's controllers run inside its step, and a loop's own step records none
             action = _OBSERVE
+        if world._in_step:  # nested: the outer step of this call is the one recorded
+            return orig_step(*args, **kwargs)
         world._sync()  # the environment may have built its simulation since the last call
-        return world._physics_step(lambda: orig_step(*args, **kwargs), action=action)
+        world._in_step = True
+        try:
+            return world._physics_step(lambda: orig_step(*args, **kwargs), action=action, own=own)
+        finally:
+            world._in_step = False
 
     def reset(*args, **kwargs):
         seed = kwargs.get("seed", args[0] if args else None)
@@ -978,10 +1042,31 @@ def _wrap_env(env, world: AttachedWorld) -> None:
         world._on_reset(seed, options, rng=rng)
         return out
 
-    reset.__wrapped__ = orig_reset  # replay asks the original reset which arguments it takes
     world._env = env
     env.step = step
-    env.reset = reset
+    if orig_reset is not None:
+        reset.__wrapped__ = orig_reset  # replay asks the original reset which arguments it takes
+        env.reset = reset
+    # A loop that calls the unwrapped environment's step (a wrapper's inner one, or the env's own) is recorded too. A step
+    # that an outer wrapper already runs is nested inside a recorded step: that one is passed straight through.
+    core = getattr(env, "unwrapped", None)
+    if core is not None and core is not env and world.backend.engine == "pybullet":
+        core_step = core.step
+
+        def core_step_wrapped(*args, **kwargs):
+            if world._in_step:
+                return core_step(*args, **kwargs)
+            action = args[0] if args else kwargs.get("action")
+            world._in_step = True
+            try:
+                return world._physics_step(lambda: core_step(*args, **kwargs), action=action, own=True)
+            finally:
+                world._in_step = False
+
+        try:
+            core.step = core_step_wrapped
+        except AttributeError:  # a class that refuses instance attributes: its loop must observe instead
+            pass
 
 
 class AttachedRenderer:
