@@ -165,6 +165,17 @@ class _Tf:
         from robowright.ros2_bridge import _spin
 
         threading.Thread(target=_spin, args=(self._ex,), daemon=True).start()
+        # Until its first /clock message this node's clock reads 0, and TF at time 0 is the latest transform, not
+        # the read time (measured: the first read then compared joints with TF up to 1.1 s later, 2.7 to 332 mm
+        # off). robowright's backend waits for the clock in the same way. Then wait for TF to hold a transform, so
+        # the first read's time is one TF covers.
+        deadline = time.monotonic() + 10.0
+        from rclpy.time import Time
+
+        while self.now_ns() == 0 or not self.buf.can_transform("fr3_link0", "fr3_link8", Time()):
+            if time.monotonic() > deadline:
+                raise TimeoutError("no /clock or no TF from fr3_link0 to fr3_link8 within 10 s")
+            time.sleep(0.005)
 
     def now_ns(self):
         """Gazebo's clock now, as this node sees it (use_sim_time), in nanoseconds."""
@@ -214,7 +225,7 @@ def test_connects_with_nothing_named(controller):
         w.close(failed=False)
 
 
-def test_tcp_agrees_with_tf_while_the_arm_moves(controller, request):
+def test_tcp_agrees_with_tf_while_the_arm_moves(controller):
     """robowright's TCP (computed from the description robowright read) and Franka's TF agree over several
     reads while the example moves the arm. The TF frame is fr3_link8, the flange; the TCP is the flange
     plus robowright's tcp offset along the tool axis, in fr3_link0 (the base, at the origin in Gazebo)."""
@@ -234,20 +245,10 @@ def test_tcp_agrees_with_tf_while_the_arm_moves(controller, request):
             errs.append(float(np.linalg.norm(tcp_tf - tcp)))
             time.sleep(0.5)
         print(f"{controller}: TCP error vs TF at the same Gazebo time over {len(errs)} reads (m): {[f'{e:.6f}' for e in errs]}")
-        # The first read, straight after the world launches, is measured above and not asserted: it differs
-        # from TF by up to 36 mm in the velocity example (robowright's joint values are read a moment behind
-        # the arm there). Every read after it agrees within a millimetre, which is what is asserted.
-        if controller == "joint_impedance_example_controller":
-            # Intermittent, measured: in run 3 the second read was 48 mm off and the first 133 mm, where
-            # runs 1 and 2 were within 2 mm from the first read on. Not isolated: TF's latest transform, or
-            # its interpolation at a read's time, was off while the example's arm moved fastest.
-            request.node.add_marker(
-                pytest.mark.xfail(
-                    strict=False,
-                    reason="intermittent at launch: 133 and 48 mm off on the first two reads in 1 of 3 runs; cause not isolated",
-                )
-            )
-        assert max(errs[1:]) < 1e-3, errs
+        # Every read, the first included, is asserted: with the clock and TF both up before the first read, the
+        # first read is stamped like the rest (before this, the first read was taken at clock 0 and compared
+        # joints with TF up to a second later, which is why it was excluded here).
+        assert max(errs) < 1e-3, errs
     finally:
         tf.close()
         w.close(failed=False)
