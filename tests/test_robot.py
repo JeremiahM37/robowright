@@ -96,3 +96,14 @@ def test_a_plain_script_starts_at_home_and_can_pick(name):
         assert np.allclose(np.asarray(w.backend.qpos())[: r.n_arm], r.home_q, atol=1e-6)
         r.pick(w.scene["cube"])
         expect(r).to_be_holding(w.scene["cube"])
+
+
+def test_launch_names_a_mujoco_too_old_to_build_with_and_warns_about_an_untested_one():
+    from robowright.world import check_mujoco
+
+    with pytest.raises(rw.errors.RobowrightError, match="rw.launch builds its simulations with MuJoCo 3.7 or newer, and this is 3.3.0"):
+        check_mujoco("3.3.0")
+    with pytest.warns(UserWarning, match="tested on MuJoCo 3.13 and newer; this is 3.10.0"):
+        check_mujoco("3.10.0")
+    check_mujoco("3.13.0")
+    check_mujoco()  # the installed one

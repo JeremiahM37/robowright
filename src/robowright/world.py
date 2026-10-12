@@ -17,7 +17,7 @@ import numpy as np
 
 from . import fidelity
 from .backends import base as backends
-from .errors import CapabilityError, ExpectationError, InvariantViolation
+from .errors import CapabilityError, ExpectationError, InvariantViolation, RobowrightError
 from .faults import Faults
 from .legged import LeggedRobot
 from .locators import SceneLocator
@@ -324,6 +324,36 @@ def ros2_scene(scene: SceneSpec | None, backend: str, robot: str | None, kw: dic
     return scene
 
 
+# MuJoCo versions robowright builds its own simulations with (every engine's robot is built through MuJoCo's
+# model editing). Measured with the unit tests: below 3.7 a scene does not build (3.3.4 and older) or the Panda's
+# does not (3.6); 3.7 to 3.12 build, and two or three of 450 tests fail; 3.13 on, all pass. rw.attach reads a
+# simulation someone else built and has no such floor (it runs on 3.3.0, which gymnasium-robotics needs).
+MUJOCO_BUILDS, MUJOCO_TESTED = (3, 7), (3, 13)
+
+
+def check_mujoco(version: str | None = None) -> None:
+    """Refuse a MuJoCo too old to build a robot with, and warn about one older than the tested versions."""
+    import warnings
+
+    if version is None:
+        import mujoco
+
+        version = mujoco.__version__
+    have = tuple(int(x) for x in version.split(".")[:2])
+    if have < MUJOCO_BUILDS:
+        raise RobowrightError(
+            f"rw.launch builds its simulations with MuJoCo {MUJOCO_BUILDS[0]}.{MUJOCO_BUILDS[1]} or newer, and this is {version}: "
+            f"upgrade mujoco (robowright is tested on {MUJOCO_TESTED[0]}.{MUJOCO_TESTED[1]} and newer). "
+            "rw.attach, for a simulation your own code builds, works with this version."
+        )
+    if have < MUJOCO_TESTED:
+        warnings.warn(
+            f"robowright's own simulations are tested on MuJoCo {MUJOCO_TESTED[0]}.{MUJOCO_TESTED[1]} and newer; this is {version}, "
+            "where a few of its tests fail (a URDF robot's pick, one PyBullet pick): results may differ.",
+            stacklevel=3,
+        )
+
+
 def launch(
     scene: SceneSpec | None = None,
     backend: str = "mujoco",
@@ -343,6 +373,8 @@ def launch(
 
     On a simulator robowright runs, the robot is placed at its home pose (``robot.reset_to()``).
     """
+    if backend != "ros2":
+        check_mujoco()
     scene = ros2_scene(scene, backend, robot, kw, robot_options)
     world = World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)
     home = None if backend == "ros2" else getattr(world.robot, "reset_to", None)  # a mobile robot has none

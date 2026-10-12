@@ -260,6 +260,13 @@ def test_screenshot_draws_from_the_engine_cameras(session):
 
 
 def test_robot_launch_and_close_give_the_environment_back(session):
+    import mujoco
+
+    from robowright.world import MUJOCO_BUILDS
+
+    if tuple(int(x) for x in mujoco.__version__.split(".")[:2]) < MUJOCO_BUILDS:
+        pytest.skip(f"robot_launch builds a simulation, which needs a newer MuJoCo than this environment's {mujoco.__version__}")
+
     async def scenario(c):
         await call(c, "sim_attach", {"entry_point": ENV_REF})
         env = session.env

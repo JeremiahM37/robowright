@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    "mujoco>=3.2",
+    "mujoco>=3.3",  # rw.attach runs on 3.3.0; rw.launch needs 3.7 and is tested on 3.13+ (world.check_mujoco)
     "numpy>=1.24",
     "pillow>=9",
     "pytest>=7",

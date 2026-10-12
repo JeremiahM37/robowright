@@ -253,6 +253,8 @@ def _trace_path(config, nodeid: str) -> Path:
 
 
 def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> World:
+    if backend != "ros2":
+        rw.world.check_mujoco()
     w = World(_scene_for(item, request), backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=_settings(item.config))
     rw._current.set(w)
     view = _live(item.config)
