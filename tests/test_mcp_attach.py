@@ -365,3 +365,9 @@ def test_suite_note_names_what_registered_and_what_failed():
         "packages registered: gymnasium_robotics; failed to import: panda_gym (ImportError: no module named pybullet)"
     )
     assert "none (no known environment package is installed)" in _suite_note([], {})
+
+
+def test_the_server_reports_the_package_version():
+    import robowright as rw
+
+    assert build_server().version == rw.__version__
