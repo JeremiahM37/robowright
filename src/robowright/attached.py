@@ -216,6 +216,8 @@ class AttachedWorld(World):
         self.controls: list[tuple[int, str, np.ndarray | None]] = []  # (step, "action" | "observe", action)
         self.controls_note: str | None = None  # why the run cannot be stepped again, if it cannot
         self._action_shape: tuple | None = None
+        self._reset_seen = False  # whether a reset of the environment went through this world
+        self._resets_first = False  # a gymnasium environment: it cannot step before it is reset
         self._own_step: Callable[[], object] | None = None  # a wrapped Genesis scene's step as its own code made it
 
     # --- what the simulation is -------------------------------------------------
@@ -327,6 +329,13 @@ class AttachedWorld(World):
             self.controls.append((self.step_count, "observe", None))
             return
         arr = np.array(action, copy=True)
+        if self._resets_first and not self._reset_seen:
+            # gymnasium refuses a step before a reset, so this environment was reset before it was attached: that
+            # reset, and its seed, never reached the trace, and a replay would step an environment not yet reset.
+            self._note_unreplayable(
+                "the environment was reset before rw.attach(env), so that reset and its seed are not in the trace: "
+                "call rw.attach(env) first, then env.reset(seed=...)"
+            )
         if arr.dtype.kind not in "biuf":
             self._note_unreplayable("the environment's actions are not numeric arrays")
         elif self._action_shape is None:
@@ -364,6 +373,7 @@ class AttachedWorld(World):
     def _on_reset(self, seed, options=None):
         """The trace starts when the environment is first reset, so its first sample is a real start state."""
         self._begin()
+        self._reset_seen = True
         if self.trace:
             args = {"seed": seed}
             if options is not None:
@@ -467,7 +477,7 @@ def attach(
     plant=None,
     context=None,
     dt: float | None = None,
-    name: str = "attached",
+    name: str | None = None,
     seed: int = 0,
     settings: Settings | None = None,
 ) -> AttachedWorld:
@@ -495,6 +505,8 @@ def attach(
     an ordinary world, so its subjects, expectations, invariants and trace are its own. ``advance`` then steps the
     whole vector. An ``AsyncVectorEnv`` is refused: its sub-environments run in other processes.
     """
+    if name is None:
+        name = _default_name()
     diagram = None
     if env is not None and _is_drake_system(env):
         if _is_drake_simulator(env):
@@ -773,9 +785,31 @@ def _wrap_scene(scene, world: AttachedWorld) -> None:
     world.backend._restore = restore
 
 
+def _default_name() -> str:
+    """A world's name, and so its trace's: the running pytest test's (``test_file__test_name``), else ``attached``.
+
+    Named after the test, as a ``world`` fixture's trace is, so two attached tests do not write the same file.
+    """
+    import os
+    import re
+
+    current = os.environ.get("PYTEST_CURRENT_TEST", "")  # "tests/test_x.py::test_y[param] (call)"
+    nodeid = re.sub(r" \((setup|call|teardown)\)$", "", current)
+    if not nodeid:
+        return "attached"
+    return Path(nodeid.split("::")[0]).name + "__" + "__".join(nodeid.split("::")[1:])
+
+
+def _is_gymnasium_env(env) -> bool:
+    """A gymnasium environment (gymnasium is optional: one can only exist if it is already imported)."""
+    base = getattr(sys.modules.get("gymnasium"), "Env", None)
+    return base is not None and isinstance(env, base)
+
+
 def _wrap_env(env, world: AttachedWorld) -> None:
     """Route the environment's own ``step`` and ``reset`` through the world. See the module docstring."""
     orig_step, orig_reset = env.step, env.reset
+    world._resets_first = _is_gymnasium_env(env)
 
     def step(*args, **kwargs):
         action = args[0] if args else kwargs.get("action")

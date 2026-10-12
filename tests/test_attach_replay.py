@@ -284,3 +284,18 @@ def test_a_real_gymnasium_robotics_run_replays_and_generates_a_test_that_runs_in
     proc = _run_test_file(test_file, None)  # a fresh process, which never imported gymnasium_robotics
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "1 passed" in proc.stdout
+
+
+def test_a_reset_before_attach_is_named_as_the_reason_the_run_cannot_be_replayed(tmp_path):
+    """gymnasium needs a reset before a step. One made before rw.attach never reaches the trace: replay and
+    codegen say so, instead of stepping an environment that was never reset."""
+    gym = pytest.importorskip("gymnasium")
+    pytest.importorskip("gymnasium.envs.mujoco.reacher_v5")
+    env = gym.make("Reacher-v5")
+    env.reset(seed=1)
+    world = rw.attach(env)
+    for _ in range(3):
+        env.step(env.action_space.sample())
+    path = world.close(failed=True, trace_path=tmp_path / "late.zip")
+    with pytest.raises(ValueError, match=r"reset before rw.attach\(env\).*call rw.attach\(env\) first"):
+        replay(path)

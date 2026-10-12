@@ -96,6 +96,12 @@ class Faults:
         return self._add(ActionDelay(steps))
 
     def push(self, object: str, force, at: float | None = None, duration: float = 0.1):
+        """Push ``object`` with ``force`` (N, world frame) for ``duration`` seconds, starting at simulation time ``at``.
+
+        ``at`` is seconds on the world's clock (``world.time``) and defaults to now. A motion such as
+        ``robot.place`` blocks until it ends, so a push meant to land during it is scheduled before it starts:
+        ``world.faults.push("cube", (0, 1.5, 0), at=world.time + 0.8)``.
+        """
         at = self.world.time if at is None else at
         return self._add(Push(object, tuple(map(float, force)), float(at), float(duration)))
 

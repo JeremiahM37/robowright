@@ -149,7 +149,9 @@ class Expectation:
 
         def check():
             z = float(self.subject.position[2])
-            return z >= ref() + by, f"{self.subject.name} z={z:.3f}, {name} reference {ref():.3f} (+{by})"
+            return z >= ref() + by, f"{self.subject.name} z={z:.3f}, must be {by:g} above {name}" + (
+                "" if isinstance(target, (int, float)) else f" (at {ref():.3f})"
+            )
 
         return self._run("to_be_above", check, timeout, hold, {"target": target, "by": by})
 

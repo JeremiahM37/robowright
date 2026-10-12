@@ -50,7 +50,7 @@ def test_one_world_per_index_reads_that_sub_environments_own_data(make_vec, sett
     vec = make_vec(4)
     worlds = rw.attach(vec, settings=settings)
     assert len(worlds) == 4 and [w.index for w in worlds] == [0, 1, 2, 3]
-    assert worlds[3] is worlds.worlds[3] and [w.name for w in worlds][:2] == ["attached[0]", "attached[1]"]
+    assert worlds[3] is worlds.worlds[3] and [w.name.rsplit("__", 1)[-1][-3:] for w in worlds][:2] == ["[0]", "[1]"]
     vec.reset(seed=[0, 1, 2, 3])
     for i, w in enumerate(worlds):
         assert np.allclose(w.body("torso").position, torso_of(vec.envs[i])), f"index {i} read another environment's torso"

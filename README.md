@@ -265,6 +265,8 @@ are driven as wheels, on the floor, with the wheel radius and track measured fro
 (TurtleBot 3 burger: 0.033 m and 0.160 m, its published figures):
 
 ```python
+# turtlebot3_description/urdf/turtlebot3_burger.urdf from github.com/ROBOTIS-GIT/turtlebot3. It is a
+# xacro file: pip install "robowright[urdf]" (xacro and the mesh tools) to load it as it is.
 world = rw.launch(robot="turtlebot3_burger.urdf")  # ROBOTIS's URDF, as published
 robot = world.robot
 robot.base.drive(0.2, 0.0, 2.0)  # 0.39 m travelled: it accelerates, and wheels slip
@@ -289,7 +291,9 @@ for tests that need no particular robot.
 Most robot-learning code runs in an environment its authors built: a Gymnasium, dm_control or
 robosuite environment that owns its MuJoCo model, its scene, its action mapping and its step
 loop. `rw.attach(env)` attaches to that simulation as it is. Nothing in it is changed, and time
-passes when their code steps it:
+passes when their code steps it. Attach before the first `env.reset`: a reset made earlier is not
+in the trace, and the run then cannot be replayed or written as a test (replay says so). Gymnasium's
+own MuJoCo environments need `pip install "gymnasium[mujoco]"`.
 
 ```python
 env = gym.make("gym_aloha/AlohaTransferCube-v0", obs_type="pixels_agent_pos")
@@ -962,7 +966,7 @@ the jaws closed on it longer.
 world.faults.joint_noise(std=0.02)  # encoder noise, seen by robot and policy, not by physics
 world.faults.action_delay(steps=3)  # 60 ms command latency
 world.faults.weak_joint("shoulder_lift", 0.3)  # a tired servo
-world.faults.push("cube", force=(0, 1.5, 0), duration=0.1)
+world.faults.push("cube", force=(0, 1.5, 0), duration=0.1)  # now; at=world.time + 0.8 schedules it into the next motion
 world.faults.camera_dropout(p=0.1)
 world.faults.jitter("cube", xy_std=0.02)  # domain randomisation, seeded
 ```
@@ -1047,8 +1051,13 @@ backend="ros2"`), and give you a URL to watch it live (`robot_watch`). With a ro
 moving Gazebo's models and `robot_screenshot` returning Gazebo's own rendering.
 
 ```console
+$ pip install "robowright[mcp]"   # the MCP SDK is an extra
 $ claude mcp add robowright -- robowright mcp
 ```
+
+The server speaks MCP over stdio, so any MCP client can start it as `robowright mcp`. A session's
+trace is saved when it closes (`robot_close` answers with the path, in a temporary directory), or
+where `robot_save_trace` is told to.
 
 An agent that meets a robot it knows nothing about starts with `ros2_inspect` (what
 `robowright ros2 inspect` prints, and the settings for `robot_launch`). Told only "a robot arm

@@ -368,3 +368,13 @@ def test_backend_options_are_recorded_and_passed_to_the_launch_call(tmp_path):
     assert "    with rw.launch(\n        SCENE,\n" in code  # too long for one line
     assert "        frame='base_link'," in code and "        use_sim_time=True," in code
     assert "frame=" not in generate(path, test_name="test_opts", backend="drake")  # another engine gets none of them
+
+
+def test_the_text_of_a_trace_lists_its_faults(tmp_path):
+    """A trace with a fault once could not be printed at all (the fault records were joined as strings)."""
+    w = rw.launch(robot="so101", settings=rw.Settings(trace="on"))
+    w.faults.push("cube", (0.0, 1.5, 0.0), at=w.time + 0.05)
+    w.step(10)
+    path = w.close(failed=True, trace_path=tmp_path / "pushed.zip")
+    text = Trace(path).summary()
+    assert "faults: Push(object=cube, force=" in text and "duration=0.1" in text

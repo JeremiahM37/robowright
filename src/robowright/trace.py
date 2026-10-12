@@ -344,7 +344,7 @@ class Trace:
                 )
             )
         if m.get("faults"):
-            lines.append("  faults: " + "; ".join(m["faults"]))
+            lines.append("  faults: " + "; ".join(_fault_text(f) for f in m["faults"]))
         lines.append("timeline:")
         shown = [e for e in self.events if e["type"] != "edit" or e["name"] != "reset_to"]
         for e in shown[:events]:
@@ -367,3 +367,10 @@ class Trace:
                 pairs[(x, y)] = pairs.get((x, y), 0.0) + f
             lines.append("  contacts: " + (", ".join(f"{x}-{y} {f:.2f} N" for (x, y), f in sorted(pairs.items())) or "none"))
         return "\n".join(lines)
+
+
+def _fault_text(fault) -> str:
+    """One fault of a trace's record as text: ``Push(object=cube, force=[0, 1.5, 0], at=3.0, duration=0.1)``."""
+    if not isinstance(fault, dict):
+        return str(fault)
+    return f"{fault.get('type', 'fault')}(" + ", ".join(f"{k}={v}" for k, v in fault.items() if k != "type") + ")"
