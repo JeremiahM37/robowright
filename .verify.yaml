@@ -55,9 +55,9 @@ steps:
   - name: rw.attach and replay on Drake, Genesis and Webots simulations, and rw.attach on a Gazebo world with no ROS; two arms from their own model files (floor clearance, an arm that cannot grasp top-down)
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_attach_drake.py tests/test_attach_genesis.py tests/test_attach_replay_drake.py tests/test_attach_replay_genesis.py tests/test_attach_factory.py -q -p no:cacheprovider", timeout: 900 }
-      - shell: { cmd: "[ -e /tmp/.X11-unix/X97 ] || (setsid Xvfb :97 -nolisten tcp -screen 0 1280x720x24 >/dev/null 2>&1 &); sleep 2; WEBOTS_HOME=/mnt/bulk/rw-ext/webots/install/webots DISPLAY=:97 LD_LIBRARY_PATH=/mnt/bulk/rw-ext/webots/env-glu/lib capped .venv/bin/python -m pytest tests/test_attach_webots.py tests/test_attach_webots_replay.py -q -p no:cacheprovider", timeout: 600 }
-      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_attach_gazebo.py -q -p no:cacheprovider", timeout: 600 }
-      - shell: { cmd: "ROBOWRIGHT_ARM_FILES=/mnt/bulk/rw-ext/newuser/download/menagerie capped .venv/bin/python -m pytest tests/test_arm_files.py -q -p no:cacheprovider", timeout: 600 }
+      - shell: { cmd: "[ -e /tmp/.X11-unix/X97 ] || (setsid Xvfb :97 -nolisten tcp -screen 0 1280x720x24 >/dev/null 2>&1 &); sleep 2; WEBOTS_HOME=/mnt/bulk/rw-ext/webots/install/webots DISPLAY=:97 LD_LIBRARY_PATH=/mnt/bulk/rw-ext/webots/env-glu/lib /mnt/bulk/rw-wt/capped-small .venv/bin/python -m pytest tests/test_attach_webots.py tests/test_attach_webots_replay.py -q -p no:cacheprovider", timeout: 600 }
+      - shell: { cmd: "/mnt/bulk/rw-wt/capped-small scripts/ros2_env.sh pytest tests/test_attach_gazebo.py -q -p no:cacheprovider", timeout: 600 }
+      - shell: { cmd: "ROBOWRIGHT_ARM_FILES=/mnt/bulk/rw-ext/newuser/download/menagerie /mnt/bulk/rw-wt/capped-small .venv/bin/python -m pytest tests/test_arm_files.py -q -p no:cacheprovider", timeout: 600 }
 
   - name: fidelity - the default is the model as published, and every change is on record
     actions:
@@ -77,7 +77,7 @@ steps:
 
   - name: an MCP client drives a robot and the test it saves passes
     actions:
-      - shell: "capped .venv/bin/python scripts/mcp_smoke.py /tmp/robowright-verify/mcp"
+      - shell: "/mnt/bulk/rw-wt/capped-small .venv/bin/python scripts/mcp_smoke.py /tmp/robowright-verify/mcp"
 
   - name: trace viewer DOM (desktop + Pixel 7)
     actions:
