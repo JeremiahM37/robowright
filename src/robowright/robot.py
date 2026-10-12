@@ -719,6 +719,13 @@ class Robot:
         from the table and the objects.
         """
         o = as_subject(self.world, obj)
+        if isinstance(o, ObjectHandle) and self.world.has_contacts and self.gripper.holding() == o.name:
+            # Already in the jaws, as after a shove that did not knock it free. The pre-grasp pose
+            # is 5 cm above it, and a hand held level there is out of reach at this radius, so
+            # there is nothing to grasp: say so and keep the hold.
+            self._picked = o.name
+            self.world.log(f"pick({o.name!r}): already held in the jaws")
+            return
         if not isinstance(approach, str) and approach is not None and np.linalg.norm(np.asarray(approach, float)[:2]) < 1e-6:
             approach = "top"  # straight down
         if approach not in (None, "top"):

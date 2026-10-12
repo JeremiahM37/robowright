@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import webbrowser
 from pathlib import Path
@@ -11,6 +12,13 @@ from pathlib import Path
 def _test(args, rest):
     import pytest
 
+    if "-h" in rest or "--help" in rest:
+        # pytest's usage text alone reads as if `robowright test` were pytest itself; say what it is first.
+        print(
+            "usage: robowright test [pytest arguments]\n\n"
+            "Runs this project's robot tests. Every argument goes to pytest unchanged, so the\n"
+            "options below are pytest's, plus robowright's --rw-* options (see `pytest --help`).\n"
+        )
     return pytest.main(rest)
 
 
@@ -117,12 +125,12 @@ jobs:
           path: robowright-traces/
 """
 
-_INIT_MCP = """{
-  "mcpServers": {
-    "robowright": {"command": "robowright", "args": ["mcp"]}
-  }
-}
-"""
+
+def _init_mcp() -> str:
+    """The .mcp.json entry. The interpreter that ran init, not a bare ``robowright``: that command only
+    resolves with this venv on PATH, so a client started from anywhere else would find no server."""
+    entry = {"command": sys.executable, "args": ["-m", "robowright.cli", "mcp"]}
+    return json.dumps({"mcpServers": {"robowright": entry}}, indent=2) + "\n"
 
 
 def _init(args, rest):
@@ -134,7 +142,7 @@ def _init(args, rest):
         root / "robowright.toml": _INIT_TOML,
         root / "pytest.ini": _INIT_PYTEST.format(robot=args.robot, backend=args.backend),
         root / ".github" / "workflows" / "robowright.yml": _INIT_CI,
-        root / ".mcp.json": _INIT_MCP,
+        root / ".mcp.json": _init_mcp(),
     }
     for path, text in files.items():
         if path.exists():

@@ -3,6 +3,7 @@ import pytest
 
 import robowright as rw
 from robowright import expect
+from robowright.errors import GraspError
 
 
 def test_move_to_reaches_target(quiet_world):
@@ -107,3 +108,47 @@ def test_launch_names_a_mujoco_too_old_to_build_with_and_warns_about_an_untested
         check_mujoco("3.10.0")
     check_mujoco("3.13.0")
     check_mujoco()  # the installed one
+
+
+def test_pick_of_an_object_already_in_the_jaws_keeps_the_hold(quiet_world):
+    """After a shove that leaves the cube in the jaws, the pre-grasp pose (5 cm above it) is out of reach
+    with the hand level, so pick() used to raise UnreachableError. The cube is already held: pick returns."""
+    w = quiet_world()
+    cube = w.scene["cube"]
+    w.robot.pick(cube)
+    w.faults.push("cube", (0, 3.0, 0), duration=0.2)
+    w.wait(0.3)
+    expect(cube).to_be_at_rest(hold=0.3, timeout=3)
+    assert w.robot.gripper.holding() == "cube"
+    w.robot.pick(cube)
+    assert w.robot.gripper.holding() == "cube"
+
+
+def test_pick_of_an_object_already_held_is_recorded_in_the_trace(tmp_path):
+    w = rw.launch(robot="so101", backend="mujoco", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    try:
+        w.robot.reset_to()
+        cube = w.scene["cube"]
+        w.robot.pick(cube)
+        w.robot.pick(cube)
+        notes = [e.name for e in w.trace.events if e.type == "log"]
+        assert any("already held in the jaws" in str(n) for n in notes), notes
+    finally:
+        w.backend.close()
+
+
+def test_object_touching_one_finger_is_not_already_held(tmp_path):
+    """Only an object between both jaws counts as held. One touching a single finger takes the normal
+    path, which lifts and checks the grasp again: here the jaws are not really closed on it, so that
+    check fails instead of pick() returning early."""
+    w = rw.launch(robot="so101", backend="mujoco", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    try:
+        w.robot.reset_to()
+        cube = w.scene["cube"]
+        w.robot.gripper.touching = lambda: ({"cube"}, set())
+        with pytest.raises(GraspError, match="lifted without it"):
+            w.robot.pick(cube)
+        assert not any("already held" in e.name for e in w.trace.events if e.type == "log")
+    finally:
+        del w.robot.gripper.touching
+        w.backend.close()

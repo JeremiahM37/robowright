@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 
+from . import __version__
 from .session import Session
 
 INSTRUCTIONS = """\
@@ -70,7 +72,9 @@ def build_server(session: Session | None = None):
         from mcp.server.fastmcp.exceptions import ToolError
 
     s = session or Session()
-    server = Server(name="robowright", instructions=INSTRUCTIONS)
+    # The SDK reports this as the server's version; left blank, a client shows none. mcp 1.x's FastMCP has no such argument.
+    version = {"version": __version__} if "version" in inspect.signature(Server).parameters else {}
+    server = Server(name="robowright", instructions=INSTRUCTIONS, **version)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="robowright")
 
     async def run(fn, *args, **kwargs):

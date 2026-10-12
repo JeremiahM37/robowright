@@ -1,5 +1,6 @@
 """The run's HTML report, traces as text, and ``robowright init``."""
 
+import json
 import subprocess
 import sys
 
@@ -47,6 +48,21 @@ def test_init_sets_up_a_project_whose_tests_pass(tmp_path):
     run = subprocess.run(pytest, cwd=tmp_path, capture_output=True, text=True)
     assert run.returncode == 0, run.stdout[-2000:]
     assert "3 passed" in run.stdout  # the controller, its 20 randomized trials, the reference controller
+
+
+def test_init_mcp_entry_starts_the_server_with_the_interpreter_that_ran_init(tmp_path):
+    cli = [sys.executable, "-m", "robowright.cli", "init", str(tmp_path)]
+    assert subprocess.run(cli, capture_output=True, text=True).returncode == 0
+    entry = json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["robowright"]
+    assert entry == {"command": sys.executable, "args": ["-m", "robowright.cli", "mcp"]}  # no venv needed on PATH
+
+
+def test_test_help_says_what_robowright_test_is_before_pytests_help():
+    r = subprocess.run([sys.executable, "-m", "robowright.cli", "test", "--help"], capture_output=True, text=True)
+    assert r.returncode == 0
+    head, _, rest = r.stdout.partition("\n\n")
+    assert head.startswith("usage: robowright test") and "pytest" in rest.split("\n", 1)[0]
+    assert "positional arguments" in r.stdout  # pytest's own help follows
 
 
 def test_headed_without_a_display_says_so(monkeypatch):

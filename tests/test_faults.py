@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import robowright as rw
 
@@ -21,6 +22,13 @@ def test_action_delay_lags_commands(quiet_world):
     assert w.backend.ctrl()[0] == before
     w.step(5)
     assert abs(w.backend.ctrl()[0] - 0.5) < 1e-6
+
+
+def test_push_of_a_name_not_in_the_scene_is_refused_at_the_call(quiet_world):
+    w = quiet_world()
+    with pytest.raises(ValueError, match="'nosuchthing'.*cube.*bin"):
+        w.faults.push("nosuchthing", (1.0, 0, 0))
+    assert not w.faults.active  # nothing was queued to fail later
 
 
 def test_push_moves_object(quiet_world):

@@ -394,3 +394,23 @@ def test_a_bare_arms_home_keeps_it_off_the_floor(monkeypatch):
     monkeypatch.setattr(robots.menagerie, "_fetch", lambda directory: pytest.skip(f"{directory} not downloaded"))
     m = robots.load(robots.menagerie.path("universal_robots_ur5e/ur5e.xml"), name="ur5e_floor", gripper=False)
     assert not _below_floor(m.name, home_q(m.name))
+
+
+def test_attaching_a_gripper_to_a_bare_arm_says_nothing_to_stdout_or_the_log(tmp_path, monkeypatch):
+    """Detection attaches a Robotiq 2F-85 to an arm with none. Its contact settings differ from the arm's,
+    which MuJoCo reports as an attach conflict (a Python warning, and MUJOCO_LOG.TXT in the working directory).
+    The arm's settings are the ones kept, so the attach now states that instead."""
+    mujoco = pytest.importorskip("mujoco")
+    from robowright.robots import ROBOTIQ_2F85
+    from robowright.robots.detect import _with_attachment
+    from robowright.robots.model import Attachment
+
+    monkeypatch.chdir(tmp_path)
+    spec = mujoco.MjSpec.from_file(str(robots.get("panda").mjcf()))
+    attach = Attachment(ROBOTIQ_2F85.mjcf, "tool_site", body=spec.bodies[-1].name)
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        m = _with_attachment(spec, attach)
+    assert not [w for w in seen if "Attach conflict" in str(w.message)]
+    assert not (tmp_path / "MUJOCO_LOG.TXT").exists()
+    assert m.opt.impratio == 1.0 and m.opt.cone == 0  # the arm's own settings, as MuJoCo kept them before

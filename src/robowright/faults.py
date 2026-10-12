@@ -108,6 +108,12 @@ class Faults:
                 f'push("robot") pushes the free base of a legged or mobile robot; {model.title} is fixed to the floor. '
                 "Push an object by name, or weaken a joint with weak_joint()"
             )
+        # Checked here, not when the force is applied: a misspelt name would otherwise be a silent no-op
+        # until the backend tried to find it. object_names is the scene's objects for every world kind
+        # (an attached world's free bodies, a ROS 2 robot's objects), so one check covers them all.
+        if object != "robot" and object not in self.world.object_names:
+            names = ", ".join(self.world.object_names) or "none"
+            raise ValueError(f'push({object!r}): no object of that name in the scene; the objects are: {names} (or "robot")')
         at = self.world.time if at is None else at
         return self._add(Push(object, tuple(map(float, force)), float(at), float(duration)))
 

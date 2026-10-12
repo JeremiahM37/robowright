@@ -537,6 +537,10 @@ def _with_attachment(spec: mujoco.MjSpec, attach: Attachment) -> mujoco.MjModel:
         g.delete(k)
     for k in list(spec.keys):
         spec.delete(k)
+    # The arm's solver contact settings win on attach, as MuJoCo would keep them. Setting them on the
+    # gripper first says so, instead of MuJoCo warning about the mismatch (in Python and in MUJOCO_LOG.TXT,
+    # which lands in the working directory). Nothing that compiles changes.
+    g.option.impratio, g.option.cone = spec.option.impratio, spec.option.cone
     spec.attach(g, prefix=attach.prefix, site=attach.at(spec))
     return spec.compile()
 
