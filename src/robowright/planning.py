@@ -54,6 +54,11 @@ class Planner:
             spec.worldbody.add_geom(name=f"fixture{i}", type=kind, size=size, pos=list(o.pos), quat=list(o.quat), contype=1, conaffinity=1)
         self.m = spec.compile()
         self.fixture_names = {self.m.geom(f"fixture{i}").id: o.name for i, o in enumerate(self.fixtures)}
+        # The floor under the robot is a fixture too: a MuJoCo world has no fixtures of its own, and
+        # a joint-space move down through the floor is planned round it as a ROS 2 table is.
+        floor = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+        if floor >= 0:
+            self.fixture_names[floor] = "the floor"
         self.m.geom_margin[:] = CLEARANCE
         self.d = mujoco.MjData(self.m)
         m = self.m

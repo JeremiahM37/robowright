@@ -122,21 +122,22 @@ class Arm:
         goal = np.asarray(q, float)
         start = r._target[: r.n_arm].copy()
         speed = speed or self.world.settings.max_joint_speed
-        if getattr(self.world.backend, "fixtures", ([], []))[0]:
-            # The world has fixed geometry the planner knows (a ROS 2 robot's table, from Gazebo): a
-            # joint-space line through it is not sent. The planner's path goes round it, or the move says why it cannot.
-            planner = r.planner
-            planner.sync(r.gripper.holding() if self.world.has_contacts and r.model.has_gripper else None)
-            hits = planner.line_hits(start, goal)
-            if hits:
-                try:
-                    path = planner.plan(start, goal)
-                except UnreachableError as e:
-                    raise UnreachableError(
-                        f"the straight joint move passes through {', '.join(sorted(hits))}, and no path round it was found ({e}). "
-                        "Name a higher waypoint, or use plan=True where the move allows it"
-                    ) from e
-                return self.follow.__wrapped__(self, path, timeout=timeout)
+        # The world's fixed geometry the planner knows (a ROS 2 robot's table, from Gazebo, and the
+        # floor under any robot): a joint-space line through it is not sent. The planner's path goes
+        # round it, or the move says why it cannot. (Unplanned, a MuJoCo arm whose shoulder swings
+        # down through the floor was pushed into it until the move timed out.)
+        planner = r.planner
+        planner.sync(r.gripper.holding() if self.world.has_contacts and r.model.has_gripper else None)
+        hits = planner.line_hits(start, goal)
+        if hits:
+            try:
+                path = planner.plan(start, goal)
+            except UnreachableError as e:
+                raise UnreachableError(
+                    f"the straight joint move passes through {', '.join(sorted(hits))}, and no path round it was found ({e}). "
+                    "Name a higher waypoint, or use plan=True where the move allows it"
+                ) from e
+            return self.follow.__wrapped__(self, path, timeout=timeout)
         # Long arms sweep the tool fast for small joint motions; cap tool speed too
         # or a held object is flung out of the gripper. Measure the path the tool
         # actually sweeps: a joint-space move that changes arm configuration arcs far
@@ -661,9 +662,26 @@ class Robot:
         q, err = solve_ik(self.kin, p, seed, self.home_q, approach, yaw, rest, level)
         if err < 1e-3:
             q = unfold(self.model.name, self.kin, q, p, seed, self.home_q, approach, yaw, rest, level)
+        if err < 1e-3 and _on_floor(self.model.name, q):
+            q = self._off_floor(p, seed, approach, yaw, rest, level, q)
         if err > 5e-3:
             raise UnreachableError(f"no joint configuration reaches {np.round(p, 3).tolist()} (closest {err * 1000:.1f} mm)")
         return q, err
+
+    def _off_floor(self, p, seed, approach, yaw, rest, level, q) -> np.ndarray:
+        """``q`` if no link of the arm is pressed into the floor there, else the nearest configuration
+        that reaches ``p`` clear of it (IK from where the arm is can settle on one through the table
+        when another, clear of it, reaches the same point)."""
+        rest = self.home_q if rest is None else rest
+        found = []
+        for s in [seed, self.home_q, *_far_seeds(self.kin, 16)]:
+            cand, err = self.kin.ik(p, s, approach, yaw, rest=rest, level=level)
+            if err < 1e-3 and (yaw is None or _yaw_error(self.kin, cand, yaw) < np.radians(2)) and not _on_floor(self.model.name, cand):
+                found.append(cand)
+                break
+        if not found:
+            return q
+        return min(found, key=lambda c: float(np.abs(c - seed).sum()))
 
     def _swing(self, target, yaw, timeout):
         """Move the tool to ``target`` across the workspace, never lower than the move's ends.
@@ -1209,6 +1227,23 @@ def _folded(name: str, q, depth: float = 0.0) -> bool:
     return False
 
 
+def _on_floor(name: str, q) -> bool:
+    """Whether a link of the arm at ``q`` (not its hand) is pressed into the floor: MuJoCo's own
+    contacts, not the bounding boxes :func:`_below_floor` uses."""
+    from . import fidelity
+
+    return _floor_test_in(name, fidelity.mode())(q)
+
+
+@functools.cache
+def _floor_test_in(name: str, mode: str):
+    from . import fidelity, robots
+    from .robots.model import floor_test
+
+    with fidelity.using(mode), fidelity.silent():
+        return floor_test(robots.get(name))
+
+
 def _below_floor(name: str, q) -> bool:
     """Whether the arm at ``q`` reaches below the floor its base stands on: a link the arm moves
     (not the base) with a point under it. (A bare UR's flange-down home, without a gripper's
@@ -1312,7 +1347,7 @@ def home_q(name: str) -> np.ndarray:
     if seed is None:
         seed = np.clip(np.zeros(m.n_arm), kin.lower, kin.upper)
     q, err = kin.ik(m.home, seed, DOWN, yaw=0.0, rest=seed)
-    if err > 1e-3 or _folded(name, q) or _below_floor(name, q):
+    if err > 1e-3 or _folded(name, q) or _below_floor(name, q) or _on_floor(name, q):
         # IK is local: a model's own pose can sit in a basin that does not reach home, or reaches it
         # folded into itself (the e.DO's gripper 1 cm inside its forearm, its wrist servo pushing
         # at its limit). Try from mid-range and a few fixed random poses (as robots.detect does
@@ -1327,7 +1362,7 @@ def home_q(name: str) -> np.ndarray:
                 q, err = kin.ik(m.home, s, DOWN, yaw=y, rest=seed)
                 if err <= 1e-3:
                     first = first or (q, err)
-                    if not _folded(name, q) and not _below_floor(name, q):
+                    if not _folded(name, q) and not _below_floor(name, q) and not _on_floor(name, q):
                         found = True
                         break
             if found:

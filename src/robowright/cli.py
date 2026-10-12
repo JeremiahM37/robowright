@@ -269,7 +269,24 @@ def _check(argv) -> int:
 
     skip = [f"-p no:{ep.name}" for ep in entry_points(group="pytest11") if ep.name in ("launch_testing", "launch_ros")]
     skip = [a for s in skip for a in s.split(" ", 1)]
-    return int(pytest.main(["--pyargs", "robowright.contract", "--rw-robot", args.robot, "--rw-backend", args.backend, *skip, *rest]))
+    # No .pytest_cache: pytest's rootdir is the working directory when the model file is beside it,
+    # so a check run from a robot's folder left a cache in that folder.
+    return int(
+        pytest.main(
+            [
+                "--pyargs",
+                "robowright.contract",
+                "--rw-robot",
+                args.robot,
+                "--rw-backend",
+                args.backend,
+                *skip,
+                "-p",
+                "no:cacheprovider",
+                *rest,
+            ]
+        )
+    )
 
 
 def _robots(args, rest):
@@ -332,7 +349,7 @@ def _inspect(path, hint: bool = True, bare: bool = False) -> int:
     """What robowright works out about the robot in a model file, and why."""
     import warnings
 
-    from .robots.detect import DetectionError, build
+    from .robots.detect import DetectionError, arm_reach, build
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # MuJoCo's notes on attaching a gripper are not the user's business
@@ -345,6 +362,8 @@ def _inspect(path, hint: bool = True, bare: bool = False) -> int:
     print(f"{path}: {m.family}, {m.n_arm} joints, named {m.name!r}")
     for note in built.notes:
         print(f"  {note}")
+    if m.family == "arm":
+        print(f"  reach: {arm_reach(m):.2f} m (the farthest the tool point gets from the base over its joint ranges)")
     if hint and bare:
         print("\nan arm with no gripper: for tests of a robot reached over ROS 2 (--rw-backend ros2), not pick-and-place")
         print(f"give it a name:  robowright robots add {path} --name NAME --no-gripper")

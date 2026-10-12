@@ -236,7 +236,7 @@ def _build(path, name, drive: bool, **overrides) -> Built:
         **fields,
         extra={"file": str(path), "overrides": record_options(given), **({"xacro_args": xacro_args} if xacro_args else {})},
     )
-    if model.family == "arm" and ("base_pos" not in overrides or "home" not in overrides):
+    if model.family == "arm":
         try:
             model = _place(model, det.notes, keep_base="base_pos" in overrides, keep_home="home" in overrides)
         except DetectionError as e:
@@ -1318,46 +1318,165 @@ def _folds(model: RobotModel, rest):
     return test
 
 
-def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotModel:
-    """Mount the arm where top-down grasps reach the whole task area, and pick a home height."""
-    from ..robot import DOWN
-    from .model import Kinematics
+def _local(p, x: float, yaw: float) -> np.ndarray:
+    """A world point in the frame of a robot mounted at (x, 0, 0) facing ``yaw``."""
+    c, sn = np.cos(yaw), np.sin(yaw)
+    v = np.asarray(p, float) - (x, 0.0, 0.0)
+    return np.array([c * v[0] + sn * v[1], -sn * v[0] + c * v[1], v[2]])
 
-    kin = Kinematics(replace(model, base_pos=(0.0, 0.0, 0.0), base_yaw=0.0))
-    seed = model.keyframe_q()
-    if seed is None:
-        seed = np.clip(np.zeros(model.n_arm), kin.lower, kin.upper)
-    seed = np.clip(seed, kin.lower, kin.upper)
 
-    # IK is local: start it from the model's own pose, mid-range, and a few fixed random poses.
-    rng = np.random.default_rng(0)
-    lo, hi = np.maximum(kin.lower, -np.pi), np.minimum(kin.upper, np.pi)
-    seeds = [seed, (lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]
+class _Mount:
+    """The arm of ``model`` placed at the origin facing +x, as placement works it out: which top-down
+    grasps it reaches clear of itself and the floor, and how far off the nearest one is."""
 
-    any_yaw = False  # set for an arm with no wrist roll, which grips at whatever angle it reaches with
+    def __init__(self, model: RobotModel):
+        from ..robot import DOWN
+        from .model import Kinematics, floor_test
 
-    folded = _folds(model, seed)
+        at_origin = replace(model, base_pos=(0.0, 0.0, 0.0), base_yaw=0.0)
+        self.kin = Kinematics(at_origin)
+        self.down = DOWN
+        seed = model.keyframe_q()
+        if seed is None:
+            seed = np.zeros(model.n_arm)
+        self.seed = np.clip(seed, self.kin.lower, self.kin.upper)
+        # IK is local: start it from the model's own pose, mid-range, and a few fixed random poses.
+        rng = np.random.default_rng(0)
+        lo, hi = np.maximum(self.kin.lower, -np.pi), np.minimum(self.kin.upper, np.pi)
+        self.seeds = [self.seed, (lo + hi) / 2, *(rng.uniform(lo, hi) for _ in range(4))]
+        self.any_yaw = False  # set for an arm with no wrist roll, which grips at whatever angle it reaches with
+        self.folded = _folds(model, self.seed)
+        self.on_floor = floor_test(at_origin)
 
-    def solve(p, turned):
-        """Joint angles reaching ``p`` top-down without the arm passing into itself or its base,
-        or None. Grasps are square to the world (yaw 0), which on a robot turned by ``turned``
-        is -turned in its own frame. (TIAGo was mounted where every way of reaching down to a
-        cube near its base put its wrist into the base.)"""
+    def _yaws(self, turned):
+        return (-turned, None) if self.any_yaw else (-turned,)
+
+    def solve(self, p, turned):
+        """Joint angles reaching ``p`` top-down without the arm passing into itself, its base or
+        the floor, or None. Grasps are square to the world (yaw 0), which on a robot turned by
+        ``turned`` is -turned in its own frame. (TIAGo was mounted where every way of reaching down
+        to a cube near its base put its wrist into the base. A Seeed-style arm with its shoulder at
+        table height reached the cube with its shoulder pressed into the floor, and nothing
+        checked that.)"""
         p = np.asarray(p, float)
-        for y in (-turned, None) if any_yaw else (-turned,):
-            for s in seeds:
-                q, err = kin.ik(p, s, DOWN, yaw=y, rest=seed)
-                if err < 1e-3 and not folded(q):
+        for y in self._yaws(turned):
+            for s in self.seeds:
+                q, err = self.kin.ik(p, s, self.down, yaw=y, rest=self.seed)
+                if err < 1e-3 and not self.folded(q) and not self.on_floor(q):
                     return q
         return None
 
-    def reaches(p, turned):
-        return solve(p, turned) is not None
+    def reaches(self, p, turned) -> bool:
+        return self.solve(p, turned) is not None
 
-    def local(p, x, yaw):  # a world point in the frame of a robot mounted at (x, 0, 0) facing yaw
-        c, sn = np.cos(yaw), np.sin(yaw)
-        v = np.asarray(p, float) - (x, 0.0, 0.0)
-        return np.array([c * v[0] + sn * v[1], -sn * v[0] + c * v[1], v[2]])
+    def miss(self, p, turned, starts: int = 0) -> float:
+        """The least position error (metres) of a top-down pose at ``p``, from any of the starts (and
+        ``starts`` more fixed random ones); not checked for clearance, so a pose a link would press
+        into the floor still counts as reached."""
+        p = np.asarray(p, float)
+        seeds = self.seeds
+        if starts:
+            rng = np.random.default_rng(1)
+            lo, hi = np.maximum(self.kin.lower, -np.pi), np.minimum(self.kin.upper, np.pi)
+            seeds = [*seeds, *(rng.uniform(lo, hi) for _ in range(starts))]
+        return min(self.kin.ik(p, s, self.down, yaw=y, rest=self.seed)[1] for y in self._yaws(turned) for s in seeds)
+
+
+def _nearest_home(mount: _Mount, base_x: float, yaw: float, target) -> tuple[tuple | None, float, tuple]:
+    """The home pose (world coordinates) nearest ``target`` that the arm at ``base_x`` reaches, from a
+    coarse grid around it: (home or None, its error in metres if none, the grid point nearest the arm).
+    Returns the first reachable one in order of distance, so a home it reaches is found quickly."""
+    target = np.asarray(target, float)
+    cands = [
+        (x, y, z)
+        for x in target[0] + np.arange(-0.12, 0.121, 0.04)
+        for y in target[1] + np.array([-0.1, 0.0, 0.1])
+        for z in np.arange(0.08, 0.301, 0.04)
+    ]
+    cands.sort(key=lambda p: float(np.linalg.norm(np.subtract(p, target))))
+    closest = (np.inf, None)
+    for p in cands:
+        local = _local(p, base_x, yaw)
+        if mount.reaches(local, yaw):
+            return tuple(round(float(v), 3) for v in p), 0.0, tuple(round(float(v), 3) for v in p)
+        err = mount.miss(local, yaw)
+        if err < closest[0]:
+            closest = (err, tuple(round(float(v), 3) for v in p))
+    return None, closest[0], closest[1]
+
+
+def _mm(metres: float) -> str:
+    return f"{metres * 1000:.1f} mm"
+
+
+def _no_mounting(model: RobotModel, mount: _Mount, keep_home: bool) -> str:
+    """Why no mounting lets the arm reach the task area: its reach, and the task point it gets closest
+    to least well from the mountings tried (each point is best-reached from some mounting)."""
+    xs = np.round(np.arange(0.15, -1.2, -0.025), 3)  # the search's own step
+    worst = (-1.0, None, None)  # (least miss of the hardest point, point, (x, yaw) it came from)
+    for p in _NEEDED:
+        # A coarse pass over the mountings with the search's own starts, then the best few again
+        # with many more starts: the coarse pass alone overstates the miss by several-fold.
+        grid = sorted(
+            ((mount.miss(_local(p, float(x), y), y), float(x), y) for y in (0.0, np.pi / 2, -np.pi / 2, np.pi) for x in xs),
+            key=lambda t: t[0],
+        )[:6]
+        best = min(((mount.miss(_local(p, x, y), y, starts=30), x, y) for _, x, y in grid), key=lambda t: t[0])
+        if best[0] > worst[0]:
+            worst = (best[0], tuple(float(v) for v in p), (best[1], best[2]))
+    reach = arm_reach(model)
+    head = f"the arm reaches {reach:.2f} m from its base"
+    if worst[0] < 1e-3:
+        return (
+            f"{head}, and every task point can be reached top-down from some mounting, but no one mounting reaches all of "
+            f"them clear of the arm itself, the floor and the objects. Pass base_pos=... (and home=...) to choose one."
+        )
+    x, y = worst[2]
+    turn = f", turned {np.degrees(y):+.0f} deg" if y else ""
+    tail = " with home=... as given" if keep_home else ""
+    return (
+        f"{head}; the nearest top-down pose to the task point {worst[1]} is {_mm(worst[0])} away from any mounting tried "
+        f"(closest at base x={x:+.2f} m{turn}){tail}. Grasps are straight down, so this arm cannot do the tabletop tasks as "
+        "modelled, and no base_pos or home changes that. Use a model whose wrist reaches down at table height, or drive "
+        "this arm over ROS 2 with its own controller (--backend ros2, --no-gripper)."
+    )
+
+
+def _bad_home(home, base, mount: _Mount, base_x: float, yaw: float) -> str:
+    """The message for a home the arm cannot reach, with the nearest one it can."""
+    err = mount.miss(_local(home, base_x, yaw), yaw)
+    near, _, closest = _nearest_home(mount, base_x, yaw, home)
+    if near is not None:
+        where = f"the nearest home it reaches is home={near}"
+    else:
+        where = f"no home on a 4 cm grid within 12 cm of it is reachable (the nearest grid point, {closest}, is still off)"
+    return (
+        f"home pose {tuple(float(v) for v in home)} unreachable at base_pos={tuple(float(v) for v in base)} "
+        f"(closest {err * 1000:.1f} mm); {where}"
+    )
+
+
+def arm_reach(model: RobotModel) -> float:
+    """How far the tool point gets from the base over the arm's joint ranges, sampled, in metres."""
+    from .model import Kinematics
+
+    kin = Kinematics(replace(model, base_pos=(0.0, 0.0, 0.0), base_yaw=0.0))
+    rng = np.random.default_rng(0)
+    qs = rng.uniform(kin.lower, kin.upper, size=(4000, model.n_arm))
+    return max(float(np.linalg.norm(kin.tcp(q))) for q in qs)
+
+
+def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotModel:
+    """Mount the arm where top-down grasps reach the whole task area, and pick a home height.
+
+    A base_pos or home the user gives is kept, and checked: a home the arm cannot reach is an error
+    here, not a failure later, with the nearest home it does reach."""
+    mount = _Mount(model)
+    if keep_base and keep_home:
+        base_x, yaw = float(model.base_pos[0]), float(model.base_yaw)
+        if not mount.reaches(_local(model.home, base_x, yaw), yaw):
+            raise DetectionError(_bad_home(model.home, model.base_pos, mount, base_x, yaw))
+        return model
 
     base, yaw = np.asarray(model.base_pos, float), float(model.base_yaw)
     footprint = _base_footprint(model)
@@ -1380,9 +1499,11 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
         # Facing the task area first: a model whose arm points along another axis is turned.
         for y in (0.0, np.pi / 2, -np.pi / 2, np.pi):
             score = {
-                x: sum(reaches(local(p, x, y), y) for p in _AROUND)
+                x: sum(mount.reaches(_local(p, x, y), y) for p in _AROUND)
                 for x in xs
-                if clear(x, y) and all(reaches(local(p, x, y), y) for p in _NEEDED)
+                if clear(x, y)
+                and all(mount.reaches(_local(p, x, y), y) for p in _NEEDED)
+                and (not keep_home or mount.reaches(_local(model.home, x, y), y))
             }
             if not score:
                 continue
@@ -1409,12 +1530,12 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
         if not run:
             # An arm without a wrist roll (four joints, say) cannot square its grip to the
             # world; picks then grip at the angle the arm reaches with (see robot.solve_ik).
-            any_yaw = True
+            mount.any_yaw = True
             top, run, yaw = search()
             if run:
                 notes.append("yaw: the arm cannot turn its grip square to the task area, so it grips at the angle it reaches with")
         if not run:
-            raise DetectionError("no mounting position lets top-down grasps reach the task area: pass base_pos=... and home=...")
+            raise DetectionError(_no_mounting(model, mount, keep_home))
         base = np.array([float(run[len(run) // 2]), 0.0, 0.0])
         turned = f", turned {np.degrees(yaw):+.0f} deg" if yaw else ""
         notes.append(
@@ -1423,13 +1544,21 @@ def _place(model: RobotModel, notes, keep_base=False, keep_home=False) -> RobotM
         )
     home = model.home
     if not keep_home:
-        home = next(((0.2, 0.0, h) for h in _HOME_HEIGHTS if reaches(local((0.2, 0.0, h), base[0], yaw), yaw)), None)
+        home = next(((0.2, 0.0, h) for h in _HOME_HEIGHTS if mount.reaches(_local((0.2, 0.0, h), base[0], yaw), yaw)), None)
         if home is None:
-            raise DetectionError("no reachable home pose above the task area: pass home=...")
+            near, _, closest = _nearest_home(mount, base[0], yaw, (0.2, 0.0, 0.15))
+            if near is not None:
+                hint = f"the nearest home it reaches is home={near}"
+            else:
+                hint = (
+                    f"no home on a 4 cm grid within 12 cm of (0.2, 0.0, 0.15) is reachable "
+                    f"(the nearest grid point, {closest}, is still off)"
+                )
+            raise DetectionError(f"no reachable home pose above the task area at base_pos={tuple(float(v) for v in base)}: {hint}")
         notes.append(f"home: {home}")
     start = model.start
     if start is None and _zero_pose_touches_table(model):
-        q = solve(local(home, base[0], yaw), yaw)
+        q = mount.solve(_local(home, base[0], yaw), yaw)
         if q is not None:
             start = tuple(round(float(v), 6) for v in q)
             notes.append("start: the home pose, as the model's zero pose puts the arm into the table")

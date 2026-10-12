@@ -488,6 +488,55 @@ def reset_data(m: mujoco.MjModel, d: mujoco.MjData) -> None:
     mujoco.mj_forward(m, d)
 
 
+def floor_test(model: RobotModel):
+    """A test of whether the arm at joint angles ``q`` puts a link of ``model`` (not its hand, which
+    is meant to reach the table) within the planner's clearance of the floor, which is z = 0 with
+    the robot standing on it. The base is not tested: it stands on the floor by design.
+
+    The links are checked as MuJoCo collides them, not by their bounding boxes: a box test passed
+    a cylinder link 3 mm into the floor, and the arm pressed into it."""
+    from ..planning import CLEARANCE
+
+    spec = mujoco.MjSpec()
+    spec.worldbody.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[0.0, 0.0, 0.05])
+    model.add_to(spec)
+    m = spec.compile()
+    m.geom_margin[:] = CLEARANCE
+    d = mujoco.MjData(m)
+    adr = [m.joint(PREFIX + j).qposadr[0] for j in model.arm_joints]
+    floor = m.geom("floor").id
+    first = min(int(m.jnt_bodyid[m.joint(PREFIX + j).id]) for j in model.arm_joints)
+    moved = {first}
+    for b in range(first + 1, m.nbody):  # bodies come after their parents
+        if m.body_parentid[b] in moved:
+            moved.add(b)
+    # A link that turns about the vertical sits on the mounting plane (a UR's shoulder), and cannot be
+    # lowered into the floor by its joint: it is not tested, as _below_floor does not test it.
+    turn = next(m.joint(PREFIX + j).id for j in model.arm_joints if m.jnt_bodyid[m.joint(PREFIX + j).id] == first)
+    mujoco.mj_kinematics(m, d)
+    if abs(d.xaxis[turn][2]) > 0.99:
+        moved.discard(first)
+    hand = set()
+    if model.hand is not None:
+        hand = {m.body(PREFIX + model.hand).id}
+        for b in range(min(hand), m.nbody):
+            if m.body_parentid[b] in hand:
+                hand.add(b)
+    links = {g for g in range(m.ngeom) if m.geom_bodyid[g] in moved - hand and (m.geom_contype[g] or m.geom_conaffinity[g])}
+
+    def test(q) -> bool:
+        d.qpos[adr] = q
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_collision(m, d)
+        for c in d.contact[: d.ncon]:
+            pair = {int(c.geom1), int(c.geom2)}
+            if floor in pair and (pair - {floor}) & links and c.dist < CLEARANCE:
+                return True
+        return False
+
+    return test
+
+
 def _collision_geoms(m, bodies):
     return [g for g in range(m.ngeom) if m.geom_bodyid[g] in bodies and (m.geom_contype[g] or m.geom_conaffinity[g])]
 
