@@ -171,13 +171,16 @@ STEPPED = ("drake", "genesis", "webots")
 
 
 def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
-    from .attached import _is_drake_simulator, attach, model_bytes
+    import mujoco
+
+    from .attached import _is_drake_simulator, _physics_of, attach, model_bytes, restore_rng
     from .world import Settings
 
     if not (tr.meta.get("env") or {}).get("actions_recorded", True):
         raise ValueError(f"this run cannot be replayed: {tr.meta['env']['note']}")
+    bare = bool((tr.meta.get("env") or {}).get("bare"))
     if make_env is None:
-        make_env = _make_from_spec(tr)
+        make_env = _bare_from_trace(tr) if bare else _make_from_spec(tr)
     recorded = tr.meta["attached"].get("engine")
     built = make_env()
     if built is None:
@@ -186,7 +189,19 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
     if isinstance(built, tuple):  # a Drake simulation may come with its plant, when its diagram holds more than one
         built, plant = built
     step_fn = None  # a Webots world's step, taken before attach wraps the environment's step
-    if recorded == "drake":
+    if bare:
+        # A bare model: the caller's own mj_step moved it, so the replay takes that step itself, with the control the trace kept.
+        if isinstance(built, mujoco.MjModel):
+            built = (built, mujoco.MjData(built))
+        if isinstance(built, tuple):
+            model, data = built
+        else:
+            model, data = _physics_of(built)
+        world = attach(model=model, data=data, seed=tr.meta["seed"], settings=Settings(trace="off"))
+        env = None
+        if tr.state0 is not None:  # the start state the recorded run began from, before its first step
+            world.backend.set_state(tr.state0)
+    elif recorded == "drake":
         if not _is_drake_simulator(built):
             raise ValueError("this run is a Drake simulation: make_env must return its Simulator, or (Simulator, plant)")
         world = attach(simulator=built, plant=plant, seed=tr.meta["seed"], settings=Settings(trace="off"))
@@ -195,9 +210,10 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         world = attach(built, engine="webots", seed=tr.meta["seed"], settings=Settings(trace="off"))
     else:
         world = attach(built, seed=tr.meta["seed"], settings=Settings(trace="off"))
-    env = built
-    stepped = recorded in STEPPED
-    if stepped and world.backend.engine != recorded:
+    if not bare:
+        env = built
+    stepped = recorded in STEPPED or bare
+    if stepped and not bare and world.backend.engine != recorded:
         raise ValueError(f"this run was recorded on {recorded}, but make_env built a {world.backend.engine} simulation")
     notes: list[str] = []
     if not tr.meta["attached"].get("inputs_recorded", True):
@@ -229,7 +245,7 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
             bang[i] = float(np.max(_quat_angle(quat, bodies["quat"][i])))
 
     try:
-        stored = _stored_model(tr)
+        stored = None if bare else _stored_model(tr)
         if stored is not None and model_bytes(world.backend.model) != stored:
             notes.append("the environment as rebuilt has a different MuJoCo model from the recorded one (another version or options)")
         rows = iter([row for _, kind, row in tr.controls if kind == "action"])
@@ -242,9 +258,9 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
                 if recorded == "genesis":
                     env.reset()  # a Genesis scene resets to its built state; it takes no seed
                 else:
-                    kw = {"seed": item["args"].get("seed")}
-                    if "options" in item["args"]:
-                        kw["options"] = item["args"]["options"]
+                    if "rng" in item["args"]:  # the random state the reset drew from when it was recorded
+                        restore_rng(env, item["args"]["rng"])
+                    kw = _reset_kwargs(env, item["args"], skipped)
                     env.reset(**kw)
                 if not compared_start:
                     compare(world.step_count)  # the start state, before any step
@@ -252,7 +268,10 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
             elif item["kind"] == "control":
                 if stepped:
                     s = item["step"]
-                    if recorded == "drake":
+                    if bare:
+                        data.ctrl[:] = a["ctrl"][s]  # the control the recorded step was taken with
+                        world.replay_step(lambda: mujoco.mj_step(model, data), _recorded_forces(tr, s))
+                    elif recorded == "drake":
                         t = float(a["t"][s])  # the recorded clock, so each AdvanceTo lands on the recorded time
                         world.replay_step(lambda t=t: env.AdvanceTo(t), _recorded_forces(tr, s))
                     elif recorded == "webots":
@@ -280,6 +299,11 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
             notes.append("not replayed: " + ", ".join(sorted(skipped)))
         notes.append("expectations and invariants are not checked again: only the states are compared")
         bad = np.nonzero((qerr > tol) | (oerr > tol) | (berr > tol) | (bang > tol))[0]
+        if bad.size:
+            notes.append(
+                f"diverged at step {int(bad[0])}: if the environment draws random numbers from a generator the trace does not "
+                "capture, seed that generator in a --factory module:func that builds it, the way the recorded run was seeded"
+            )
         return ReplayResult(
             n - 1,
             float(qerr.max()),
@@ -380,12 +404,62 @@ def make_spec_call(spec: dict) -> tuple[str, dict]:
     return env_id, kwargs
 
 
+def _bare_from_trace(tr: Trace):
+    """The model a bare run was recorded with, rebuilt from the copy the trace keeps (its start state is set by the replay)."""
+
+    def make():
+        import tempfile
+
+        import mujoco
+
+        raw = _stored_model(tr)
+        if raw is None:
+            raise ValueError("this trace keeps no model: pass --factory module:func that builds the model and data")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model.mjb"
+            p.write_bytes(raw)
+            model = mujoco.MjModel.from_binary_path(str(p))
+        return model, mujoco.MjData(model)
+
+    return make
+
+
+def _reset_params(env) -> set | None:
+    """The argument names the environment's reset takes, or None when it takes any (``**kwargs``)."""
+    import inspect
+
+    try:
+        params = inspect.signature(inspect.unwrap(env.reset)).parameters
+    except (TypeError, ValueError):
+        return None
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return None
+    return set(params)
+
+
+def _reset_kwargs(env, args: dict, skipped: set) -> dict:
+    """The arguments a recorded reset was made with, limited to those this environment's reset takes: a dm_control
+    reset takes no seed, and passing one would fail the replay before it started."""
+    takes = _reset_params(env)
+    kw = {}
+    for key in ("seed", "options"):
+        if key not in args:
+            continue
+        if takes is None or key in takes:
+            kw[key] = args[key]
+        elif args[key] is not None:
+            skipped.add(f"reset {key}={args[key]!r} (the environment's reset takes no {key})")
+    return kw
+
+
 def _make_from_spec(tr: Trace):
     env_rec = tr.meta.get("env") or {}
     spec = env_rec.get("spec")
     if not spec or not spec.get("reproducible") or not env_rec.get("actions_recorded", True):
         why = env_rec.get("note") or (spec or {}).get("reason") or "this run's environment was not made by gymnasium.make"
-        raise ValueError(f"cannot rebuild this run's environment ({why}): pass make_env=... that builds it the way the run did")
+        raise ValueError(
+            f"cannot rebuild this run's environment ({why}): pass --factory module:func, a function that builds it the way the run did"
+        )
     try:
         import gymnasium
     except ImportError as e:

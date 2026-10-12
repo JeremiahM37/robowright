@@ -58,6 +58,10 @@ class AttachedEngine(Backend):
     def names(self, kind: str = "body") -> list[str]:
         raise NotImplementedError
 
+    def joint_kinds(self) -> dict[str, str]:
+        """Named joints and their kinds, for ``world.joints()``. An engine without joints has none."""
+        return {}
+
     def resolve(self, name: str):
         """A handle for the body, site or link called ``name``, or None."""
         raise NotImplementedError
