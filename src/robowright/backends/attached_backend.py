@@ -35,11 +35,13 @@ class AttachedBackend(AttachedEngine):
         super().__init__(seed, dt=float(model.opt.timestep))
         self.model, self.data = model, data
         self.joint_names = _qpos_names(model)
-        self._label = {b: (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or f"body{b}") for b in range(model.nbody)}
+        # MuJoCo allows bodies with no name: each gets a stable generated name, "body#<id>", so a world lists
+        # as many bodies as the engine has and every one can be asked for by name.
+        self._label = {b: (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b) or _unnamed(b)) for b in range(model.nbody)}
         self._label[0] = "world"
         self._free = {}  # body name -> (qpos address, dof address)
         for b in range(1, model.nbody):
-            if model.body_jntnum[b] == 1 and model.jnt_type[model.body_jntadr[b]] == _FREE and self._label[b] != f"body{b}":
+            if model.body_jntnum[b] == 1 and model.jnt_type[model.body_jntadr[b]] == _FREE and not _is_unnamed(self._label[b]):
                 j = model.body_jntadr[b]
                 self._free[self._label[b]] = (int(model.jnt_qposadr[j]), int(model.jnt_dofadr[j]))
         self.free_bodies = list(self._free)
@@ -79,10 +81,16 @@ class AttachedBackend(AttachedEngine):
             i = mujoco.mj_name2id(self.model, objtype, name)
             if i >= 0:
                 return kind, i
+        if _is_unnamed(name):  # a body with no name in the engine, by the generated name names() lists
+            i = _unnamed_id(name)
+            if i is not None and 0 < i < self.model.nbody:
+                return "body", i
         return None
 
     def names(self, kind: str = "body") -> list[str]:
-        n = {"body": self.model.nbody, "site": self.model.nsite, "geom": self.model.ngeom}[kind]
+        if kind == "body":  # every body, the world's included: the same count as the engine's nbody
+            return [self._label[b] for b in range(self.model.nbody)]
+        n = {"site": self.model.nsite, "geom": self.model.ngeom}[kind]
         out = [mujoco.mj_id2name(self.model, _KINDS[kind], i) for i in range(n)]
         return [x for x in out if x]
 
@@ -152,6 +160,15 @@ class AttachedBackend(AttachedEngine):
         ]
         return [n for n in out if n]
 
+    def joint_kinds(self) -> dict[str, str]:
+        """Every named joint and its kind: ``hinge``, ``slide``, ``ball`` or ``free``. Never raises."""
+        out = {}
+        for i in range(self.model.njnt):
+            n = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if n:
+                out[n] = _JOINT_KIND.get(int(self.model.jnt_type[i]), "?")
+        return out
+
     def joint_qadr(self, name: str) -> int:
         """The qpos address of a hinge or slide joint, for the core's ``joint()``; the errors name what exists."""
         j = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -159,6 +176,12 @@ class AttachedBackend(AttachedEngine):
             named = [n for n in (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)) if n]
             raise KeyError(f"no joint named {name!r}; joints: {', '.join(named) or 'none'}")
         # int(): numpy's int32 does not compare equal to MuJoCo's enum members
+        if int(self.model.jnt_type[j]) == int(_FREE):
+            body = self._label[int(self.model.jnt_bodyid[j])]
+            raise CapabilityError(
+                f"{name!r} is the free joint of body {body!r}: it has 7 values (position and quaternion), not one angle; "
+                f"use world.body({body!r}) for its pose"
+            )
         if int(self.model.jnt_type[j]) not in (int(_HINGE), int(_SLIDE)):
             raise CapabilityError(f"joint {name!r} is not a hinge or slide, so it has one scalar value; use world.body() for its pose")
         return int(self.model.jnt_qposadr[j])
@@ -250,12 +273,118 @@ class AttachedBackend(AttachedEngine):
         return {"model.mjb": model_bytes(self.model)}
 
 
+class PendingBackend(AttachedEngine):
+    """A MuJoCo environment that has not built its model yet: safety-gymnasium builds it in ``reset``.
+
+    Until the first reset there is nothing to read, and every read says so. The world binds to the real model
+    at that reset (or the first step) and replaces this with an :class:`AttachedBackend`.
+    """
+
+    engine = "mujoco"
+    capabilities = frozenset()
+    model = None  # no model yet: the world's rebind check sees None and binds at the first reset
+    data = None
+
+    def __init__(self, seed: int = 0, dt: float | None = None):
+        super().__init__(seed, dt=dt)
+
+    def _unbuilt(self):
+        raise CapabilityError("this environment builds its simulation in reset(), which has not run yet: call env.reset() first")
+
+    def qpos(self) -> np.ndarray:
+        return np.zeros(0)
+
+    def qvel(self) -> np.ndarray:
+        return np.zeros(0)
+
+    def ctrl(self) -> np.ndarray:
+        return np.zeros(0)
+
+    def set_ctrl(self, target) -> None:
+        self._unbuilt()
+
+    def step(self) -> None:
+        self._unbuilt()
+
+    @property
+    def time(self) -> float:
+        return 0.0
+
+    @property
+    def control_dt(self) -> float:
+        return self._dt
+
+    def set_control_dt(self, dt: float) -> None:
+        self._dt = float(dt)
+
+    def names(self, kind: str = "body") -> list[str]:
+        return []
+
+    def resolve(self, name: str):
+        return None
+
+    def label(self, handle) -> str:
+        self._unbuilt()
+
+    def pose(self, handle):
+        self._unbuilt()
+
+    def velocity(self, handle):
+        self._unbuilt()
+
+    def contacts_of(self, handle) -> list[str]:
+        self._unbuilt()
+
+    def contact_pairs(self) -> list[tuple]:
+        return []
+
+    def joint_kinds(self) -> dict[str, str]:
+        return {}
+
+    def joint_qadr(self, name: str) -> int:
+        self._unbuilt()
+
+    def joint_value(self, name: str) -> float:
+        self._unbuilt()
+
+    def set_object_pose(self, name: str, pos, quat=None) -> None:
+        self._unbuilt()
+
+    def set_joint(self, name: str, value: float) -> None:
+        self._unbuilt()
+
+    def apply_force(self, name: str, force) -> None:
+        self._unbuilt()
+
+    def trace_meta(self) -> dict:
+        return {"model": "model.mjb", "nq": 0}
+
+    def trace_files(self) -> dict[str, bytes]:
+        return {}
+
+
 def model_bytes(model: mujoco.MjModel) -> bytes:
     """The model as a self-contained MuJoCo binary (``.mjb``), which the trace keeps for redrawing."""
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "model.mjb"
         mujoco.mj_saveModel(model, str(p), None)
         return p.read_bytes()
+
+
+_JOINT_KIND = {int(_FREE): "free", int(_HINGE): "hinge", int(_SLIDE): "slide", int(mujoco.mjtJoint.mjJNT_BALL): "ball"}
+
+
+def _unnamed(body_id: int) -> str:
+    return f"body#{body_id}"
+
+
+def _is_unnamed(name: str) -> bool:
+    return name.startswith("body#")
+
+
+def _unnamed_id(name: str) -> int | None:
+    digits = name[len("body#") :]
+    return int(digits) if digits.isdigit() else None
 
 
 def _qpos_names(model: mujoco.MjModel) -> list[str]:

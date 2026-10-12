@@ -33,8 +33,10 @@ from __future__ import annotations
 
 import io
 import json
+import random
 import sys
 import tempfile
+import warnings
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -44,7 +46,7 @@ import numpy as np
 
 from . import _current
 from .backends import base as backends
-from .backends.attached_backend import AttachedBackend
+from .backends.attached_backend import AttachedBackend, PendingBackend
 from .backends.attached_engine import AttachedEngine
 from .errors import CapabilityError, ExpectationError, InvariantViolation
 from .faults import Faults
@@ -64,6 +66,7 @@ class AttachedSubject(Subject):
 
     @property
     def _b(self) -> AttachedEngine:
+        self.world._sync()  # a read after the environment rebuilt its simulation binds to the new one
         return self.world.backend
 
     @property
@@ -111,6 +114,7 @@ class AttachedJoint(Subject):
 
     @property
     def value(self) -> float:
+        self.world._sync()
         return self.world.backend.joint_value(self.name)
 
 
@@ -192,8 +196,7 @@ class AttachedWorld(World):
         self.source: str | None = None
         self.fidelity = None  # there is no robowright fidelity mode: the model is theirs, as it is
         self.model_changes: list = []  # robowright changes nothing in the simulation unless asked
-        self.object_names = list(backend.free_bodies)
-        self.spec = SceneSpec(robot="attached", objects=[ObjectSpec(name=n, kind="body") for n in self.object_names], cameras=[])
+        self._adopt()
         self.step_count = 0
         self.status = "running"
         self.perception: dict = {}
@@ -219,26 +222,68 @@ class AttachedWorld(World):
         self._reset_seen = False  # whether a reset of the environment went through this world
         self._resets_first = False  # a gymnasium environment: it cannot step before it is reset
         self._own_step: Callable[[], object] | None = None  # a wrapped Genesis scene's step as its own code made it
+        self.bare = False  # a model and data robowright was handed, stepped by the caller's own mj_step
+        self._env = None  # the environment this world wraps, so a rebuilt simulation can be found again
+        self._observed_time = backend.time  # the simulation time the last observed step ended at
+        self._warned_unobserved = False
 
     # --- what the simulation is -------------------------------------------------
+    def _adopt(self) -> None:
+        """The free bodies and the scene spec of the simulation the world is bound to now."""
+        self.object_names = list(self.backend.free_bodies)
+        self.spec = SceneSpec(robot="attached", objects=[ObjectSpec(name=n, kind="body") for n in self.object_names], cameras=[])
+
+    def _sync(self) -> None:
+        """Before a read: bind to the environment's current simulation, and say so if the simulation moved on unobserved.
+
+        Reads are live (they read the engine's data when asked), so they are never stale. What an unobserved step
+        lacks is its trace record, so that is what is reported, once per world.
+        """
+        if self._env is not None:
+            self._rebind(self._env)
+        if not self._warned_unobserved and not isinstance(self.backend, PendingBackend) and self._observed_time is not None:
+            if self.backend.time > self._observed_time + 1e-12:
+                self._warned_unobserved = True
+                warnings.warn(
+                    f"world {self.name!r}: the simulation moved on without world.observe(), so the trace has no record of those "
+                    "steps (reads are live and correct). Call world.observe() after each of your steps.",
+                    stacklevel=3,
+                )
+
     @property
     def model(self) -> mujoco.MjModel:
+        self._sync()
         if not isinstance(self.backend, AttachedBackend):
             raise CapabilityError(f"the {self.backend.engine} engine has no MuJoCo model; use world.backend for its state")
         return self.backend.model
 
     @property
     def data(self) -> mujoco.MjData:
+        self._sync()
         if not isinstance(self.backend, AttachedBackend):
             raise CapabilityError(f"the {self.backend.engine} engine has no MuJoCo data; use world.backend for its state")
         return self.backend.data
 
     def bodies(self) -> list[str]:
-        """Every named body: the names a test can look up with ``world.body(name)``."""
+        """Every body, the world's included, by the name a test can look up with ``world.body(name)``.
+
+        A body with no name in the engine is listed as ``body#<id>``, so the count is the engine's nbody.
+        """
+        self._sync()
         return self.backend.names("body")
+
+    def joints(self) -> dict[str, str]:
+        """Every named joint and its kind: ``hinge``, ``slide``, ``ball`` or ``free``. Listing never raises.
+
+        ``joint(name)`` gives the value of a hinge or slide; a free joint has no single value, so it is read through
+        ``body(...)`` for its pose.
+        """
+        self._sync()
+        return self.backend.joint_kinds()
 
     def body(self, name: str) -> AttachedSubject:
         """A body, site or geom by name, as a subject for ``expect``."""
+        self._sync()
         found = self.backend.resolve(name)
         if found is None:
             try:
@@ -250,6 +295,7 @@ class AttachedWorld(World):
 
     def joint(self, name: str) -> AttachedJoint:
         """A hinge or slide joint by name, for ``expect(...).to_be_between``: its value, not a position."""
+        self._sync()
         self.backend.joint_qadr(name)  # raises the engine's own KeyError or CapabilityError for a bad name
         return AttachedJoint(self, name)
 
@@ -359,8 +405,8 @@ class AttachedWorld(World):
         return {"actions.npz": buf.getvalue()}
 
     def env_record(self) -> dict:
-        """What the trace says about the environment: its gymnasium spec, and whether its actions were kept."""
-        return {"spec": self.env_spec, "actions_recorded": self.controls_note is None, "note": self.controls_note}
+        """What the trace says about the environment: its gymnasium spec, whether its actions were kept, and whether it was a bare model."""
+        return {"spec": self.env_spec, "actions_recorded": self.controls_note is None, "note": self.controls_note, "bare": self.bare}
 
     def _begin(self):
         if not self._began:
@@ -370,12 +416,15 @@ class AttachedWorld(World):
             if self.trace:
                 self.trace.begin(state0)
 
-    def _on_reset(self, seed, options=None):
+    def _on_reset(self, seed, options=None, rng=None):
         """The trace starts when the environment is first reset, so its first sample is a real start state."""
         self._begin()
         self._reset_seen = True
+        self._observed_time = self.backend.time
         if self.trace:
             args = {"seed": seed}
+            if rng is not None:  # what the reset could draw from, as it was before the reset: a replay puts it back
+                args["rng"] = rng
             if options is not None:
                 try:
                     json.dumps(options)
@@ -384,17 +433,29 @@ class AttachedWorld(World):
                     self._note_unreplayable("the reset options are not plain values")
             self.trace.event("log", "env.reset", args)
 
-    def _rebind(self, env) -> None:
-        """Point at the environment's current simulation when it has replaced it (a reset that rebuilds a MuJoCo model)."""
+    def _rebind(self, env, after_reset: bool = False) -> None:
+        """Point at the environment's current simulation when it has replaced it (a reset that rebuilds a MuJoCo model).
+
+        A world attached before the first reset holds a PendingBackend until the model exists. A simulation that
+        was there and no longer is raises, rather than letting the world report the old one's values.
+        """
         if self.backend.engine != "mujoco":
             self.backend.rebind(env)
             return
-        model, data = _physics_of(env)
+        try:
+            model, data = _physics_of(env)
+        except ValueError as e:
+            if isinstance(self.backend, PendingBackend):
+                if not after_reset:
+                    return  # built by the first reset, which has not run yet
+                raise ValueError(f"after reset, {e}") from e
+            raise CapabilityError(f"the simulation this world was attached to is gone ({e}); attach the environment again") from e
         if model is self.backend.model and data is self.backend.data:
             return
         old = self.backend
         self.backend = AttachedBackend(model, data, seed=self.seed)
         self.backend.set_control_dt(old.control_dt)
+        self._adopt()
 
     def _check_invariants(self):
         if self.index is None:
@@ -423,6 +484,7 @@ class AttachedWorld(World):
             self.backend.set_control_dt(t1 - t0)  # the environment's control period, as it steps
             self._dt_known = True
         self.step_count += 1
+        self._observed_time = self.backend.time
         if self.trace:
             self.trace.record_step(self.step_count, self.backend.ctrl(), forces)
             self._note_control(action)
@@ -557,7 +619,14 @@ def attach(
             diagram, context = simulator.get_system(), simulator.get_mutable_context()
         backend = DrakeEngine(diagram, context, plant=plant, seed=seed, dt=dt)
     elif env is not None:
-        backend = _engine_of_env(env, seed=seed, dt=dt, engine=engine)
+        try:
+            backend = _engine_of_env(env, seed=seed, dt=dt, engine=engine)
+        except ValueError:
+            # An environment that builds its MuJoCo model in reset (safety-gymnasium): bind at that reset. If no reset
+            # builds one, the reset says so: the error is raised there, not silently kept.
+            if engine not in (None, "mujoco") or not callable(getattr(env, "reset", None)) or _has_physics(env):
+                raise
+            backend = PendingBackend(seed=seed, dt=dt)
     elif client is not None:
         from .backends.attached_pybullet import PyBulletEngine
 
@@ -583,8 +652,50 @@ def attach(
     elif step is not None:
         world._advance = lambda: world._physics_step(step)
         world._note_unreplayable("the steps were taken by a bare stepper (step=), not by an environment's step")
+    if env is None and client is None:
+        # A bare model: the caller's own mj_step moves it, and observe() records each step. The trace begins here,
+        # before the caller's first step, so its start state is the one the first step was taken from.
+        world.bare = True
+        world._begin()
     _current.set(world)
     return world
+
+
+def _has_physics(env) -> bool:
+    try:
+        _physics_of(env)
+    except ValueError:
+        return False
+    return True
+
+
+def capture_rng(env) -> dict:
+    """The random state a reset can draw from, as it is before the reset: numpy's and python's global generators, and
+    the environment's own gymnasium generator if it has one. A trace keeps it so a replay can put it back before the
+    same reset, which is what makes a reset that draws from an unseeded global generator repeatable."""
+    n = np.random.get_state()
+    state = {
+        "numpy": [str(n[0]), [int(x) for x in n[1]], int(n[2]), int(n[3]), float(n[4])],
+        "python": [int(random.getstate()[0]), [int(x) for x in random.getstate()[1]], random.getstate()[2]],
+    }
+    gen = getattr(getattr(env, "unwrapped", env), "_np_random", None)
+    if gen is not None:
+        state["env"] = gen.bit_generator.state
+    return state
+
+
+def restore_rng(env, state: dict) -> None:
+    """Put back what :func:`capture_rng` kept, for the environment that is about to be reset."""
+    n = state["numpy"]
+    np.random.set_state((n[0], np.array(n[1], dtype=np.uint32), n[2], n[3], n[4]))
+    v, ints, gauss = state["python"]
+    random.setstate((v, tuple(ints), gauss))
+    if "env" in state:
+        core = getattr(env, "unwrapped", env)
+        gen = getattr(core, "_np_random", None)
+        if gen is None:
+            gen = core._np_random = np.random.Generator(np.random.PCG64())
+        gen.bit_generator.state = state["env"]
 
 
 def _vector_of(env):
@@ -849,6 +960,7 @@ def _wrap_env(env, world: AttachedWorld) -> None:
         action = args[0] if args else kwargs.get("action")
         if action is None and world.backend.engine == "webots":  # a Webots world's step takes no action: its controllers run inside it
             action = _OBSERVE
+        world._sync()  # the environment may have built its simulation since the last call
         return world._physics_step(lambda: orig_step(*args, **kwargs), action=action)
 
     def reset(*args, **kwargs):
@@ -859,12 +971,15 @@ def _wrap_env(env, world: AttachedWorld) -> None:
                 "the environment was first reset without a seed, so its start is random and cannot be repeated: "
                 "call env.reset(seed=...) (or vec.reset(seed=[...])) before the first step"
             )
+        rng = capture_rng(env) if world.trace else None
         out = orig_reset(*args, **kwargs)
-        world._rebind(env)  # robosuite builds a new MjModel and MjData on every reset
+        world._rebind(env, after_reset=True)  # robosuite builds a new MjModel and MjData on every reset
         options = kwargs.get("options", args[1] if len(args) > 1 else None)
-        world._on_reset(seed, options)
+        world._on_reset(seed, options, rng=rng)
         return out
 
+    reset.__wrapped__ = orig_reset  # replay asks the original reset which arguments it takes
+    world._env = env
     env.step = step
     env.reset = reset
 

@@ -249,7 +249,7 @@ def test_joint_by_name_is_a_scalar_subject_for_to_be_between(toy):
     assert w.joint("slide").value == pytest.approx(0.4)
     with pytest.raises(KeyError, match="joints: box_free, slide"):
         w.joint("nope")
-    with pytest.raises(CapabilityError, match="not a hinge or slide"):
+    with pytest.raises(CapabilityError, match="free joint of body 'box'"):
         w.joint("box_free")  # a free joint has seven values, not one
 
 

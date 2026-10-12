@@ -130,7 +130,8 @@ def test_a_trace_records_the_spec_the_actions_and_the_calls(tmp_path):
     names = [e["name"] for e in tr.events]
     assert {"env.reset", "move_object", "set_joint", "Push"} <= set(names)
     assert names.index("env.reset") < names.index("move_object")  # the calls keep the order the test made them in
-    assert tr.events[names.index("env.reset")]["args"] == {"seed": 7}
+    args = tr.events[names.index("env.reset")]["args"]
+    assert args["seed"] == 7 and "rng" in args  # the random state the reset drew from, as it was before the reset
 
 
 def test_a_hand_built_environment_is_recorded_without_a_spec(tmp_path):
@@ -182,7 +183,7 @@ def test_replay_uses_the_recorded_spec_when_no_make_env_is_given(tmp_path, monke
 
 def test_replay_refuses_a_hand_built_environment_without_make_env(tmp_path):
     path = _record(tmp_path, spec_id=None, steps=4)
-    with pytest.raises(ValueError, match="make_env="):
+    with pytest.raises(ValueError, match=r"--factory module:func"):
         replay(path)
 
 
@@ -205,18 +206,11 @@ def test_a_generated_test_passes_when_run_in_a_subprocess(tmp_path):
     assert "1 passed" in proc.stdout
 
 
-def test_a_hand_built_environment_gives_a_stub_that_fails_loudly(tmp_path):
+def test_a_hand_built_environment_is_refused_without_a_factory(tmp_path):
+    """No stub: a test that raises NotImplementedError is not a test. The refusal names the way to give the environment."""
     path = _record(tmp_path / "rec", spec_id=None, steps=4)
-    out = tmp_path / "out"
-    out.mkdir()
-    test_file = out / "test_hand_built.py"
-    text = generate(path, test_name="test_hand_built_regression")
-    test_file.write_text(text)
-    assert "def make_env():" in text and "# Stub:" in text
-    assert "import gymnasium" not in text  # nothing to import for a hand-built run
-    proc = _run_test_file(test_file, None)
-    assert proc.returncode != 0
-    assert "NotImplementedError: make_env() is a stub" in proc.stdout + proc.stderr
+    with pytest.raises(ValueError, match=r"--factory module:func"):
+        generate(path, test_name="test_hand_built_regression")
 
 
 def test_replay_says_when_the_rebuilt_model_differs_from_the_recorded_one(tmp_path):
