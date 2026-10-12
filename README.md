@@ -459,7 +459,8 @@ See [Any robot, from its model file](#any-robot-from-its-model-file).
 <p align="center"><img src="docs/robots_engines.gif" width="640" alt="Six arms running the same pick-and-place test, then a Franka Panda running it on MuJoCo, PyBullet, Drake, Genesis and Isaac Sim"></p>
 
 For a whole project, `robowright init` writes an example test, `pytest.ini`, `robowright.toml`, a
-GitHub Actions workflow and `.mcp.json` (so AI coding agents get the robot tools), and
+GitHub Actions workflow and `.mcp.json` (so AI coding agents get the robot tools; it names the
+Python that ran `init`, so it works with the environment not activated, and is this machine's), and
 `pytest --rw-report report.html` gives the run as one HTML page.
 
 
@@ -809,6 +810,7 @@ robot.arm.move_to((0.22, 0.05, 0.04))  # IK, joint-space trajectory, then wait u
 robot.arm.move_to(cube, linear=True, speed=0.05)  # straight-line Cartesian approach
 robot.gripper.close()  # returns when the jaws stop: on an object, or shut
 robot.pick(cube)  # returns once the cube is held in both jaws after the lift
+robot.pick(cube)  # still in the jaws from that pick (say, after a shove): returns at once, noted in the trace
 robot.place(on=bin)  # into the bin's centre, or the free spot farthest from what is already there
 robot.pick(can, approach="side")  # a tall object, from the side: a planned path, then straight in
 robot.pick(can, approach=(1, 0, -1))  # coming in along a direction: here 45 degrees down, along +x
@@ -1286,7 +1288,10 @@ measured and left visible:
   with about 65 N in MuJoCo, the servo's full torque at the jaw. PyBullet's rigid contacts push
   the cube 9 mm into the fixed jaw's 2 mm pad plates under that and sometimes squeeze it out;
   with Drake's default contact stiffness the placed cube chatters on the bin floor and never
-  rests. MuJoCo's soft contacts, Genesis and Isaac Sim hold it.
+  rests. MuJoCo's soft contacts, Genesis and Isaac Sim hold it. On PyBullet the step is the lever:
+  the export matches MuJoCo's (link frames to 0.01 mm) and the arm's servos do not sag, and with
+  PyBullet stepped at 1 ms in place of the model's 5 ms, 20 of 20 jittered seeds of the quickstart
+  test passed where 18 of 20 did. The model's step is left as published.
 - **xArm 7 on PyBullet (5/20).** PyBullet has no closed kinematic chains, so the xArm Gripper's
   four-bar linkage runs as a motor on each passive joint, and at its rated 30 N the jaws close
   unevenly and push the cube aside.

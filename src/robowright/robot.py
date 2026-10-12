@@ -334,6 +334,7 @@ class Robot:
         # the object's underside, or a tilted hand's lowest point, whichever is further below it).
         self._held_from = None
         self._picked = None  # the object the last pick took, until it is set down
+        self._grasped = None  # the object this robot's last pick (of either kind) closed on, until the jaws open
         self._grip_open = 1.0  # the opening the held object was taken with, to let go of it with
 
     @property
@@ -719,11 +720,11 @@ class Robot:
         from the table and the objects.
         """
         o = as_subject(self.world, obj)
-        if isinstance(o, ObjectHandle) and self.world.has_contacts and self.gripper.holding() == o.name:
-            # Already in the jaws, as after a shove that did not knock it free. The pre-grasp pose
+        if isinstance(o, ObjectHandle) and self._grasped == o.name and self.world.has_contacts and self.gripper.holding() == o.name:
+            # Already in the jaws from this robot's own pick, as after a shove that did not knock it
+            # free (an object that only sits between open jaws is picked as usual). The pre-grasp pose
             # is 5 cm above it, and a hand held level there is out of reach at this radius, so
             # there is nothing to grasp: say so and keep the hold.
-            self._picked = o.name
             self.world.log(f"pick({o.name!r}): already held in the jaws")
             return
         if not isinstance(approach, str) and approach is not None and np.linalg.norm(np.asarray(approach, float)[:2]) < 1e-6:
@@ -774,6 +775,7 @@ class Robot:
                     f"the tool at {np.round(self.tcp.position, 3).tolist()}, the jaws at opening {self.gripper.opening:.2f}, "
                     f"touching {sorted(fixed) or 'nothing'} / {sorted(moving) or 'nothing'}"
                 )
+        self._grasped = o.name if isinstance(o, ObjectHandle) else None
 
     def _top_grasp(self, o, width: float) -> tuple[float, float]:
         """The opening to take ``o`` from above with, and the TCP height to close at (see :func:`top_grasp`)."""
@@ -861,7 +863,7 @@ class Robot:
 
     def _check_held(self, o):
         w = self.world
-        self._picked = o.name if isinstance(o, ObjectHandle) else None
+        self._picked = self._grasped = o.name if isinstance(o, ObjectHandle) else None
         if isinstance(o, ObjectHandle) and w.has_contacts:
             if not w.run_until(lambda: self.gripper.holding() == o.name, 0.2):
                 fixed, moving = self.gripper.touching()
@@ -927,7 +929,7 @@ class Robot:
         self.arm.move_to.__wrapped__(self.arm, [p[0], p[1], top + height], yaw=yaw, linear=True, timeout=timeout)
         self.gripper.open.__wrapped__(self.gripper, opening)
         self._grip_open = 1.0
-        self._picked = None
+        self._picked = self._grasped = None
         self.arm.move_to.__wrapped__(self.arm, above, yaw=yaw, linear=True, timeout=timeout)
 
     def _surface_under(self, p) -> float:
