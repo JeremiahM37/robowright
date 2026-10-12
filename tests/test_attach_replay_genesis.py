@@ -6,6 +6,12 @@ built on the CPU backend, headless. Genesis compiles its kernels when a scene is
 later build in the process quick.
 """
 
+import inspect
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -13,10 +19,12 @@ gs = pytest.importorskip("genesis")
 
 import robowright as rw  # noqa: E402
 from robowright import expect  # noqa: E402
+from robowright.codegen import generate  # noqa: E402
 from robowright.replay import replay  # noqa: E402
 from robowright.trace import Trace  # noqa: E402
 
 TOLERANCE = 1e-6  # the replay default
+FAILING_FLOOR = 5.0  # the box cannot be above this: the failing variant's last expectation
 START_Z = 0.3  # the box starts this high and falls onto the plane
 
 
@@ -31,8 +39,9 @@ def build(z: float = START_Z):
     return scene
 
 
-def _record(out_dir, *, own_loop: bool = False, name: str = "genesis-run"):
-    """A run with a push, a move and a reset of the scene, stepped by world.step or, with ``own_loop``, by the scene."""
+def _record(out_dir, *, own_loop: bool = False, name: str = "genesis-run", failing: bool = False):
+    """A run with a push, a move and a reset of the scene, stepped by world.step or, with ``own_loop``, by the scene.
+    ``failing`` makes the run's last expectation one the box cannot pass, as a failed test's would be."""
     scene = build()
     w = rw.attach(
         scene,
@@ -48,7 +57,11 @@ def _record(out_dir, *, own_loop: bool = False, name: str = "genesis-run"):
     steps(40)
     scene.reset()  # the scene goes back to its built state: a reset is a recorded event
     steps(30)
-    expect(w.body("cube")).to_be_above(0.0)
+    try:
+        expect(w.body("cube")).to_be_above(FAILING_FLOOR if failing else 0.0)
+    except rw.ExpectationError:
+        if not failing:
+            raise
     path = w.close()
     assert path is not None
     return path
@@ -91,3 +104,72 @@ def test_a_genesis_trace_without_a_factory_is_refused_with_the_reason(tmp_path):
     path = _record(tmp_path)
     with pytest.raises(ValueError, match="cannot rebuild this run's environment"):
         replay(path)
+
+
+FACTORY_HEADER = """import genesis as gs
+
+START_Z = %r
+
+
+"""
+
+
+def _factory_module(tmp_path: Path) -> Path:
+    """A factory module in the test's directory: the same ``build`` the recording used, as a file of its own."""
+    path = tmp_path / "make_genesis_factory.py"
+    path.write_text(FACTORY_HEADER % START_Z + inspect.getsource(build))
+    return path
+
+
+def _run_in_fresh_process(test_file: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    src = str(Path(rw.__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in [src, env.get("PYTHONPATH", "")] if p)
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(test_file)],
+        cwd=test_file.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+
+def test_codegen_writes_a_stub_for_a_genesis_run_without_a_factory(tmp_path):
+    code = generate(_record(tmp_path))
+    assert "def make_env():" in code and "a built genesis.Scene" in code
+    out = tmp_path / "test_stub_regression.py"
+    out.write_text(code)
+    r = _run_in_fresh_process(out)
+    assert r.returncode != 0 and "NotImplementedError" in r.stdout + r.stderr
+
+
+def test_generated_test_of_a_passing_genesis_run_passes_in_a_fresh_process(tmp_path):
+    path = _record(tmp_path)
+    out = tmp_path / "test_genesis_regression.py"
+    out.write_text(generate(path, test_name="test_genesis_regression", factory=f"{_factory_module(tmp_path)}:build"))
+    r = _run_in_fresh_process(out)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "1 passed" in r.stdout
+
+
+def test_generated_test_of_a_passing_own_loop_genesis_run_passes_in_a_fresh_process(tmp_path):
+    path = _record(tmp_path, own_loop=True)
+    out = tmp_path / "test_genesis_own_loop_regression.py"
+    out.write_text(generate(path, test_name="test_genesis_own_loop_regression", factory=f"{_factory_module(tmp_path)}:build"))
+    r = _run_in_fresh_process(out)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "1 passed" in r.stdout
+
+
+def test_generated_test_of_a_failing_genesis_run_fails_at_the_same_expectation(tmp_path):
+    path = _record(tmp_path, failing=True)
+    failed = [e for e in Trace(path).events if e.get("status") == "failed"]
+    assert len(failed) == 1 and failed[0]["type"] == "expect", failed
+    detail = failed[0]["detail"].splitlines()[0]
+    out = tmp_path / "test_genesis_failing_regression.py"
+    out.write_text(generate(path, test_name="test_genesis_failing_regression", factory=f"{_factory_module(tmp_path)}:build"))
+    r = _run_in_fresh_process(out)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "1 failed" in r.stdout and "ExpectationError" in r.stdout
+    assert detail in r.stdout, (detail, r.stdout)

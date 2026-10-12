@@ -164,9 +164,10 @@ def schedule(tr: Trace) -> list[dict]:
     return [item for _, item in sorted(items, key=lambda kv: kv[0])]
 
 
-# Engines whose own code takes the steps (a Drake Simulator, a Genesis scene): replayed by stepping the rebuilt
-# simulation, with the forces the trace kept, instead of env.step(action) for a gymnasium-style environment.
-STEPPED = ("drake", "genesis")
+# Engines whose own code takes the steps (a Drake Simulator, a Genesis scene, a Webots world stepped by its Supervisor):
+# replayed by stepping the rebuilt simulation, with the forces the trace kept, instead of env.step(action) for a
+# gymnasium-style environment.
+STEPPED = ("drake", "genesis", "webots")
 
 
 def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
@@ -179,13 +180,19 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         make_env = _make_from_spec(tr)
     recorded = tr.meta["attached"].get("engine")
     built = make_env()
+    if built is None:
+        raise ValueError("make_env returned None: a factory must return the built simulation or environment")
     plant = None
     if isinstance(built, tuple):  # a Drake simulation may come with its plant, when its diagram holds more than one
         built, plant = built
+    step_fn = None  # a Webots world's step, taken before attach wraps the environment's step
     if recorded == "drake":
         if not _is_drake_simulator(built):
             raise ValueError("this run is a Drake simulation: make_env must return its Simulator, or (Simulator, plant)")
         world = attach(simulator=built, plant=plant, seed=tr.meta["seed"], settings=Settings(trace="off"))
+    elif recorded == "webots":
+        step_fn = built.step
+        world = attach(built, engine="webots", seed=tr.meta["seed"], settings=Settings(trace="off"))
     else:
         world = attach(built, seed=tr.meta["seed"], settings=Settings(trace="off"))
     env = built
@@ -248,6 +255,8 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
                     if recorded == "drake":
                         t = float(a["t"][s])  # the recorded clock, so each AdvanceTo lands on the recorded time
                         world.replay_step(lambda t=t: env.AdvanceTo(t), _recorded_forces(tr, s))
+                    elif recorded == "webots":
+                        world.replay_step(step_fn, _recorded_forces(tr, s))
                     else:
                         world.replay_step(None, _recorded_forces(tr, s))  # the scene's own step
                 elif item["observe"]:
@@ -285,6 +294,45 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
         )
     finally:
         world.close(failed=False)
+
+
+def load_factory(spec: str):
+    """The function a ``module:function`` or ``path/to/file.py:function`` names, for use as ``make_env``.
+
+    A module is imported as any import would be; a file is loaded under a private name, so nothing it defines can
+    shadow a real module. Either way the module's own top-level code runs first, as it would for the test.
+    """
+    import importlib
+    import importlib.util
+    import inspect
+
+    target, sep, func = spec.rpartition(":")
+    if not sep or not target or not func:
+        raise ValueError(f"a factory is given as module:function or path/to/file.py:function, not {spec!r}")
+    try:
+        if target.endswith(".py") or "/" in target or "\\" in target:
+            path = Path(target)
+            if not path.is_file():
+                raise ValueError(f"factory file {target!r} does not exist")
+            file_spec = importlib.util.spec_from_file_location(f"robowright_factory_{path.stem}", path)
+            module = importlib.util.module_from_spec(file_spec)
+            file_spec.loader.exec_module(module)
+        else:
+            module = importlib.import_module(target)
+    except ValueError:
+        raise
+    except Exception as e:  # the module's own code may fail however it likes: say which module it was
+        raise ValueError(f"cannot import the factory's module {target!r}: {type(e).__name__}: {e}") from e
+    if not hasattr(module, func):
+        raise ValueError(f"module {target!r} has no {func!r}: the factory is a function that builds the simulation")
+    fn = getattr(module, func)
+    if not callable(fn):
+        raise ValueError(f"{target}:{func} is not callable: the factory is a function that builds the simulation")
+    try:
+        inspect.signature(fn).bind()
+    except TypeError as e:
+        raise ValueError(f"{target}:{func} must take no arguments and return the simulation: {e}") from None
+    return fn
 
 
 def _recorded_forces(tr: Trace, step: int) -> dict:

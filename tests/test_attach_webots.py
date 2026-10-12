@@ -50,21 +50,18 @@ def _probe_world(home: Path) -> str:
     return src + ('\nRobot {\n  name "robowright_probe"\n  controller "<extern>"\n  supervisor TRUE\n  synchronization TRUE\n}\n')
 
 
-@pytest.fixture(scope="module")
-def webots_project(tmp_path_factory):
-    """Start Webots headless on the probe world, wait for the extern port, stop it by PID afterwards."""
+def _start_world(project: Path) -> subprocess.Popen:
+    """The probe world in ``project``, started headless with its extern port open. The caller stops it with _stop."""
     home = Path(WEBOTS_HOME)
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
-            pytest.skip(f"port {PORT} is already in use: Webots' extern controller needs it")
-    if not os.environ.get("DISPLAY"):
-        pytest.skip("needs an X display: set DISPLAY (for example to an Xvfb started with -nolisten tcp)")
-    proj = tmp_path_factory.mktemp("webots-project")
-    (proj / "worlds").mkdir()
-    (proj / "controllers").symlink_to(home / "projects/robots/universal_robots/controllers")
-    world = proj / "worlds" / "ure_probe.wbt"
+            raise RuntimeError(f"port {PORT} is already in use: Webots' extern controller needs it")
+    (project / "worlds").mkdir(exist_ok=True)
+    if not (project / "controllers").exists():
+        (project / "controllers").symlink_to(home / "projects/robots/universal_robots/controllers")
+    world = project / "worlds" / "ure_probe.wbt"
     world.write_text(_probe_world(home))
-    log_path = proj / "webots.log"
+    log_path = project / "webots.log"
     with open(log_path, "w") as log:
         proc = subprocess.Popen(
             [str(home / "webots"), "--no-rendering", "--batch", "--mode=fast", "--stdout", "--stderr", "--minimize", str(world)],
@@ -72,32 +69,54 @@ def webots_project(tmp_path_factory):
             stderr=subprocess.STDOUT,
             env=dict(os.environ),
         )
-    try:
-        deadline = time.monotonic() + 180
-        while "Waiting for local or remote connection" not in log_path.read_text(errors="replace"):
-            if proc.poll() is not None or time.monotonic() > deadline:
-                pytest.fail(f"Webots did not open its extern port; log: {log_path}")
-            time.sleep(0.5)
-        yield proj
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+    deadline = time.monotonic() + 180
+    while "Waiting for local or remote connection" not in log_path.read_text(errors="replace"):
+        if proc.poll() is not None or time.monotonic() > deadline:
+            _stop(proc)
+            raise RuntimeError(f"Webots did not open its extern port; log: {log_path}")
+        time.sleep(0.5)
+    return proc
 
 
-@pytest.fixture
-def supervisor(webots_project):
-    """This process as the world's extern Supervisor. The controller module reads its URL from the environment."""
+def _stop(proc: subprocess.Popen) -> None:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def _connect_supervisor():
+    """This process as the world's extern Supervisor. The controller module reads its URL from the environment, once."""
     sys.path.insert(0, str(Path(WEBOTS_HOME) / "lib/controller/python"))
     os.environ["WEBOTS_CONTROLLER_URL"] = f"tcp://127.0.0.1:{PORT}/robowright_probe"
     os.environ["WEBOTS_ROBOT_NAME"] = "robowright_probe"
     from controller import Supervisor
 
-    sup = Supervisor()
+    return Supervisor()
+
+
+@pytest.fixture(scope="module")
+def webots_project(tmp_path_factory):
+    """Start Webots headless on the probe world, wait for the extern port, stop it by PID afterwards."""
+    if not os.environ.get("DISPLAY"):
+        pytest.skip("needs an X display: set DISPLAY (for example to an Xvfb started with -nolisten tcp)")
+    with socket.socket() as s:
+        if s.connect_ex(("127.0.0.1", PORT)) == 0:
+            pytest.skip(f"port {PORT} is already in use: Webots' extern controller needs it")
+    proj = tmp_path_factory.mktemp("webots-project")
+    proc = _start_world(proj)
+    try:
+        yield proj
+    finally:
+        _stop(proc)
+
+
+@pytest.fixture
+def supervisor(webots_project):
+    sup = _connect_supervisor()
     yield sup
     sys.path.remove(str(Path(WEBOTS_HOME) / "lib/controller/python"))
 
@@ -106,7 +125,8 @@ def test_expectations_hold_while_the_worlds_own_controller_moves_the_arm(supervi
     from robowright.backends.attached_webots import WebotsEnv
 
     env = WebotsEnv(supervisor, BODIES)
-    w = rw.attach(env, engine="webots", advance=env.step, settings=rw.Settings(trace_dir=str(tmp_path)))
+    # The steps go through the wrapped step: advance=env.step, bound before attach wraps it, would take steps the trace never sees.
+    w = rw.attach(env, engine="webots", advance=lambda: env.step(), settings=rw.Settings(trace_dir=str(tmp_path)))
     try:
         # Their controller reaches for the can and lifts it; these checks only observe that.
         expect(w.body("gripper")).to_be_near(GRASP_POINT, tol=0.05, timeout=25)

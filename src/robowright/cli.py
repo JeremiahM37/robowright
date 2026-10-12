@@ -173,10 +173,11 @@ def _show(args, rest):
 
 
 def _replay(args, rest):
-    from .replay import replay
+    from .replay import load_factory, replay
 
     try:
-        r = replay(args.trace, backend=args.backend, tol=args.tol)
+        make_env = load_factory(args.factory) if args.factory else None
+        r = replay(args.trace, backend=args.backend, tol=args.tol, make_env=make_env)
     except ValueError as e:  # an attached run whose environment has no spec to rebuild it from
         print(f"robowright replay: {e}", file=sys.stderr)
         return 2
@@ -187,7 +188,11 @@ def _replay(args, rest):
 def _codegen(args, rest):
     from .codegen import companion, generate
 
-    code = generate(args.trace, test_name=args.name, stop_at_failure=not args.full)
+    try:
+        code = generate(args.trace, test_name=args.name, stop_at_failure=not args.full, factory=args.factory)
+    except ValueError as e:  # an attached run that cannot be turned into a test, or a factory that does not load
+        print(f"robowright codegen: {e}", file=sys.stderr)
+        return 2
     extra = companion(args.trace, test_name=args.name)  # a long attached run's actions, read by the test beside it
     if args.output:
         Path(args.output).write_text(code)
@@ -472,11 +477,17 @@ def main(argv=None) -> int:
     r.add_argument("trace")
     r.add_argument("--backend")
     r.add_argument("--tol", type=float, default=1e-6)
+    r.add_argument(
+        "--factory", metavar="MODULE:FUNC", help="for an attached run: the function that builds its simulation (or path/to/file.py:func)"
+    )
     c = sub.add_parser("codegen", help="generate a pytest regression test from a trace")
     c.add_argument("trace")
     c.add_argument("-o", "--output")
     c.add_argument("--name")
     c.add_argument("--full", action="store_true", help="include events after the first failure")
+    c.add_argument(
+        "--factory", metavar="MODULE:FUNC", help="for an attached run: the test imports this function as make_env (or path/to/file.py:func)"
+    )
     sub.add_parser("info", help="versions, backends and rendering support")
     sm = sub.add_parser("sim", help="run a simulation in real time for your code to drive (--ros2) and you to watch (--live)")
     sm.add_argument("--robot", default="so101", help="a robot name or model file")
