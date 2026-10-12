@@ -138,6 +138,12 @@ class Gazebo:
         self._cameras: dict[str, str] = {}  # camera -> image topic
         self._sensors = False  # whether robowright added the Sensors system to the world
         self._fresh = threading.Condition(self._lock)
+        self._clock: float | None = None  # the sim clock, from /clock: one message per physics step
+        self._clock_dt: float | None = None  # the physics step: the smallest clock increment seen
+        self._clock_on = False  # subscribed on first use (it is busy: about 1 kHz)
+        self._joint_topics: list[str] | None = None  # each model's JointStatePublisher topic, found on first use
+        self._joint_pos: dict[str, dict[str, float]] = {}  # topic -> joint -> position
+        self._joint_stamp: dict[str, float] = {}  # topic -> sim time of its newest message
         deadline = _time.monotonic() + timeout
         while True:
             worlds = sorted({s.split("/")[2] for s in self._node.service_list() if s.startswith("/world/") and s.endswith("/control")})
@@ -169,8 +175,11 @@ class Gazebo:
         with self._lock:
             if not self._fresh.wait_for(lambda: self._stats, timeout=max(1.0, deadline - _time.monotonic())):
                 raise TimeoutError(f"Gazebo world {self.world!r} publishes no statistics")
-            if not self._stats["paused"]:  # (a paused world may publish no poses until it steps)
-                self._fresh.wait_for(lambda: self._poses, timeout=max(1.0, deadline - _time.monotonic()))
+            # A paused world publishes its poses too, but a few seconds after it starts (a fresh attach
+            # found none yet and recorded no bodies), so it gets a bounded wait. One that publishes none
+            # is still a world: nothing fails here.
+            wait = max(1.0, deadline - _time.monotonic()) if not self._stats["paused"] else min(5.0, max(1.0, deadline - _time.monotonic()))
+            self._fresh.wait_for(lambda: self._poses, timeout=wait)
 
     # --- what Gazebo says ------------------------------------------------------------------
     def _on_poses(self, msg) -> None:
@@ -395,6 +404,126 @@ class Gazebo:
         # Gazebo reports the world unpaused while it runs the steps, and a statistics message can
         # show the last of them before the world is paused again: wait for both.
         self._wait(lambda s: s["iterations"] >= target and s["paused"], f"step {iterations} iterations", timeout)
+
+    # --- the clock, faster than the statistics --------------------------------------------
+    # Gazebo's statistics come about 10 Hz while paused and about 1 Hz running, so a wait on them
+    # costs ~0.1 s per call. The clock is published every physics step (even while paused), so the
+    # calls below wait on it, and on the stamps of the poses and joints it precedes.
+    def _subscribe_clock(self) -> None:
+        with self._lock:
+            if self._clock_on:
+                return
+            self._clock_on = True
+        from gz.msgs10 import clock_pb2
+
+        self._node.subscribe(clock_pb2.Clock, f"/world/{self.world}/clock", self._on_clock)
+
+    def _on_clock(self, msg) -> None:
+        t = msg.sim.sec + msg.sim.nsec * 1e-9
+        with self._lock:
+            prev = self._clock
+            self._clock = t
+            if prev is not None and t > prev and (self._clock_dt is None or t - prev < self._clock_dt):
+                self._clock_dt = t - prev
+            self._fresh.notify_all()
+
+    @property
+    def clock_time(self) -> float:
+        """The world's sim clock in seconds (from /clock, so it moves every physics step)."""
+        self._subscribe_clock()
+        with self._lock:
+            if not self._fresh.wait_for(lambda: self._clock is not None, timeout=5.0):
+                raise TimeoutError(f"Gazebo world {self.world!r} publishes no clock")
+            return self._clock
+
+    @property
+    def physics_step(self) -> float | None:
+        """The world's physics step in seconds, from the clock once it has moved (None before that)."""
+        self._subscribe_clock()
+        with self._lock:
+            return self._clock_dt
+
+    def wait_until_clock(self, t: float, timeout: float = 30.0) -> None:
+        """Return once the sim clock is at ``t`` or later (a running world gets there by itself)."""
+        self._subscribe_clock()
+        with self._lock:
+            if not self._fresh.wait_for(lambda: self._clock is not None and self._clock >= t, timeout=timeout):
+                raise TimeoutError(f"Gazebo's clock did not reach {t:.6f} s within {timeout:g} s (is the world paused?)")
+
+    def advance(self, iterations: int = 1, timeout: float = 30.0) -> None:
+        """Advance a paused world ``iterations`` physics steps, and return once the clock, the poses and the joints show them.
+
+        The first call on a world that has not moved yet takes one step to measure the physics step; the rest
+        of the steps go in one request. Needs the world paused (its statistics say so when it is attached).
+        """
+        self._subscribe_clock()
+        n = int(iterations)
+        if n <= 0:
+            return
+        if self.physics_step is None:
+            t0 = self.clock_time
+            self._control("step 1 iteration", pause=True, multi_step=1)
+            self.wait_until_clock(t0 + 1e-9, timeout)
+            with self._lock:
+                if self._clock_dt is None:
+                    self._clock_dt = self._clock - t0
+            n -= 1
+            if n == 0:
+                return
+        dt = self.physics_step
+        target = self.clock_time + n * dt
+        self._control(f"step {n} iterations", pause=True, multi_step=n)
+        self.wait_until_clock(target - dt / 2, timeout)
+        self._wait_stamps(target - dt / 2, timeout)
+
+    def _wait_stamps(self, t: float, timeout: float) -> None:
+        """Until the newest pose (and each joint topic subscribed so far) is from ``t`` or later."""
+        with self._lock:
+            ok = self._fresh.wait_for(
+                lambda: self._stamp >= t and all(s >= t for s in self._joint_stamp.values()),
+                timeout=timeout,
+            )
+            if not ok:
+                raise TimeoutError(f"Gazebo's poses and joints were not at {t:.6f} s within {timeout:g} s")
+
+    def joints(self, timeout: float = 2.0) -> dict[str, float]:
+        """Every joint's position by name, from the JointStatePublisher system of each model that loads it.
+
+        A world that loads no JointStatePublisher has no joint_state topics, and this returns {}: the caller
+        must say so. Joint names must be unique across models (a repeated name raises).
+        """
+        from gz.msgs10 import model_pb2
+
+        if self._joint_topics is None:
+            prefix = f"/world/{self.world}/model/"
+            deadline = _time.monotonic() + timeout
+            while True:
+                found = [t for t in self._node.topic_list() if t.startswith(prefix) and t.endswith("/joint_state")]
+                if found or _time.monotonic() > deadline:
+                    break
+                _time.sleep(0.05)
+            self._joint_topics = sorted(found)
+            for t in self._joint_topics:
+                self._node.subscribe(model_pb2.Model, t, lambda msg, t=t: self._on_joint_state(t, msg))
+        if not self._joint_topics:
+            return {}
+        with self._lock:
+            if not self._fresh.wait_for(lambda: len(self._joint_stamp) == len(self._joint_topics), timeout=timeout):
+                raise TimeoutError(f"Gazebo published no joint states on {', '.join(self._joint_topics)} within {timeout:g} s")
+            pos = {}
+            for t in self._joint_topics:
+                for name, p in self._joint_pos[t].items():
+                    if name in pos:
+                        raise ValueError(f"joint {name!r} is in more than one model; joints must have distinct names here")
+                    pos[name] = p
+            return pos
+
+    def _on_joint_state(self, topic: str, msg) -> None:
+        t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
+        with self._lock:
+            self._joint_pos[topic] = {j.name: float(j.axis1.position) for j in msg.joint}
+            self._joint_stamp[topic] = t
+            self._fresh.notify_all()
 
     def reset(self) -> None:
         """Put the world back as it was loaded (time, models, joints). Gazebo leaves models spawned
