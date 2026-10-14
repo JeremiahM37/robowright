@@ -58,9 +58,31 @@ def set_initial_pose(x: float, y: float, yaw: float = 0.0) -> None:
         f"{{header: {{frame_id: map}}, pose: {{pose: {{position: {{x: {x}, y: {y}, z: 0.0}}, "
         f"orientation: {{z: {z}, w: {w}}}}}, covariance: {str(cov).replace(' ', '')}}}}}"
     )
-    # -w 1: wait until AMCL has subscribed, or the one message is published into nothing
-    cmd = ["ros2", "topic", "pub", "--once", "-w", "1", "/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", msg]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=60, env=_environment())
+    # Published by a short rclpy node rather than `ros2 topic pub --once -w 1`: that CLI publishes, then
+    # does not exit (its shutdown hangs), and the 60 s timeout turned a delivered message into a
+    # setup error. The node waits until AMCL subscribes, publishes once, and exits by itself.
+    script = (
+        "import sys, time, rclpy, yaml\n"
+        "from geometry_msgs.msg import PoseWithCovarianceStamped\n"
+        "from rosidl_runtime_py import set_message_fields\n"
+        "from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy\n"
+        "rclpy.init()\n"
+        "node = rclpy.create_node('rw_initialpose')\n"
+        "qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)\n"
+        "pub = node.create_publisher(PoseWithCovarianceStamped, '/initialpose', qos)\n"
+        "deadline = time.monotonic() + 30\n"
+        "while pub.get_subscription_count() == 0 and time.monotonic() < deadline:\n"
+        "    time.sleep(0.1)\n"
+        "if pub.get_subscription_count() == 0:\n"
+        "    sys.exit('no subscriber on /initialpose within 30 s')\n"
+        "msg = PoseWithCovarianceStamped()\n"
+        "set_message_fields(msg, yaml.safe_load(sys.argv[1]))\n"
+        "pub.publish(msg)\n"
+        "time.sleep(0.5)\n"
+        "node.destroy_node()\n"
+        "rclpy.shutdown()\n"
+    )
+    subprocess.run([sys.executable, "-c", script, msg], check=True, capture_output=True, timeout=60, env=_environment())
 
 
 def installed() -> bool:
@@ -195,7 +217,9 @@ def nav2_stack(
     )
     stack = Nav2Stack(d, launch)
     try:
-        if not stack.wait_for(LOCALIZED, timeout) or not _first_message("/scan", timeout):
+        # The joint states too: robowright's ROS 2 backend waits 10 s for them on the first observation, and
+        # the simulation's driver can publish them after the lidar (seen once under load in the full verify).
+        if not stack.wait_for(LOCALIZED, timeout) or not _first_message("/scan", timeout) or not _first_message("/joint_states", timeout):
             state = "exited" if launch.poll() is not None else "timed out"
             raise RuntimeError(f"Nav2's simulation did not come up ({state}):\n{stack.log[-4000:]}")
         if navigation:

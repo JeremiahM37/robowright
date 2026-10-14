@@ -11,7 +11,9 @@ world's EXTERNPROTO files reachable (Webots fetches them from GitHub). A host wh
 ``libGLU.so.1`` needs it on ``LD_LIBRARY_PATH``. Skipped without ``WEBOTS_HOME``.
 """
 
+import contextlib
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -68,6 +70,7 @@ def _start_world(project: Path) -> subprocess.Popen:
             stdout=log,
             stderr=subprocess.STDOUT,
             env=dict(os.environ),
+            start_new_session=True,  # its own process group, so _stop reaches the controllers too
         )
     deadline = time.monotonic() + 180
     while "Waiting for local or remote connection" not in log_path.read_text(errors="replace"):
@@ -79,13 +82,19 @@ def _start_world(project: Path) -> subprocess.Popen:
 
 
 def _stop(proc: subprocess.Popen) -> None:
+    """Stops the whole Webots session (its controllers are children of webots-bin and hold the extern port
+    with it). Terminating only webots-bin left them orphaned, and the next world then found port 1234 taken."""
     if proc.poll() is None:
-        proc.terminate()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGTERM)
         try:
             proc.wait(timeout=20)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)  # controllers can outlive webots-bin: sweep the group
 
 
 def _connect_supervisor():

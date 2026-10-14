@@ -53,40 +53,34 @@ def _nav2_rig():
 
 _stack = _nav2_rig()
 _environment, _read, _start, _stop, _first_message = _stack._environment, _stack._read, _stack._start, _stack._stop, _stack._first_message
-LOCALIZED = re.compile(r"\[lifecycle_manager_localization\]: .*Managed nodes are active")
+SPAWNED = re.compile(r"\[create-\d+\] \[INFO\].*Entity creation successful")
 NAVIGATION = re.compile(r"\[lifecycle_manager_navigation\]: .*Managed nodes are active")
 
 
-_last_scan_check = ""
+def _visible(topic: str, timeout: float) -> bool:
+    """Whether this process can receive a message on ``topic`` within ``timeout``. The check is made
+    from inside the process, with a node of its own, because a DDS subscriber discovers a publisher
+    on its own schedule: ``ros2 topic echo`` in a shell saw /joint_states while the test's node, made
+    moments later as the stack was still starting, had not (measured: 4 to 8 s, past its 10 s wait)."""
+    import rclpy
+    from rclpy.executors import SingleThreadedExecutor
+    from sensor_msgs.msg import JointState
 
-
-def _scan_publishes(timeout: float) -> bool:
-    """Whether the lidar publishes within ``timeout``, with what ``ros2`` last said kept for the
-    error message. Asked until it does: ``ros2 topic echo`` gives up at once on a topic nobody
-    advertises yet, and Nav2 can be active a moment before Gazebo's bridge has advertised /scan
-    (a single try failed the whole module in two runs of four)."""
-    global _last_scan_check
+    if not rclpy.ok():
+        rclpy.init()
+    node = rclpy.create_node("rw_nav2_examples_rig")
+    got = []
+    node.create_subscription(JointState, topic, got.append, 1)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     deadline = time.monotonic() + timeout
-    while True:
-        left = deadline - time.monotonic()
-        try:
-            done = subprocess.run(
-                ["ros2", "topic", "echo", "--no-daemon", "/scan", "--once"],
-                capture_output=True,
-                text=True,
-                timeout=max(left, 1.0),
-                env=_environment(),
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            _last_scan_check = "ros2 topic echo /scan timed out"
-            return False
-        _last_scan_check = f"ros2 topic echo /scan exit {done.returncode}: {done.stderr.strip()[-500:]}"
-        if done.returncode == 0:
-            return True
-        if time.monotonic() + 1.0 > deadline:
-            return False
-        time.sleep(1.0)
+    try:
+        while not got and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.1)
+    finally:
+        executor.remove_node(node)
+        node.destroy_node()
+    return bool(got)
 
 
 def installed() -> bool:
@@ -139,10 +133,12 @@ def observed_launch(name: str, workdir: Path) -> Path:
 
 @contextlib.contextmanager
 def example(name: str, workdir: Path | None = None, timeout: float = 300.0):
-    """The launch file of ``name``, started headless, until Nav2's navigation stack is active and the
-    robot's lidar publishes. The example program has started by then, and waits for Nav2 itself.
-    Its logs are kept in ``workdir`` (default: a directory of their own in /tmp, not pytest's, which
-    a shared test user's other runs would clear)."""
+    """The launch file of ``name``, started headless, until the robot is spawned in Gazebo and its joint
+    states reach this process: the world is up while the stack is still coming up behind it. The
+    example program starts with the launch but drives only once Nav2 is active (it waits for Nav2
+    itself), so the caller observes from here and then waits for the drive. Its logs are kept in
+    ``workdir`` (default: a directory of their own in /tmp, not pytest's, which a shared test user's
+    other runs would clear)."""
     d = Path(workdir or tempfile.mkdtemp(prefix=f"rw-{name}-"))
     d.mkdir(parents=True, exist_ok=True)
     launch = _start(
@@ -152,14 +148,9 @@ def example(name: str, workdir: Path | None = None, timeout: float = 300.0):
     )
     ex = Example(name, d, launch)
     try:
-        for what, reached in (
-            ("localization active", lambda: ex.wait_for(LOCALIZED, timeout)),
-            ("navigation active", lambda: ex.wait_for(NAVIGATION, timeout)),
-            ("the lidar publishing", lambda: _scan_publishes(timeout)),
-        ):
-            if not reached():
-                state = "exited" if launch.poll() is not None else "still running"
-                raise RuntimeError(f"{name}'s launch: {what} not reached ({state}; {_last_scan_check}):\n{ex.log[-4000:]}")
+        if not ex.wait_for(SPAWNED, timeout) or not _visible("/joint_states", timeout):
+            state = "exited" if launch.poll() is not None else "still running"
+            raise RuntimeError(f"{name}'s launch: the robot is not up in Gazebo ({state}):\n{ex.log[-4000:]}")
         yield ex
     finally:
         _stop([launch])
@@ -167,6 +158,7 @@ def example(name: str, workdir: Path | None = None, timeout: float = 300.0):
 
 if __name__ == "__main__":
     with example(sys.argv[1]) as ex:
+        ex.wait_for(NAVIGATION, 300.0)
         print("serving", ex.workdir, flush=True)
         with contextlib.suppress(KeyboardInterrupt):
             while True:

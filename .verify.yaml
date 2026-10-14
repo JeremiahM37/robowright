@@ -30,9 +30,11 @@ steps:
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
 
+  # Serial on purpose: these files share one ROS graph and simulator, so -n 4 workers collide (measured: 6 failures
+  # in parallel, 1 flake serially) and leave processes that break the next step's simulation.
   - name: ROS 2 both ways (robowright drives ros2_control and Gazebo; a separate ROS 2 stack drives robowright's simulation)
     actions:
-      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_gazebo.py -q -n 4 -p no:cacheprovider", timeout: 1200 }
+      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_gazebo.py -q -p no:cacheprovider", timeout: 1200 }
 
   - name: someone else's whole stack (UR's Gazebo simulation and MoveIt, MoveIt's Panda demo, Kinova's and UFACTORY's Gazebo simulations), observed and driven through its own controllers
     actions:
@@ -81,7 +83,7 @@ steps:
 
   - name: trace viewer DOM (desktop + Pixel 7)
     actions:
-      - shell: "${VERIFY_PYTHON:-python3} scripts/check_viewer.py /tmp/robowright-verify/trace.html"
+      - shell: "${VERIFY_PYTHON:-$HOME/.venvs/verify/bin/python3} scripts/check_viewer.py /tmp/robowright-verify/trace.html"
 
   - name: live view serves a running simulation
     actions:

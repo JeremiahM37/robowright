@@ -62,6 +62,7 @@ SETTLE = (
 )
 SCAN_HZ = 10.0  # the lidar's update_rate in nav2_minimal_tb4_description's rplidar.urdf.xacro
 UPRIGHT_DEG = 5
+DRIVE_MOVED = 0.05  # m from the spawn: the robot has begun to drive
 # where the example sends the robot, in the map frame
 NAV_TO_POSE_GOAL = (0.0, 0.0, 0.0)  # its last goal: see test_the_example_sends_the_robot_back_to_its_origin
 FOLLOW_PATH_GOAL = (7.0, 0.5, 0.0)  # example_follow_path's goal
@@ -79,6 +80,10 @@ class Run:
         self.n_joints = 0
         self.wall = 0.0
         self.scan_error = None  # why the lidar's rate was not as the description sets, if it was not
+        # the drive's start, as the robot shows it: how far it was from its spawn at the first sample (nonzero:
+        # the drive began before observation), and the observation time it first left the spawn
+        self.moved_before_observation = 0.0
+        self.drive_seen_at = None
 
     def record(self, world, t: float) -> None:
         base = world.robot.base
@@ -107,7 +112,10 @@ class Run:
 
 def _example_run(name: str, goal) -> Run:
     """One example, as its launch file ships it, from start to its result, with the stack stopped
-    again before this returns. The robot is observed throughout (upright, and the belief)."""
+    again before this returns. The robot is observed throughout (upright, and the belief). The
+    launch starts the stack and the example together, but the example drives only once Nav2 is
+    active, which can come before the observation has begun: how much the robot had already moved
+    is measured (see :class:`Run`), not assumed away."""
     with rig.example(name) as ex:
         world = rw.launch(
             backend="ros2",
@@ -147,15 +155,28 @@ def _run_to_result(world, ex, run: Run, timeout: float) -> None:
         world.wait(0.2)
         t += 0.2
         run.record(world, t)
+        away = float(np.linalg.norm(run.samples[-1][1][:2]))  # the robot spawns at the map origin (see the module docstring)
+        if len(run.samples) == 1:
+            run.moved_before_observation = away
+        if run.drive_seen_at is None and away > DRIVE_MOVED:
+            run.drive_seen_at = round(t, 1)
 
 
 def _report(run: Run) -> None:
     """What the run measured, printed (shown in the test report with ``-rA``)."""
     ok = "Goal succeeded!" in run.ex.log
-    if not len(run.settled_errors):  # a result before the first sample: what the example said is what there is to show
-        raise AssertionError(f"{run.ex.name} gave its result before anything was sampled; its log ends:\n{run.ex.log[-2500:]}")
+    if not len(run.samples):
+        raise AssertionError(f"{run.ex.name} had its result before the first observation sample; its log ends:\n{run.ex.log[-2500:]}")
+    span = run.samples[-1][0]
+    if not len(run.settled_errors):
+        raise AssertionError(
+            f"{run.ex.name} gave its result after {span:.1f} s of observation ({len(run.samples)} samples), before the "
+            f"{SETTLE:.0f} s the belief needs to settle; its log ends:\n{run.ex.log[-2500:]}"
+        )
     print(
-        f"\n{run.ex.name}: result {'succeeded' if ok else 'not succeeded'}; wall {run.wall:.1f} s; "
+        f"\n{run.ex.name}: result {'succeeded' if ok else 'not succeeded'}; {len(run.samples)} samples over {span:.1f} s "
+        f"of observation before the result (wall {run.wall:.1f} s; {run.moved_before_observation:.2f} m from spawn at the first "
+        f"sample; left the spawn at observation t={run.drive_seen_at} s); "
         f"final truth (map) {np.round(run.final[:2], 3).tolist()}, distance to goal {run.distance_to_goal:.3f} m; "
         f"belief error after {SETTLE:.0f} s: max {run.settled_errors.max():.3f} m, mean {run.settled_errors.mean():.3f} m; "
         f"max tilt {run.max_tilt:.2f} deg",
