@@ -115,25 +115,37 @@ def test_observe_only_reads_the_robot_and_never_commands_it(tmp_path):
 
 def test_closing_with_a_gripper_goal_in_flight_does_not_hang(world):
     """A gripper goal still waiting for the world to step when the test ends is aborted by close(), which
-    used to wait for its action-server thread for ever (a whole gate run hung in the ros2 fixture's teardown)."""
-    from control_msgs.action import GripperCommand
-
+    used to wait for its action-server thread for ever (a whole gate run hung in the ros2 fixture's teardown).
+    The goal runs as the action server runs it, on the bridge's executor's threads, with its handle stood in
+    for: whether a ROS client's request reaches the server in time is not what is tested here."""
     from robowright.ros2_bridge import Ros2Bridge
 
+    class Handle:  # the parts of rclpy's ServerGoalHandle the gripper callback uses
+        class request:
+            class command:
+                position = 0.0
+
+        is_cancel_requested = False
+        ended = None
+
+        def abort(self):
+            self.ended = "aborted"
+
+        def canceled(self):
+            self.ended = "canceled"
+
+        def succeed(self):
+            self.ended = "succeeded"
+
     bridge = Ros2Bridge(world)
-    node, client = _client(GripperCommand, "gripper_controller/gripper_cmd")
-    assert client.wait_for_server(timeout_sec=10)
-    goal = GripperCommand.Goal()
-    goal.command.position = 0.0
-    sent = client.send_goal_async(goal)
-    deadline = time.monotonic() + 10
-    while not (sent.done() and sent.result().accepted) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert sent.done() and sent.result().accepted  # the goal is executing: the world is not stepped, so it never ends
+    handle = Handle()
+    running = bridge._executor._executor.submit(bridge._execute_gripper, handle)  # the action server's thread pool
+    time.sleep(0.3)
+    assert not running.done()  # waiting for the world to step, which it will not
     closer = threading.Thread(target=bridge.close, daemon=True)
     t0 = time.monotonic()
     closer.start()
     closer.join(timeout=15)
     assert not closer.is_alive(), "close() hung with a gripper goal in flight"
     assert time.monotonic() - t0 < 10
-    node.destroy_node()
+    assert handle.ended == "aborted"
