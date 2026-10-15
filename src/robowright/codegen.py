@@ -607,7 +607,7 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
         make = f"{library}.make({env_id!r}{kw})"
     else:
         why = (spec or {}).get("reason") or "it was built by hand, not by gymnasium.make"
-        if spec:
+        if spec and spec.get("id"):
             why = f"it was made with {library}.make({spec['id']!r}), but {why}"
         if not stepped:
             # No stub: a test that raises NotImplementedError is not a test. The environment is named, and the way to

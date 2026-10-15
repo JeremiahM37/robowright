@@ -915,6 +915,16 @@ def _env_spec(env) -> dict | None:
     spec = getattr(env, "spec", None) or getattr(getattr(env, "unwrapped", None), "spec", None)
     env_id = getattr(spec, "id", None)
     if not isinstance(env_id, str):
+        if type(getattr(env, "unwrapped", env)).__module__.startswith("metaworld."):
+            # metaworld.make_mt_envs keeps no record of its seed, and the seed places the task's goal: a rebuild would
+            # be another task. Its gymnasium registration does keep it (a cold trial: 50/50 attached, none rebuilt).
+            return {
+                "id": None,
+                "reproducible": False,
+                "reason": "it was made with metaworld.make_mt_envs, which keeps no record of its seed (the seed places the "
+                "task's goal); make it with gymnasium.make('Meta-World/MT1', env_name=..., seed=...) and the run "
+                "replays and becomes a test by itself",
+            }
         return _dm_control_spec(env)
     entry = getattr(spec, "entry_point", None)
     if not isinstance(entry, str) and callable(entry):  # a class object: the module and name it can be imported by
