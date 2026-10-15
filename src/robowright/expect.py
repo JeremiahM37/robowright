@@ -365,8 +365,10 @@ class Expectation:
         return self._run("to_have_no_collisions", check, timeout, hold, {"allow": sorted(allow)})
 
     def to_satisfy(self, predicate, description: str = "predicate", *, timeout=None, hold=0.0):
-        """A custom condition: ``predicate(subject) -> bool``."""
-        return self._run(f"to_satisfy({description})", lambda: (bool(predicate(self.subject)), description), timeout, hold)
+        """A custom condition: ``predicate(subject) -> bool``, checked every control step until it holds
+        (Playwright's ``expect.poll``). ``expect(world).to_satisfy(lambda w: ...)`` is given the world."""
+        target = self.world if isinstance(self.subject, _WorldView) else self.subject
+        return self._run(f"to_satisfy({description})", lambda: (bool(predicate(target)), description), timeout, hold)
 
     # helpers -----------------------------------------------------------------------
     def _gripper(self) -> Gripper:

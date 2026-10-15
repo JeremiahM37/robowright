@@ -42,3 +42,13 @@ def test_a_trace_without_steps_reads_as_before(tmp_path):
     expect(w.scene["cube"]).to_be_at_rest()
     t = rw.Trace(w.close(trace_path=tmp_path / "plain.zip"))
     assert all("depth" not in e for e in t.events)
+
+
+def test_expect_world_to_satisfy_polls_any_value_of_the_world():
+    w = rw.launch()
+    start = w.time
+    expect(w).to_satisfy(lambda world: world.time >= start + 0.5, "half a second has passed", timeout=2)
+    assert w.time >= start + 0.5
+    with pytest.raises(rw.ExpectationError, match="never"):
+        expect(w).to_satisfy(lambda world: False, "never", timeout=0.1)
+    w.close()
