@@ -269,6 +269,13 @@ class Ros2Backend(Backend):
                 arm.update(controller=name, interface=arm["interface"] or heard[name])
         if arm["controller"] is None:
             arm.update(discover.suggest(graph, self.ros_names).get("arm") or {})
+            # A stack still coming up lists its controllers before its spawner has activated the arm's (seen with
+            # UR's driver): read the list again until one can be driven, or the timeout is spent.
+            while arm["controller"] is None and graph.manager and _time.monotonic() < deadline:
+                _time.sleep(0.25)
+                graph.controllers = discover._controllers(self.node, graph.manager, deadline)
+                arm.update(discover.suggest(graph, self.ros_names).get("arm") or {})
+            found = {c.name: c for c in graph.controllers}
             if arm["controller"] is None:
                 seen = (
                     discover.report(graph)
