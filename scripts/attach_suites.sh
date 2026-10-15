@@ -20,7 +20,7 @@ run() {  # run ENV TESTS...
 }
 run envs-venv tests/test_attach.py tests/test_attach_gymnasium_mujoco.py tests/test_attach_envs.py tests/test_attach_vector.py tests/test_attach_replay.py tests/test_attach_factory.py \
     examples/environments/test_gymnasium_robotics.py examples/environments/test_metaworld.py examples/environments/test_robosuite.py
-run envs-dm-venv examples/environments/test_dm_control.py
+run envs-dm-venv examples/environments/test_dm_control.py tests/test_attach_dm_control_suite.py
 run venv-pybullet/.venv tests/test_attach_replay_engines.py examples/environments/test_pybullet_envs.py
 run venv-drones/.venv examples/environments/test_pybullet_drones.py
 run venv-maniskill tests/test_attach_replay_engines.py tests/test_attach_sapien.py examples/environments/test_maniskill.py

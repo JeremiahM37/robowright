@@ -248,7 +248,10 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
     try:
         stored = None if bare else _stored_model(tr)
         if stored is not None and model_bytes(world.backend.model) != stored:
-            notes.append("the environment as rebuilt has a different MuJoCo model from the recorded one (another version or options)")
+            notes.append(
+                "the environment as rebuilt has a different MuJoCo model from the recorded one (another version or options, "
+                "or a model drawn from random numbers when it is built, as dm_control's lqr is)"
+            )
         rows = iter([row for _, kind, row in tr.controls if kind == "action"])
         items = schedule(tr)
         compared_start = stepped  # a simulation with its own steps starts from the state make_env built, before any reset
@@ -462,6 +465,15 @@ def _make_from_spec(tr: Trace):
             f"cannot rebuild this run's environment ({why}): "
             "pass make_env=... (or --factory module:func) that builds it the way the run did"
         )
+    if spec.get("library") == "dm_control.suite":
+        domain, task = dm_control_task(spec)
+
+        def load():
+            from dm_control import suite
+
+            return suite.load(domain, task)
+
+        return load
     # An environment registered with the old gym 0.x package is rebuilt with gym.make, not gymnasium.make.
     library = spec.get("library", "gymnasium")
     try:
@@ -483,6 +495,28 @@ def _make_from_spec(tr: Trace):
             ) from e
 
     return build
+
+
+def dm_control_task(spec: dict) -> tuple[str, str]:
+    """The dm_control suite (domain, task) a recorded run's environment was loaded as: the first of the domain's
+    tasks whose task class and model shape are the run's (tasks that differ only in their reward share both, and
+    step alike)."""
+    try:
+        from dm_control import suite
+    except ImportError as e:
+        raise ValueError("this run's environment is a dm_control suite task, and dm_control is not installed") from e
+    rec = spec["dm_control"]
+    for domain, task in suite.ALL_TASKS:
+        if domain != rec["domain"]:
+            continue
+        env = suite.load(domain, task)
+        m = env.physics.model
+        if type(env.task).__name__ == rec["task_class"] and [m.nq, m.nv, m.nu, m.nbody, m.ngeom] == list(rec["shape"]):
+            return domain, task
+    raise ValueError(
+        f"no dm_control suite task of domain {rec['domain']!r} has this run's task ({rec['task_class']}) and model: "
+        "pass make_env=... (or --factory module:func) that loads it"
+    )
 
 
 def _stored_model(tr: Trace) -> bytes | None:

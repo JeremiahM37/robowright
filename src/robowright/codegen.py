@@ -594,6 +594,11 @@ def _generate_attached(tr: Trace, test_name: str | None, stop_at_failure: bool, 
         load_factory(factory)  # fail here, with the reason, rather than in the generated test
         imports_extra, stub = _factory_lines(factory)
         make = "make_env()"
+    elif rebuilt and library == "dm_control.suite":
+        from .replay import dm_control_task
+
+        domain, task = dm_control_task(spec)
+        make = f"dm_control.suite.load({domain!r}, {task!r})"
     elif rebuilt:
         from .replay import make_spec_call
 

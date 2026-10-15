@@ -716,6 +716,10 @@ def capture_rng(env) -> dict:
     gen = getattr(getattr(env, "unwrapped", env), "_np_random", None)
     if gen is not None:
         state["env"] = gen.bit_generator.state
+    task_rng = getattr(getattr(env, "task", None), "random", None)
+    if isinstance(task_rng, np.random.RandomState):  # a dm_control task draws its start state from its own
+        t = task_rng.get_state()
+        state["task"] = [str(t[0]), [int(x) for x in t[1]], int(t[2]), int(t[3]), float(t[4])]
     return state
 
 
@@ -731,6 +735,10 @@ def restore_rng(env, state: dict) -> None:
         if gen is None:
             gen = core._np_random = np.random.Generator(np.random.PCG64())
         gen.bit_generator.state = state["env"]
+    task_rng = getattr(getattr(env, "task", None), "random", None)
+    if "task" in state and isinstance(task_rng, np.random.RandomState):
+        t = state["task"]
+        task_rng.set_state((t[0], np.array(t[1], dtype=np.uint32), t[2], t[3], t[4]))
 
 
 def _vector_of(env):
@@ -907,7 +915,7 @@ def _env_spec(env) -> dict | None:
     spec = getattr(env, "spec", None) or getattr(getattr(env, "unwrapped", None), "spec", None)
     env_id = getattr(spec, "id", None)
     if not isinstance(env_id, str):
-        return None
+        return _dm_control_spec(env)
     entry = getattr(spec, "entry_point", None)
     if not isinstance(entry, str) and callable(entry):  # a class object: the module and name it can be imported by
         target = getattr(entry, "func", entry)  # ManiSkill's entry point is functools.partial(make, env_id=...)
@@ -926,6 +934,29 @@ def _env_spec(env) -> dict | None:
     except (TypeError, ValueError):
         return {**record, "kwargs": {}, "reproducible": False, "reason": "the make() kwargs are not plain values"}
     return record
+
+
+def _dm_control_spec(env) -> dict | None:
+    """What rebuilds a dm_control suite environment (``suite.load(domain, task)``), which keeps no spec of its own:
+    the domain its task's module names, the task's class and the model's shape. Which of the domain's tasks it was is
+    found when the run is replayed or written as a test (robowright.replay.dm_control_task), not here: that loads
+    the domain's tasks, and attaching stays as quick as it was."""
+    task, physics = getattr(env, "task", None), getattr(env, "physics", None)
+    module = type(task).__module__ if task is not None else ""
+    if physics is None or not module.startswith("dm_control.suite."):
+        return None
+    m = physics.model
+    domain = module.rsplit(".", 1)[1]
+    return {
+        "id": f"dm_control.suite:{domain}",
+        "library": "dm_control.suite",
+        "dm_control": {"domain": domain, "task_class": type(task).__name__, "shape": [m.nq, m.nv, m.nu, m.nbody, m.ngeom]},
+        "kwargs": {},
+        "entry_point": None,
+        "max_episode_steps": None,
+        "registered_max_episode_steps": None,
+        "reproducible": True,
+    }
 
 
 def _make_library(spec) -> str:
