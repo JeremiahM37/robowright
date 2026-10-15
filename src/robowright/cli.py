@@ -117,7 +117,8 @@ jobs:
       - run: pip install robowright pytest-xdist
       # Traces record state, not pictures: no GPU or display is needed to test. --rw-trace-text
       # prints each failure's trace in the log; the traces themselves are kept as an artifact.
-      - run: pytest -n auto --rw-trace-text
+      # --rw-retries 2 runs a failed test again: one that then passes is reported flaky, not passed.
+      - run: pytest -n auto --rw-retries 2 --rw-trace-text
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

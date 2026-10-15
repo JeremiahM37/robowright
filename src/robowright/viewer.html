@@ -33,6 +33,7 @@ section > h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em
 #events li:hover { background: var(--sel); }
 #events li.sel { background: var(--sel); border-left-color: var(--accent); }
 #events li.failed .name { color: var(--bad); }
+#events li.step .name { font-weight: 600; }
 #events .icon { text-align: center; color: var(--muted); }
 #events li.failed .icon { color: var(--bad); }
 #events li.ok.expect .icon { color: var(--ok); }
@@ -100,14 +101,14 @@ const $ = (id) => document.getElementById(id);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = (x, d = 3) => (x == null ? "" : Number(x).toFixed(d));
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
-const ICON = {action: "▶", expect: "✓", invariant: "◆", violation: "✖", fault: "⚡", edit: "✎", log: "•"};
+const ICON = {action: "▶", expect: "✓", invariant: "◆", violation: "✖", fault: "⚡", edit: "✎", log: "•", step: "▾"};
 
 $("title").textContent = M.name;
 $("status").textContent = M.status; $("status").className = "pill " + M.status;
 $("meta").innerHTML = [`backend ${M.backend}`, `seed ${M.seed}`, `${fmt(D.t[N - 1], 2)}s simulated`, `${M.steps} steps`, `${fmt(M.wall_seconds, 2)}s wall`, esc(D.source)].map((s) => `<span>${s}</span>`).join("");
 
 const evs = M.events;
-$("events").innerHTML = evs.map((e, i) => `<li data-i="${i}" class="${e.status} ${e.type}"><span class="icon">${e.status === "failed" ? "✖" : ICON[e.type] || "•"}</span><span class="name">${esc(e.name)}</span><span class="time">${fmt(e.t, 2)}s</span></li>`).join("");
+$("events").innerHTML = evs.map((e, i) => `<li data-i="${i}" class="${e.status} ${e.type}"${e.depth ? ` style="padding-left:${12 + 14 * e.depth}px"` : ""}><span class="icon">${e.status === "failed" ? "✖" : ICON[e.type] || "•"}</span><span class="name">${esc(e.name)}</span><span class="time">${fmt(e.t, 2)}s</span></li>`).join("");
 $("events").addEventListener("click", (ev) => { const li = ev.target.closest("li"); if (li) selectEvent(+li.dataset.i, true); });
 
 const camNames = Object.keys(D.frames);

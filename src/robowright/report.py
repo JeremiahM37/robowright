@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 _TRACE = re.compile(r"trace: (\S+\.zip)")
-_ORDER = ["failed", "xpassed", "passed", "skipped", "xfailed"]
+_ORDER = ["failed", "xpassed", "flaky", "passed", "skipped", "xfailed"]
 
 
 class Run:
@@ -25,13 +25,19 @@ class Run:
     def add(self, report) -> None:
         t = self.tests.setdefault(report.nodeid, {"outcome": "passed", "duration": 0.0, "message": "", "traces": [], "trials": ""})
         t["duration"] += getattr(report, "duration", 0.0)
+        retried = report.outcome == "rerun"  # an attempt that failed and was run again (--rw-retries)
+        flaky = any(k == "robowright_flaky" for k, _ in report.user_properties)
         for k, v in report.user_properties:
-            if k == "robowright_trace" and report.failed and v not in t["traces"]:
+            if k == "robowright_trace" and (report.failed or retried or flaky) and v not in t["traces"]:
                 t["traces"].append(v)
             if k == "robowright_trials":
                 t["trials"] = v
+            if k == "robowright_flaky":
+                t["outcome"] = "flaky"  # failed, then passed on a retry: as Playwright reports it
         xfail = hasattr(report, "wasxfail")
-        if report.failed:
+        if retried:
+            t["message"] = t["message"] or f"attempt failed and was retried:\n{report.longrepr}"
+        elif report.failed:
             t["outcome"] = "failed" if report.when == "call" or t["outcome"] != "failed" else t["outcome"]
             t["message"] = t["message"] or str(report.longrepr)
             t["traces"] += [p for p in _TRACE.findall(str(report.longrepr)) if p not in t["traces"]]
@@ -54,7 +60,7 @@ class Run:
         for nodeid, t in self.tests.items():
             counts[t["outcome"]] = counts.get(t["outcome"], 0) + 1
             details = ""
-            if t["message"] and t["outcome"] in ("failed", "xpassed", "skipped", "xfailed"):
+            if t["message"] and t["outcome"] in ("failed", "xpassed", "flaky", "skipped", "xfailed"):
                 details += f"<pre>{html.escape(t['message'][-6000:])}</pre>"
             for path in t["traces"]:
                 p = Path(path)
@@ -101,6 +107,7 @@ _PAGE = """<!doctype html>
   --fail:#c62828;
   --pass:#2e7d32;
   --skip:#8e8e93;
+  --flaky:#a15c00;
   --code:#f5f5f7;
 }}
 @media (prefers-color-scheme: dark) {{ :root {{ --bg:#111;
@@ -110,6 +117,7 @@ _PAGE = """<!doctype html>
   --fail:#ff6b6b;
   --pass:#6bd56b;
   --skip:#8e8e93;
+  --flaky:#f0a64a;
   --code:#1c1c1e;
   }} }}
 body {{ background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; margin:0; padding:16px; }}
@@ -131,6 +139,7 @@ tr.failed td.o, tr.xpassed td.o {{
   color:var(--fail);
   }} tr.passed td.o {{ color:var(--pass);
   }} tr.skipped td.o, tr.xfailed td.o {{ color:var(--skip);
+  }} tr.flaky td.o {{ color:var(--flaky);
 }}
 summary {{ cursor:pointer; overflow-wrap:anywhere; }} .trials {{ color:var(--mut); margin-left:8px; }}
 pre {{ background:var(--code); padding:8px; border-radius:6px; overflow-x:auto; font-size:12px; white-space:pre-wrap; }}

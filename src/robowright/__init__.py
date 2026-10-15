@@ -56,11 +56,13 @@ from .errors import (  # noqa: E402
     ExpectationError,
     InvariantViolation,
     RobowrightError,
+    TimeLimitError,
     UnreachableError,
 )
 from .expect import condition, expect  # noqa: E402
 from .locators import ObjectHandle, Point  # noqa: E402
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene, open_floor, tabletop  # noqa: E402
+from .steps import step  # noqa: E402
 from .trace import Trace  # noqa: E402
 from .world import (  # noqa: E402
     Settings,
@@ -91,6 +93,7 @@ __all__ = [
     "Point",
     "RobowrightError",
     "SceneSpec",
+    "TimeLimitError",
     "Settings",
     "Trace",
     "UnreachableError",
@@ -98,6 +101,7 @@ __all__ = [
     "attach",
     "condition",
     "expect",
+    "step",
     "launch",
     "ros2_robot",
     "tabletop",

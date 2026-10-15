@@ -35,3 +35,11 @@ class TooWideError(GraspError):
     """The object is wider than the gripper opens: the robot cannot do what the test asks. Run
     under pytest, the test is skipped on that robot, saying so (Lite6's narrow gripper opens
     12 mm; the default cube is 25 mm)."""
+
+
+class TimeLimitError(Exception):
+    """A test ran past its time limit (``--rw-timeout``, ``@pytest.mark.rw_timeout``), wall clock.
+
+    Not a RobowrightError on purpose: a trials test counts those as one failed trial and goes on,
+    and a test out of time must stop.
+    """

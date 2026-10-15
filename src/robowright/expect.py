@@ -12,10 +12,12 @@ instead: it is checked after every step for the rest of the test.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from .errors import ExpectationError
-from .locators import ObjectHandle, Point, as_subject
+from .locators import ObjectHandle, Point, Subject, as_subject
 from .robot import GRIPPER_CLOSED, Gripper, Robot, _jsonable
 
 # Holding, without contact sensing: jaws closed on nothing stop at an opening of 0.031 at most
@@ -34,7 +36,10 @@ class Expectation:
     def __init__(self, subject, world=None, timeout=None, negate=False, mode="eventually", message=None, soft=False):
         self.raw = subject
         self.world = world or _world_of(subject)
-        self.subject = subject if isinstance(subject, (Robot,)) else as_subject(self.world, subject)
+        if subject is self.world:
+            self.subject = _WorldView()  # expect(world): what its cameras see (to_match_snapshot)
+        else:
+            self.subject = subject if isinstance(subject, (Robot,)) else as_subject(self.world, subject)
         self.timeout = timeout
         self.negate = negate
         self.mode = mode
@@ -186,6 +191,60 @@ class Expectation:
 
         return self._run("to_publish", check, timeout, hold, {"hz": hz, "tol": tol})
 
+    # image matchers -------------------------------------------------------------
+    def to_match_snapshot(
+        self,
+        name: str,
+        *,
+        camera: str = "front",
+        size: tuple[int, int] = (320, 240),
+        threshold: float = 0.2,
+        max_diff_pixel_ratio: float = 0.0,
+        timeout: float = 0.0,
+    ):
+        """What ``camera`` sees matches the image kept for this test: Playwright's ``toHaveScreenshot``.
+        ``expect(world).to_match_snapshot("tidy.png")``. A pixel differs when a channel changes by more
+        than ``threshold`` of full scale; at most ``max_diff_pixel_ratio`` of them may. The baseline is
+        ``__snapshots__/<test file>/<name>-<engine>-<robot>.png``; the first run writes it and fails
+        (check it, then run again), and ``pytest --rw-update-snapshots`` writes it again. See
+        robowright.snapshots."""
+        from . import snapshots
+
+        if self.negate:
+            raise ValueError("to_match_snapshot cannot be negated: say what the view should look like")
+        w = self.world
+        w.require("render", "to_match_snapshot")
+        names = [c.name for c in w.spec.cameras]
+        if camera not in names:
+            raise ValueError(f"unknown camera {camera!r}; this world has: {', '.join(names)}")
+        path = snapshots.baseline_path(name, w.backend.name, w.spec.robot or "robot")
+        width, height = size
+        args = {"name": name, "camera": camera, "threshold": threshold, "max_diff_pixel_ratio": max_diff_pixel_ratio}
+        label = f"to_match_snapshot({name!r})"
+        if snapshots.updating() or not path.exists():
+            snapshots.write(path, w.backend.render(camera, width, height))
+            if snapshots.updating():
+                return self._run(label, lambda: (True, f"wrote {path}"), timeout, 0.0, args)
+            missing = f"no snapshot {path} yet: wrote it from this run; look at it, then run again"
+            return self._run(label, lambda: (False, missing), 0.0, 0.0, args)
+        expected = snapshots.read(path)
+        out = Path(w.settings.trace_dir) / "snapshots" / snapshots._slug(f"{w.name}-{Path(name).stem}")
+
+        def check():
+            actual = w.backend.render(camera, width, height)[..., :3]
+            n, diff = snapshots.compare(actual, expected, threshold)
+            if n < 0:
+                got, want = f"{actual.shape[1]}x{actual.shape[0]}", f"{expected.shape[1]}x{expected.shape[0]}"
+                return False, f"{camera} renders {got}, the snapshot is {want} ({path})"
+            ratio = n / (expected.shape[0] * expected.shape[1])
+            if ratio <= max_diff_pixel_ratio:
+                return True, f"{n} pixels differ ({ratio:.2%}) from {path}"
+            a = snapshots.write(Path(f"{out}-actual.png"), actual)
+            d = snapshots.write(Path(f"{out}-diff.png"), diff)
+            return False, f"{n} pixels differ ({ratio:.2%}, {max_diff_pixel_ratio:.2%} allowed) from {path}\n  actual: {a}\n  diff: {d}"
+
+        return self._run(label, check, timeout, 0.0, args)
+
     # state matchers -------------------------------------------------------------
     def to_be_at_rest(self, lin_tol: float = 0.01, ang_tol: float = 0.1, *, timeout=None, hold=None):
         """Linear speed below ``lin_tol`` m/s and angular below ``ang_tol`` rad/s, for ``hold`` seconds (0.1 unless
@@ -325,6 +384,16 @@ class Expectation:
         if isinstance(s, Gripper):
             return s.robot
         raise TypeError(f"this matcher needs a robot, got {s!r}")
+
+
+class _WorldView(Subject):
+    """The world as a subject: ``expect(world)`` asserts on what its cameras see, not on a position."""
+
+    name = "world"
+
+    @property
+    def position(self) -> np.ndarray:
+        raise TypeError("expect(world) takes image matchers (to_match_snapshot), not position matchers")
 
 
 def _world_of(subject):

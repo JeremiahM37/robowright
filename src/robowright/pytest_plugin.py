@@ -8,11 +8,15 @@ Options::
     --rw-backend mujoco,pybullet     run every robot test on each backend
     --rw-robot so101,panda | all | legged   run every robot test on each robot ("all": every arm)
     --rw-robot path/to/robot.xml             ...or on any robot, from its model file (MJCF or URDF)
-    --rw-trace on|off|retain-on-failure
+    --rw-trace on|off|retain-on-failure|on-first-retry
+    --rw-retries N                   run a failed test again, up to N times; one that then passes is reported flaky
     --rw-trace-dir DIR
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
+    --rw-update-snapshots            write the images expect(world).to_match_snapshot compares against
+    --rw-shard K/N                   run the K-th of N parts of the suite, one part per CI machine
+    --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
     --rw-report report.html          an HTML report of the run, each failure with its trace
     --rw-fidelity published|adjusted robots as their model files have them (default), or with robowright's tuning
     --rw-live [PORT]                 watch each test live in a browser (http://127.0.0.1:8765)
@@ -33,6 +37,7 @@ from __future__ import annotations
 import os
 import re
 import warnings
+import zlib
 from pathlib import Path
 
 import pytest
@@ -60,7 +65,20 @@ def pytest_addoption(parser):
     g.addoption(
         "--rw-robot", default="so101", help="robots to run robot tests on (comma-separated): names, 'all', 'legged', or MJCF/URDF files"
     )
-    g.addoption("--rw-trace", default="retain-on-failure", choices=["on", "off", "retain-on-failure"])
+    g.addoption(
+        "--rw-trace",
+        default="retain-on-failure",
+        choices=["on", "off", "retain-on-failure", "on-first-retry"],
+        help="on-first-retry: record only the first retry of a failed test (with --rw-retries), as Playwright's CI default",
+    )
+    g.addoption(
+        "--rw-retries",
+        type=int,
+        default=0,
+        metavar="N",
+        help="run a failed test again, up to N times, in a fresh world; a test that fails and then passes is reported "
+        "flaky (not passed), with the failed attempt's trace kept",
+    )
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
     g.addoption(
@@ -87,6 +105,23 @@ def pytest_addoption(parser):
     g.addoption("--rw-headed", action="store_true", help="watch each test in the engine's window, at real-time pace (MuJoCo)")
     g.addoption("--rw-report", metavar="PATH", help="write an HTML report of the run: every test, and each failure with its trace")
     g.addoption(
+        "--rw-timeout",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="fail a test that runs longer than this, wall clock, setup included (0: no limit); @pytest.mark.rw_timeout(s) sets one test's",
+    )
+    g.addoption(
+        "--rw-shard",
+        metavar="K/N",
+        help="run the K-th of N parts of the suite (1-based), for N CI machines; every test is in exactly one part",
+    )
+    g.addoption(
+        "--rw-update-snapshots",
+        action="store_true",
+        help="write every image expect(world).to_match_snapshot compares against, from this run",
+    )
+    g.addoption(
         "--rw-trace-text",
         action="store_true",
         help="print each failing trace as text at the end: what ran, what failed, the state then (for CI logs and AI agents)",
@@ -101,20 +136,14 @@ def pytest_configure(config):
             _robot_names(config)
         except (ValueError, KeyError) as e:
             raise pytest.UsageError(f"--rw-robot: {e}") from None
+    _shard(config)  # a malformed --rw-shard is said before anything runs
     mode = config.getoption("--rw-fidelity", None)
     if mode:
-        # For this run, and the xdist workers it starts; put back after, as a run inside another
-        # (pytester, in-process) would otherwise leave every later test in its mode.
-        previous = os.environ.get(fidelity.ENV)
-        os.environ[fidelity.ENV] = mode
+        _set_env(config, fidelity.ENV, mode)
+    if config.getoption("--rw-update-snapshots", False):
+        from . import snapshots
 
-        def restore():
-            if previous is None:
-                os.environ.pop(fidelity.ENV, None)
-            else:
-                os.environ[fidelity.ENV] = previous
-
-        config.add_cleanup(restore)
+        _set_env(config, snapshots.UPDATE_ENV, "1")
     config.addinivalue_line("markers", "scene(spec): scene spec or zero-arg factory for this test")
     config.addinivalue_line("markers", "seed(n): seed for this test")
     config.addinivalue_line("markers", "backends(*names): only run on these backends")
@@ -125,6 +154,7 @@ def pytest_configure(config):
         "moved to a seeded random pose, and judge the success rate",
     )
     config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
+    config.addinivalue_line("markers", "rw_timeout(seconds): this test's time limit, wall clock, setup included (0: none)")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
     config.pluginmanager.register(_Summary(), "robowright-summary")
@@ -135,6 +165,33 @@ def pytest_configure(config):
         # kind, at the end of the run; robowright's own order (pytest_collection_modifyitems)
         # starts those first.
         config.option.loadscopereorder = False
+
+
+def _shard(config) -> tuple[int, int] | None:
+    """``--rw-shard K/N``, Playwright's ``--shard``: tests are dealt out by a hash of their id, so every
+    machine that collects the same suite gets the same split without talking to the others."""
+    s = config.getoption("--rw-shard", None)
+    if not s:
+        return None
+    m = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", s)
+    if not m or not 1 <= int(m.group(1)) <= int(m.group(2)):
+        raise pytest.UsageError(f"--rw-shard {s!r}: give K/N with 1 <= K <= N, e.g. 2/4")
+    return int(m.group(1)), int(m.group(2))
+
+
+def _set_env(config, name: str, value: str) -> None:
+    """For this run, and the xdist workers it starts; put back after, as a run inside another
+    (pytester, in-process) would otherwise leave every later test with it set."""
+    previous = os.environ.get(name)
+    os.environ[name] = value
+
+    def restore():
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
+
+    config.add_cleanup(restore)
 
 
 @pytest.hookimpl(optionalhook=True, tryfirst=True)
@@ -194,6 +251,14 @@ def pytest_collection_modifyitems(config, items):
     result. Ordered and grouped, the tests that share a scene run one after another in one
     process and reuse it, instead of every robot's scene being built for every test.
     """
+    shard = _shard(config)
+    if shard is not None:
+        k, n = shard
+        keep = [i for i in items if zlib.crc32(_plain(i.nodeid).encode()) % n == k - 1]
+        dropped = [i for i in items if zlib.crc32(_plain(i.nodeid).encode()) % n != k - 1]
+        if dropped:
+            config.hook.pytest_deselected(items=dropped)
+        items[:] = keep
     module = {}
 
     def key(item):
@@ -243,11 +308,14 @@ def _scene_for(item, request) -> SceneSpec:
     return spec
 
 
-def _settings(config) -> Settings:
+def _settings(config, attempt: int = 0) -> Settings:
     headed = config.getoption("--rw-headed")
+    trace = config.getoption("--rw-trace")
+    if trace == "on-first-retry":  # the first run of a test is not recorded; its first retry is, whatever its outcome
+        trace = "on" if attempt == 1 else "off"
     if config.getoption("--rw-live", None) is not None:  # watchable: at real-time pace
-        return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"), headed=headed, realtime=True)
-    return Settings(trace=config.getoption("--rw-trace"), trace_dir=config.getoption("--rw-trace-dir"), headed=headed)
+        return Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed, realtime=True)
+    return Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed)
 
 
 def _plain(nodeid: str) -> str:
@@ -255,14 +323,21 @@ def _plain(nodeid: str) -> str:
     return re.sub(r"@[\w.-]+$", "", nodeid)
 
 
-def _trace_path(config, nodeid: str) -> Path:
-    return Path(config.getoption("--rw-trace-dir")) / f"{_safe(_plain(nodeid).replace('::', '__').replace('/', '_'))}.zip"
+def _trace_path(config, nodeid: str, attempt: int = 0) -> Path:
+    """Where a test's trace goes; each retry has its own, so the failed attempt's trace survives the retry."""
+    retry = f"-retry{attempt}" if attempt else ""
+    return Path(config.getoption("--rw-trace-dir")) / f"{_safe(_plain(nodeid).replace('::', '__').replace('/', '_'))}{retry}.zip"
+
+
+def _attempt(item) -> int:
+    return getattr(item, "_rw_attempt", 0)
 
 
 def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> World:
     if backend != "ros2":
         rw.world.check_mujoco()
-    w = World(_scene_for(item, request), backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=_settings(item.config))
+    settings = _settings(item.config, _attempt(item))
+    w = World(_scene_for(item, request), backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=settings)
     rw._current.set(w)
     view = _live(item.config)
     if view is not None:
@@ -305,7 +380,7 @@ def world(request, rw_backend, rw_robot):
     yield w
     rep = getattr(item, "_rw_call_report", None)
     failed = rep is None or rep.failed
-    path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid))
+    path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid, _attempt(item)))
     if path and failed:
         item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))
 
@@ -350,10 +425,54 @@ def pytest_runtest_makereport(item, call):
     rep = outcome.get_result()
     if rep.when == "call":
         item._rw_call_report = rep
-        if rep.failed and "world" in getattr(item, "fixturenames", ()) and not item.get_closest_marker("trials"):
-            rep.user_properties.append(("robowright_trace", str(_trace_path(item.config, item.nodeid))))
+        retry = _attempt(item) > 0  # a retry's trace is kept whatever it shows (on-first-retry records it)
+        if (rep.failed or retry) and "world" in getattr(item, "fixturenames", ()) and not item.get_closest_marker("trials"):
+            rep.user_properties.append(("robowright_trace", str(_trace_path(item.config, item.nodeid, _attempt(item)))))
         if hasattr(item, "_rw_trials"):
             rep.user_properties.append(("robowright_trials", item._rw_trials.summary()))
+
+
+def _time_limit(item) -> float:
+    m = item.get_closest_marker("rw_timeout")
+    return float(m.args[0]) if m else float(item.config.getoption("--rw-timeout", 0.0) or 0.0)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_setup(item):
+    """Start the test's clock (``--rw-timeout``): from its fixtures, where a stack that never comes up
+    waits, to the end of its body. Checked between Python operations, which a long C call delays."""
+    limit = _time_limit(item)
+    if limit > 0:
+        import signal
+        import threading
+
+        if hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread():
+
+            def expired(signum, frame):
+                from . import _current
+                from .errors import TimeLimitError
+
+                w = _current.get()
+                tr = getattr(w, "trace", None) if w is not None else None
+                running = [e for e in (tr.events if tr else []) if e.status == "running"]
+                where = f", while {running[-1].type} {running[-1].name!r} was running" if running else ""
+                raise TimeLimitError(f"the test ran past its {limit:g} s time limit (wall clock){where}")
+
+            item._rw_alarm = signal.signal(signal.SIGALRM, expired)
+            signal.setitimer(signal.ITIMER_REAL, limit)
+        else:
+            warnings.warn(pytest.PytestWarning(f"{item.nodeid}: --rw-timeout needs SIGALRM in the main thread; no time limit"))
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item, nextitem):
+    if hasattr(item, "_rw_alarm"):
+        import signal
+
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, item.__dict__.pop("_rw_alarm"))
+    return (yield)
 
 
 @pytest.hookimpl(wrapper=True)
@@ -364,6 +483,55 @@ def pytest_runtest_call(item):
         return (yield)
     except TooWideError as e:
         pytest.skip(f"{e}: too wide for this robot's gripper")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    """``--rw-retries N``: a test that fails runs again, up to N times, each in a fresh world. The failed
+    attempts are reported as reruns, and a test that then passes as flaky, as Playwright reports it.
+    A real robot or simulator can fail once for reasons outside the code under test (a stalled clock,
+    a slow start), so a retry tells "fails" from "fails sometimes"; it never turns a failure into a pass."""
+    retries = item.config.getoption("--rw-retries", 0)
+    if not retries:
+        return None
+    from _pytest.runner import runtestprotocol
+
+    item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+    for attempt in range(retries + 1):
+        item._rw_attempt = attempt
+        reports = runtestprotocol(item, nextitem=nextitem, log=False)
+        if any(r.failed for r in reports) and attempt < retries:
+            for r in reports:
+                if r.failed:
+                    r.outcome = "rerun"
+                item.ihook.pytest_runtest_logreport(report=r)
+            _forget_failed_fixtures(item)
+            item._initrequest()  # fresh fixtures (a new world) for the next attempt
+            continue
+        for r in reports:
+            if attempt and r.when == "call" and r.passed:
+                r.user_properties.append(("robowright_flaky", attempt))
+            item.ihook.pytest_runtest_logreport(report=r)
+        break
+    item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+    return True
+
+
+def _forget_failed_fixtures(item) -> None:
+    """A fixture whose setup raised keeps the error cached for its scope; the retry sets it up again."""
+    for defs in item._fixtureinfo.name2fixturedefs.values():
+        for d in defs:
+            cached = getattr(d, "cached_result", None)
+            if cached is not None and cached[2] is not None:
+                d.cached_result = None
+
+
+def pytest_report_teststatus(report, config):
+    if report.outcome == "rerun":
+        return "rerun", "R", ("RERUN", {"yellow": True})
+    if report.when == "call" and report.passed and any(k == "robowright_flaky" for k, _ in report.user_properties):
+        return "flaky", "f", ("FLAKY", {"yellow": True})
+    return None
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -400,7 +568,9 @@ def pytest_pyfunc_call(pyfuncitem):
         random_runs += w.faults.used_randomness()
         path = None
         try:
-            path = w.close(failed=failed, trace_path=_trace_path(pyfuncitem.config, f"{_plain(pyfuncitem.nodeid)}[trial {i}]"))
+            path = w.close(
+                failed=failed, trace_path=_trace_path(pyfuncitem.config, f"{_plain(pyfuncitem.nodeid)}[trial {i}]", _attempt(pyfuncitem))
+            )
         except AssertionError as e:  # soft expectations
             failed, msg = True, str(e)
         if failed:
@@ -449,8 +619,9 @@ class _Summary:
     def pytest_runtest_logreport(self, report):
         self.run.add(report)
         # Runs on the xdist controller too, so traces from workers are listed.
+        flaky = any(k == "robowright_flaky" for k, _ in report.user_properties)
         for k, v in report.user_properties:
-            if k == "robowright_trace" and report.failed:
+            if k == "robowright_trace" and (report.failed or report.outcome == "rerun" or flaky):
                 self.traces.append((_plain(report.nodeid), v))
             if k == "robowright_trials":
                 self.trials.append((_plain(report.nodeid), v, report.outcome))

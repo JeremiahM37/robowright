@@ -7,6 +7,7 @@ whole 2 GB repository. Set ``ROBOWRIGHT_MENAGERIE`` to use an existing checkout.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 from pathlib import Path
@@ -35,12 +36,32 @@ def path(relative: str) -> Path:
     """Absolute path of ``relative`` (e.g. ``franka_emika_panda/panda.xml``), fetching its directory if needed."""
     top = relative.split("/")[0]
     r = root()
-    if r is not None and (r / relative).exists():
-        return r / relative
+    if r is not None and r != cache_dir() and (r / relative).exists():
+        return r / relative  # a checkout someone else made: nothing writes to it here
     if os.environ.get("ROBOWRIGHT_MENAGERIE"):
         raise FileNotFoundError(f"{relative} not found under ROBOWRIGHT_MENAGERIE={r}")
+    # Our own cache is looked at under the lock: another worker's checkout writes a robot's XML before
+    # its meshes, so a file seen mid-checkout compiled with meshes missing (seen in CI on ANYmal C).
+    with _locked(shared=True):
+        if (cache_dir() / relative).exists():
+            return cache_dir() / relative
     _fetch(top)
     return cache_dir() / relative
+
+
+@contextlib.contextmanager
+def _locked(shared: bool = False):
+    """The cache's lock: exclusive while a checkout writes, shared while a reader looks."""
+    import fcntl
+
+    d = cache_dir()
+    d.parent.mkdir(parents=True, exist_ok=True)
+    with open(d.parent / "menagerie.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _git(*args, cwd=None):
@@ -53,12 +74,8 @@ def _fetch(directory: str) -> None:
     pytest-xdist workers all reach for models at once on a fresh machine; two
     concurrent ``git sparse-checkout`` runs collide on git's index lock.
     """
-    import fcntl
-
     d = cache_dir()
-    d.parent.mkdir(parents=True, exist_ok=True)
-    with open(d.parent / "menagerie.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _locked():
         if not (d / ".git").exists():
             _git("clone", "--filter=blob:none", "--no-checkout", "--sparse", REPO, str(d))
             _git("sparse-checkout", "set", "--no-cone", "/assets/", cwd=d)

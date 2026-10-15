@@ -31,7 +31,8 @@ def _ident(name: str) -> str:
 
 
 def _subject(name: str) -> str:
-    return {"robot": "robot", "gripper": "robot.gripper", "tcp": "robot.tcp", "base": "robot.base"}.get(name, f"scene[{name!r}]")
+    named = {"robot": "robot", "gripper": "robot.gripper", "tcp": "robot.tcp", "base": "robot.base", "world": "world"}
+    return named.get(name, f"scene[{name!r}]")
 
 
 def _value(v) -> str:
@@ -202,7 +203,11 @@ def generate(
         elif t in ("expect", "invariant") and "matcher" in a:
             neg = ".not_" if a.get("negate") else ""
             mode = ".always" if t == "invariant" else ""
-            body.append(f"expect({_subject(a['subject'])}){mode}{neg}.{a['matcher']}({_kwargs(a['kwargs'])})")
+            line = f"expect({_subject(a['subject'])}){mode}{neg}.{a['matcher']}({_kwargs(a['kwargs'])})"
+            if a["matcher"] == "to_match_snapshot":
+                # Its baseline image lives beside the test that recorded this trace, not beside this one.
+                line = f"# {line}  (compared with the original test's __snapshots__)"
+            body.append(line)
         if e.get("status") == "raised" and (body or not keep_failed):
             # A call that failed but was carried on from (an agent's attempt that moved the world):
             # the test makes it too, for the same time to pass, and expects it to fail again.

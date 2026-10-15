@@ -488,6 +488,11 @@ evidence to debug it. robowright brings that workflow to robots:
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
 | HTML reporter | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer |
+| `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
+| `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
+| test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |
+| `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
+| retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |
 | `--headed`, UI mode | `pytest --rw-live`: watch each test live in a browser (camera, joints, contacts, the current action); `--rw-headed`: MuJoCo's own window |
 | Playwright MCP, test agents | `robowright mcp`: an agent runs your policy or starts your ROS 2 stack against a robot, watches, asserts, saves a test, runs the suite and reads each failure's trace |
 
@@ -1029,6 +1034,22 @@ at the failure (t=3.94 s, step 197):
   bin: at (0.200, 0.120, 0.000), yaw 0 deg
   contacts: floor-cube 0.29 N
 ```
+
+`expect(world).to_match_snapshot("tidy.png", camera="front")` compares what a camera sees
+with an image kept beside the test, in `__snapshots__/<test file>/tidy-<engine>-<robot>.png`
+(engines draw the same scene differently, so each has its own). The first run writes the image
+and fails, so a missing baseline is never a pass: look at it, then run again. A changed view
+fails with the number of pixels that moved, and writes the actual image and a diff (changed
+pixels in red) next to the traces. `threshold` (per pixel, 0..1) and `max_diff_pixel_ratio`
+set what counts as the same view; `pytest --rw-update-snapshots` writes every baseline again.
+
+A real simulator or robot can fail a test once for a reason outside your code: a clock that
+stalled, a stack that started slowly. `pytest --rw-retries 2` runs a failed test again, up to
+twice, each time in a fresh world. A test that fails and then passes is reported **flaky**,
+not passed (`1 passed, 1 rerun, 1 flaky`), and every attempt keeps its own trace
+(`...-retry1.zip`), so the failure is still there to read. `--rw-trace on-first-retry`
+records only the first retry, as Playwright's CI default does: a run that passes first time
+pays nothing for tracing.
 
 `pytest --rw-report report.html` writes one page for the whole run, Playwright's HTML
 report: every test with its outcome and time, trials with their rates, and each failure

@@ -31,7 +31,7 @@ BEHAVIOUR_SETTINGS = ("expect_timeout", "action_timeout", "max_joint_speed", "ma
 
 @dataclass
 class Event:
-    type: str  # action | expect | invariant | fault | log | edit
+    type: str  # action | expect | invariant | fault | log | edit | step
     name: str
     step: int
     t: float
@@ -40,9 +40,13 @@ class Event:
     status: str = "ok"  # ok | failed | running
     args: dict = field(default_factory=dict)
     detail: str = ""
+    depth: int = 0  # how many rw.step()s the event is inside
 
     def to_dict(self):
-        return {k: v for k, v in self.__dict__.items()}
+        d = dict(self.__dict__)
+        if not d["depth"]:
+            del d["depth"]  # a trace with no steps reads exactly as before
+        return d
 
 
 class Recorder:
@@ -147,7 +151,8 @@ class Recorder:
     def event(self, type, name, args=None, status="ok", detail="") -> Event:
         w = self.world
         e = Event(type, name, w.step_count, w.time, args=args or {}, status=status, detail=detail)
-        if type not in ("action",):
+        e.depth = len(w.__dict__.get("_rw_steps", ()))
+        if type not in ("action", "step"):  # these two last a while: finish_event closes them
             e.end_step, e.end_t = e.step, e.t
         self.events.append(e)
         return e
@@ -248,6 +253,8 @@ def _call(e: dict) -> str:
         return f"{v:.3g}" if isinstance(v, float) else repr(v)
 
     args = dict(e.get("args") or {})
+    if e["type"] == "step":
+        return f"step {e['name']!r}"
     if e["type"] == "expect":
         kw = {k: v for k, v in (args.get("kwargs") or {}).items() if v is not None}
         inner = ", ".join(f"{k}={val(v)}" for k, v in kw.items())
@@ -350,7 +357,8 @@ class Trace:
         for e in shown[:events]:
             span = f"{e['t']:6.2f}s" if e.get("end_t") in (None, e["t"]) else f"{e['t']:6.2f}-{e['end_t']:.2f}s"
             mark = {"ok": "  ", "failed": "✗ ", "running": "… "}.get(e["status"], "  ")
-            lines.append(f"  {mark}{span}  {_call(e)}" + (f"\n        {e['detail']}" if e.get("detail") else ""))
+            pad = "  " * e.get("depth", 0)  # inside rw.step()s: indented under them
+            lines.append(f"  {mark}{span}  {pad}{_call(e)}" + (f"\n        {pad}{e['detail']}" if e.get("detail") else ""))
         if len(shown) > events:
             lines.append(f"  ... {len(shown) - events} more")
         lines.append(f"{'at the failure' if failed else 'at the end'} (t={float(a['t'][at]):.2f} s, step {at}):")
