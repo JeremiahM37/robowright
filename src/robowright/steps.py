@@ -27,8 +27,12 @@ def step(title: str, world=None):
         if e is not None:
             first = str(ex).splitlines()[0] if str(ex) else ""
             tr.finish_event(e, "failed", f"{type(ex).__name__}: {first}" if first else type(ex).__name__)
-        if hasattr(ex, "add_note") and not getattr(ex, "_rw_step_noted", False):
-            ex.add_note(f"in step {' > '.join(stack)!r}")  # the innermost step names its whole path, once
+        if not getattr(ex, "_rw_step_noted", False):
+            note = f"in step {' > '.join(stack)!r}"  # the innermost step names its whole path, once
+            if hasattr(ex, "add_note"):
+                ex.add_note(note)
+            else:  # Python 3.10: what add_note does (shown by tools that read __notes__)
+                ex.__notes__ = [*getattr(ex, "__notes__", []), note]
             ex._rw_step_noted = True
         raise
     else:
