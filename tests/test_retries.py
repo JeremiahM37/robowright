@@ -85,3 +85,24 @@ def test_retries_under_xdist(pytester):
     pytester.makepyfile(test_robots=TEST)
     r = pytester.runpytest("-p", "no:cacheprovider", "-n", "2", "--rw-retries", "1", "-k", "fails_once or passes")
     _assert_outcomes(r, passed=1, rerun=1, flaky=1)
+
+
+def test_a_marker_gives_one_test_its_own_retries(pytester):
+    pytester.makepyfile(
+        test_marked="""
+import pytest
+from pathlib import Path
+
+@pytest.mark.rw_retries(1)
+def test_marked(world):
+    f = Path("marked.count")
+    n = int(f.read_text()) if f.exists() else 0
+    f.write_text(str(n + 1))
+    assert n > 0, "fails the first time"
+
+def test_unmarked_fails_once_and_for_all(world):
+    assert False
+"""
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider")
+    _assert_outcomes(r, failed=1, rerun=1, flaky=1)

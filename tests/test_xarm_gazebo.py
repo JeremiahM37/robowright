@@ -61,6 +61,13 @@ GAZEBO_CRASH = (
 )
 
 
+# Gazebo with UFACTORY's plugins also stops without crashing, about 2 s after start, its clock still and no error
+# in its log (seen in 1 of 3 runs of the gripper test, 2026-10-15): no stack could be read here (no debugger), so
+# the cause is not shown and the test is not let off. It runs once more in a new simulation, and a pass after a
+# stop is reported flaky, not passed (robowright's --rw-retries, per test).
+UFACTORY_RETRY = pytest.mark.rw_retries(1)
+
+
 def _gazebo_crashed(sim) -> bool:
     """Whether this simulation's Gazebo died of a segmentation fault in UFACTORY's mimic-joint plugin (its own log)."""
     log = rig._read(sim / "control.log")
@@ -198,6 +205,7 @@ def driven(xarm):
     w.close(failed=False)
 
 
+@UFACTORY_RETRY
 @crash_is_ufactorys
 def test_robowright_moves_the_arm_through_xarms_controller(driven, xarm):
     """Each move is one FollowJointTrajectory goal to UFACTORY's controller. The tool arrives within a
@@ -214,6 +222,7 @@ def test_robowright_moves_the_arm_through_xarms_controller(driven, xarm):
     assert rig._read(xarm / "control.log").count("[ERROR]") == errors
 
 
+@UFACTORY_RETRY
 @crash_is_ufactorys
 def test_robowright_opens_and_closes_xarms_gripper_through_its_controller(xarm):
     """The gripper is one more joint of ``xarm_gripper_traj_controller``, found from the controller
@@ -295,6 +304,7 @@ PICK_LIFT_CAUSE = (
 )
 
 
+@UFACTORY_RETRY
 @crash_is_ufactorys
 def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
     """robowright commands the arm and its gripper through UFACTORY's controllers, and Gazebo's physics
@@ -319,6 +329,7 @@ def test_robowright_picks_a_cube_with_xarms_gripper_in_gazebo(xarm):
         w.close(failed=False)
 
 
+@UFACTORY_RETRY
 @crash_is_ufactorys
 def test_robowright_picks_a_cube_after_lifting_clear_of_the_table(xarm):
     """The same pick, started from a pose 15 cm above the grasp, which robowright reaches by its own IK

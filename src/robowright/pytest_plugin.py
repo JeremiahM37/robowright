@@ -155,6 +155,7 @@ def pytest_configure(config):
     )
     config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
     config.addinivalue_line("markers", "rw_timeout(seconds): this test's time limit, wall clock, setup included (0: none)")
+    config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
     config.pluginmanager.register(_Summary(), "robowright-summary")
@@ -542,7 +543,8 @@ def pytest_runtest_protocol(item, nextitem):
     attempts are reported as reruns, and a test that then passes as flaky, as Playwright reports it.
     A real robot or simulator can fail once for reasons outside the code under test (a stalled clock,
     a slow start), so a retry tells "fails" from "fails sometimes"; it never turns a failure into a pass."""
-    retries = item.config.getoption("--rw-retries", 0)
+    m = item.get_closest_marker("rw_retries")  # one test's own (Playwright's per-test retries), over --rw-retries
+    retries = int(m.args[0]) if m else item.config.getoption("--rw-retries", 0)
     if not retries:
         return None
     from _pytest.runner import runtestprotocol
