@@ -124,6 +124,10 @@ def _example_run(name: str, goal) -> Run:
             use_sim_time=True,
             gazebo=True,
             base={"frame": "base_footprint", "in": "map"},
+            # The first joint states can come well after the lidar under load (seen in the full verify, where
+            # the 10 s default expired while the rig had already heard them): the example's own stack is the
+            # thing under test here, so this run allows the stack a longer start. Robowright's default is unchanged.
+            timeout=60.0,
             settings=rw.Settings(trace="off"),
         )
         try:
