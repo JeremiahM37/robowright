@@ -416,8 +416,17 @@ _MODULES = {
     "drake": "drake_backend",
     "isaac": "isaac_backend",
     "ros2": "ros2_backend",
+    "lerobot": "lerobot_backend",
 }
-_REQUIRES = {"mujoco": "mujoco", "pybullet": "pybullet", "genesis": "genesis", "drake": "pydrake", "isaac": "isaacsim", "ros2": "rclpy"}
+_REQUIRES = {
+    "mujoco": "mujoco",
+    "pybullet": "pybullet",
+    "genesis": "genesis",
+    "drake": "pydrake",
+    "isaac": "isaacsim",
+    "ros2": "rclpy",
+    "lerobot": "lerobot",
+}
 
 
 _INSTALL = {

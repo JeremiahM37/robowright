@@ -117,6 +117,25 @@ robowright finds the robot and UR's controller with no settings, drives it insid
 and refuses a policy's jump. On the real arm the only change is `use_mock_hardware:=false` and
 the robot's address.
 
+An arm on USB, with no ROS: `backend="lerobot"` drives any arm LeRobot drives (SO-100/101, Koch,
+OMX, ...) through LeRobot's own driver, made and calibrated as LeRobot's scripts make it.
+robowright reads and sends LeRobot's `<motor>.pos` values (degrees, the gripper on 0..100),
+moves nothing when the world opens, and keeps to limits that default to 1 rad/s:
+
+```python
+from lerobot.robots.so_follower import SOFollower, SOFollowerRobotConfig
+
+arm = SOFollower(SOFollowerRobotConfig(port="/dev/ttyACM0", id="my_so101"))
+w = rw.launch(backend="lerobot", robot="so101", lerobot=arm, limits={"joint_speed": 0.5})
+w.robot.reset_to()  # slowly, to the home pose
+w.robot.arm.move_to(w.robot.tcp.position + [0.0, 0.0, 0.03])
+expect(w.robot.tcp).to_be_near(...)
+```
+
+If LeRobot's zero or direction for a joint differs from the model's, `calibration={"elbow_flex": (-1, 0.5)}`
+maps it (sign, offset in radians). [`tests/test_lerobot_backend.py`](tests/test_lerobot_backend.py)
+drives LeRobot's own `SOFollower`, with only its serial bus stood in for.
+
 The whole stack can be someone else's. [`tests/test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)
 runs Universal Robots' own Gazebo simulation of a UR5e (`ur_simulation_gz`: UR's description,
 `gz_ros2_control`, UR's `scaled_joint_trajectory_controller`) and MoveIt (`ur_moveit_config`).

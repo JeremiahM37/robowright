@@ -25,4 +25,5 @@ run venv-pybullet/.venv tests/test_attach_replay_engines.py examples/environment
 run venv-drones/.venv examples/environments/test_pybullet_drones.py
 run venv-maniskill tests/test_attach_replay_engines.py tests/test_attach_sapien.py examples/environments/test_maniskill.py
 run agent-venv tests/test_mcp_attach.py
+run lerobot-venv tests/test_lerobot_backend.py  # LeRobot's own SOFollower (lerobot[feetech]), its serial bus stood in for
 exit $bad

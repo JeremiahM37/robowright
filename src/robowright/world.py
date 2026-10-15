@@ -307,6 +307,10 @@ def ros2_robot(name: str | None = None, **options) -> str:
     return _ros_robot(None, options, as_name=name)
 
 
+# Backends that reach a robot already there (not one robowright builds): no default objects, never moved on launch.
+_REACHES = ("ros2", "lerobot")
+
+
 def ros2_scene(scene: SceneSpec | None, backend: str, robot: str | None, kw: dict, robot_options: dict | None = None) -> SceneSpec | None:
     """The scene a world is built from, for ``launch``. On ``ros2`` a robot is the stack's own: with no
     scene, or a scene whose robot is None, it is the description the stack publishes (``robot_options``
@@ -318,7 +322,7 @@ def ros2_scene(scene: SceneSpec | None, backend: str, robot: str | None, kw: dic
         return SceneSpec(robot=_ros_robot(robot, kw, load), objects=[])
     if scene is None:
         scene = default_scene(robot or "so101")
-        if backend == "ros2":  # a robot behind ROS 2 is someone else's world: no objects unless given
+        if backend in _REACHES:  # a real robot (or one behind ROS 2) is in someone else's world: no objects unless given
             scene.objects = []
         return scene
     if robot is not None and robot != scene.robot:
@@ -381,7 +385,7 @@ def launch(
         check_mujoco()
     scene = ros2_scene(scene, backend, robot, kw, robot_options)
     world = World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)
-    home = None if backend == "ros2" else getattr(world.robot, "reset_to", None)  # a mobile robot has none
+    home = None if not world.backend.builds else getattr(world.robot, "reset_to", None)  # a mobile robot has none
     if home is not None:
         # The robot starts at its home pose, as in a test's ``world`` fixture: a model's zero pose is often lying
         # flat (a UR5e's is, and a pick planned from there dragged its forearm across the floor). A robot behind
