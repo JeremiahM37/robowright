@@ -44,7 +44,7 @@ if sys.platform.startswith("linux") and "MUJOCO_GL" not in os.environ:
     if not _display or not _has_glx(_display):
         os.environ["MUJOCO_GL"] = "egl"
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 _current: contextvars.ContextVar = contextvars.ContextVar("robowright_world", default=None)
 
