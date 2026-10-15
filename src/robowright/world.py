@@ -385,7 +385,7 @@ def launch(
         check_mujoco()
     scene = ros2_scene(scene, backend, robot, kw, robot_options)
     world = World(scene, backend=backend, seed=seed, name=name, settings=settings, **kw)
-    home = None if not world.backend.builds else getattr(world.robot, "reset_to", None)  # a mobile robot has none
+    home = None if backend in _REACHES else getattr(world.robot, "reset_to", None)  # a mobile robot has none
     if home is not None:
         # The robot starts at its home pose, as in a test's ``world`` fixture: a model's zero pose is often lying
         # flat (a UR5e's is, and a pick planned from there dragged its forearm across the floor). A robot behind
