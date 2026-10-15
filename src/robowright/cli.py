@@ -1,4 +1,5 @@
-"""Command line: ``robowright init | test | show-trace | replay | codegen | render | crosscheck | robots | check | info | mcp``."""
+"""Command line: ``robowright init | test | show-trace | show-report | replay | codegen | render | crosscheck``,
+``robots | check | info | mcp``."""
 
 from __future__ import annotations
 
@@ -178,6 +179,36 @@ def _show(args, rest):
     print(out)
     if not args.no_open:
         webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
+def _show_report(args, rest):
+    """Playwright's ``show-report``: open the HTML report a run wrote (``pytest --rw-report``)."""
+    path = Path(args.report)
+    if path.is_dir():
+        path = path / "report.html"
+    if not path.exists():
+        print(f"robowright show-report: no report at {path}: write one with `pytest --rw-report {path}`", file=sys.stderr)
+        return 2
+    if args.port is None:
+        print(path)
+        if not args.no_open:
+            webbrowser.open(path.resolve().as_uri())
+        return 0
+    import functools
+    import http.server
+
+    # Served, for a report on another machine (CI, a remote box): the page links its traces by relative path.
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(path.resolve().parent))
+    with http.server.ThreadingHTTPServer((args.host, args.port), handler) as httpd:
+        url = f"http://{args.host}:{httpd.server_address[1]}/{path.name}"
+        print(f"serving {url} (Ctrl-C to stop)", flush=True)
+        if not args.no_open:
+            webbrowser.open(url)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
     return 0
 
 
@@ -501,6 +532,11 @@ def main(argv=None) -> int:
     s.add_argument("-o", "--out")
     s.add_argument("--no-open", action="store_true", help="write the HTML but do not open a browser")
     s.add_argument("--text", action="store_true", help="print what ran, what failed and the state at the failure, as text")
+    sr = sub.add_parser("show-report", help="open the HTML report a run wrote (pytest --rw-report)")
+    sr.add_argument("report", nargs="?", default="report.html", help="the report, or the folder it is in (default report.html)")
+    sr.add_argument("--port", type=int, help="serve it over HTTP on this port (0: any free one) instead of opening the file")
+    sr.add_argument("--host", default="127.0.0.1", help="the address to serve on (default 127.0.0.1)")
+    sr.add_argument("--no-open", action="store_true", help="do not open a browser")
     r = sub.add_parser("replay", help="re-simulate a trace and report divergence")
     r.add_argument("trace")
     r.add_argument("--backend")
@@ -564,6 +600,7 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     commands = {
         "show-trace": _show,
+        "show-report": _show_report,
         "replay": _replay,
         "codegen": _codegen,
         "render": _render,
