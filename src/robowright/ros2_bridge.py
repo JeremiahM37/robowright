@@ -86,6 +86,10 @@ class Ros2Bridge:
         self._lock = threading.Lock()
         self._trajectory = None  # (goal handle, start sim time, times, positions, done event)
         self._gripper_goal = None  # (target opening, done event, result holder)
+        # Set by close(): a goal still waiting for the world to step is aborted rather than waited for. A gripper
+        # goal left in flight when a test ended kept its action-server thread waiting, and close() waited for that
+        # thread for ever (found by the gate: a whole suite hung in the ros2 fixture's teardown).
+        self._closing = threading.Event()
         self._forward = None
         self._wall0 = self._sim0 = None
         self.goals: list[str] = []  # what the stack under test asked for, in order (also in the trace)
@@ -267,6 +271,12 @@ class Ros2Bridge:
                 handle.canceled()
                 result.error_code = -1
                 return result
+            if self._closing.is_set():
+                with self._lock:
+                    self._trajectory = None
+                handle.abort()
+                result.error_code = -1
+                return result
             if not self._spin.is_alive():
                 break
         with self._lock:
@@ -282,12 +292,18 @@ class Ros2Bridge:
         with self._lock:
             self._gripper_goal = (target, done, out)
         self._note(f"GripperCommand: position {handle.request.command.position:.4f} (opening {target:.2f})")
-        done.wait()
+        result = self._GC.Result()
+        while not done.wait(0.05):
+            if handle.is_cancel_requested or self._closing.is_set():  # as a trajectory goal is: never waited for for ever
+                with self._lock:
+                    if self._gripper_goal is not None and self._gripper_goal[1] is done:
+                        self._gripper_goal = None
+                handle.canceled() if handle.is_cancel_requested else handle.abort()
+                return result
         with self._lock:
             if self._gripper_goal is not None and self._gripper_goal[1] is done:
                 self._gripper_goal = None
         _, closed, opened = self._grip
-        result = self._GC.Result()
         result.position = closed + out["opening"] * (opened - closed)
         result.reached_goal = abs(out["opening"] - target) < 0.02
         result.stalled = not result.reached_goal
@@ -322,6 +338,7 @@ class Ros2Bridge:
             _stop(proc)
 
     def close(self):
+        self._closing.set()  # goals still in flight end now, so the executor's threads can be joined
         if self._on_step in self.world._step_hooks:
             self.world._step_hooks.remove(self._on_step)
         self._executor.shutdown(timeout_sec=1.0)

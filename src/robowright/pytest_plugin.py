@@ -519,12 +519,16 @@ def pytest_runtest_setup(item):
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_teardown(item, nextitem):
-    if hasattr(item, "_rw_alarm"):
-        import signal
+    """The clock runs through teardown too: a fixture that never finishes closing (a ROS 2 executor waiting
+    for a thread, as one did) fails the test instead of hanging the run."""
+    try:
+        return (yield)
+    finally:
+        if hasattr(item, "_rw_alarm"):
+            import signal
 
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, item.__dict__.pop("_rw_alarm"))
-    return (yield)
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, item.__dict__.pop("_rw_alarm"))
 
 
 @pytest.hookimpl(wrapper=True)

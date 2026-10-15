@@ -18,6 +18,16 @@ def test_hangs(world):
 def stack():
     time.sleep(30)  # a launch that never comes up
 
+
+@pytest.fixture
+def closes_for_ever():
+    yield
+    time.sleep(30)  # a teardown that never finishes (an executor waiting for a thread)
+
+
+def test_hangs_in_teardown(closes_for_ever):
+    pass
+
 def test_hangs_in_setup(stack):
     pass
 
@@ -34,7 +44,7 @@ def test_trials_stop(world):
 
 def test_a_test_past_its_time_limit_fails_and_says_what_was_running(pytester):
     pytester.makepyfile(test_t=TEST)
-    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "0.5", "-k", "quick or hangs and not setup")
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "0.5", "-k", "quick or hangs and not setup and not teardown")
     r.assert_outcomes(passed=1, failed=1)
     out = r.stdout.str()
     assert "TimeLimitError: the test ran past its 0.5 s time limit (wall clock), while step 'wait for a stack that never answers'" in out
@@ -58,5 +68,13 @@ def test_a_trials_test_out_of_time_stops_rather_than_counting_a_failed_trial(pyt
     pytester.makepyfile(test_t=TEST)
     r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "0.5", "-k", "trials")
     r.assert_outcomes(failed=1)
+    assert "TimeLimitError" in r.stdout.str()
+    assert r.duration < 20
+
+
+def test_a_teardown_that_hangs_is_stopped_too(pytester):
+    pytester.makepyfile(test_t=TEST)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "0.5", "-k", "teardown")
+    r.assert_outcomes(passed=1, errors=1)  # the test passed; its teardown ran out of time
     assert "TimeLimitError" in r.stdout.str()
     assert r.duration < 20
