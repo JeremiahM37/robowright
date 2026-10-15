@@ -499,6 +499,13 @@ class Robot:
                     touching.add(f"{me[6:]} on {other}")
         return f" (pressing: {', '.join(sorted(touching))})" if touching else ""
 
+    def _hold_here(self):
+        """Hold the arm where it is: after a command was refused ([ros2] limits), the steps that follow
+        send this, not the refused target again."""
+        self._target[: self.n_arm] = self.true_qpos()[: self.n_arm]
+        self._bias = np.zeros(self.n_arm)
+        self._held = None
+
     def _release(self):
         """Start a move from where the servos were being asked to hold (the integral term folded
         into the targets), so it ends at its goal with nothing carried over."""
@@ -533,13 +540,16 @@ class Robot:
 
     @functools.cached_property
     def _speed_limits(self) -> np.ndarray:
-        """Each arm joint's speed limit, where the robot's description gives one (a URDF's
-        ``<limit velocity>``), else infinite."""
+        """Each arm joint's speed limit: the robot description's (a URDF's ``<limit velocity>``), and
+        under ``[ros2] limits.joint_speed`` (with a margin), which a move of robowright's own must keep
+        inside rather than be refused for; else infinite."""
         if self.model.family != "arm":  # (their descriptions are MJCF, which has no place for one)
             return np.full(self.n_arm, np.inf)
         m = self.kin.m
         given = {m.numeric(i).name.removeprefix(PREFIX): float(m.numeric(i).data[0]) for i in range(m.nnumeric)}
-        return np.array([given.get(f"speed_limit:{j}", np.inf) for j in self.model.arm_joints])
+        out = np.array([given.get(f"speed_limit:{j}", np.inf) for j in self.model.arm_joints])
+        cap = ((getattr(self.world.backend, "cfg", None) or {}).get("limits") or {}).get("joint_speed")
+        return np.minimum(out, 0.9 * cap) if cap else out
 
     def _within_speed_limits(self, at, n: int) -> int:
         """The number of steps a move planned over ``n`` needs for no joint to be asked to go

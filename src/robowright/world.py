@@ -17,7 +17,7 @@ import numpy as np
 
 from . import fidelity
 from .backends import base as backends
-from .errors import CapabilityError, ExpectationError, InvariantViolation, RobowrightError
+from .errors import CapabilityError, ExpectationError, InvariantViolation, RobowrightError, SafetyLimitError
 from .faults import Faults
 from .legged import LeggedRobot
 from .locators import SceneLocator
@@ -154,7 +154,11 @@ class World:
                 import time as _t
 
                 _t.sleep(self.dt)
-            self.backend.step()
+            try:
+                self.backend.step()
+            except SafetyLimitError:
+                self.robot._hold_here()  # refused, so the arm holds where it is rather than asking again
+                raise
             if self.settings.headed:
                 self.backend.sync_viewer()
             self.step_count += 1

@@ -100,6 +100,23 @@ an agent to drive by hand.
 changes nothing in the robot; it reads joint states and TF, and sends commands only if the
 test asks it to.
 
+Before pointing a test at a real arm, give it limits. A command robowright plans itself
+(`move_to`, `move_joints`, `reset_to`) is planned inside them however fast it was asked to go;
+one it did not plan (a policy's target) that would break them is refused before any of it is
+sent, with the joint and the value, and the arm holds where it is:
+
+```toml
+[ros2.limits]
+joint_speed = 0.5                                  # rad/s, any arm joint
+positions = { shoulder_lift_joint = [-2.0, -0.5] } # per joint, in the driver's names
+```
+
+[`tests/test_ur_driver.py`](tests/test_ur_driver.py) runs Universal Robots' own driver
+(`ur_robot_driver`), exactly as on a real UR but with its mock hardware in place of the arm:
+robowright finds the robot and UR's controller with no settings, drives it inside the limits,
+and refuses a policy's jump. On the real arm the only change is `use_mock_hardware:=false` and
+the robot's address.
+
 The whole stack can be someone else's. [`tests/test_moveit_gazebo.py`](tests/test_moveit_gazebo.py)
 runs Universal Robots' own Gazebo simulation of a UR5e (`ur_simulation_gz`: UR's description,
 `gz_ros2_control`, UR's `scaled_joint_trajectory_controller`) and MoveIt (`ur_moveit_config`).

@@ -56,6 +56,7 @@ from .errors import (  # noqa: E402
     ExpectationError,
     InvariantViolation,
     RobowrightError,
+    SafetyLimitError,
     TimeLimitError,
     UnreachableError,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "ObjectSpec",
     "Point",
     "RobowrightError",
+    "SafetyLimitError",
     "SceneSpec",
     "TimeLimitError",
     "Settings",

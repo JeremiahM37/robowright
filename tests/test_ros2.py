@@ -90,6 +90,39 @@ def test_drives_a_trajectory_controller_and_a_gripper_action():
 
 
 @needs_ros
+@pytest.mark.parametrize("interface", ["trajectory", "position"])
+def test_limits_refuse_a_move_too_fast_or_too_far_and_send_nothing(interface):
+    """[ros2] limits, for a real arm. robowright's own moves are planned inside them (asked for 2 rad/s,
+    a move goes at no more than the limit); a target it did not plan (a policy's) that would break them
+    is refused before it is sent, and the arm holds where it is."""
+    opts = {"arm": {"interface": interface}}
+    limits = {"joint_speed": 0.3, "positions": {"elbow_flex": [-1.6, 1.6]}}
+    with _rig().mock_hardware("so101", interface), _launch(**opts, limits=limits, **BASE) as w:
+        w.robot.reset_to()  # robowright's own move, at no more than the limit
+        n = w.robot.n_arm
+        before = w.robot.qpos()[:n].copy()
+        goal = before.copy()
+        goal[0] += 0.3
+        t0 = w.time
+        w.robot.arm.move_joints(goal, speed=2.0)
+        assert abs(w.robot.qpos()[0] - goal[0]) < 0.02
+        assert w.time - t0 >= 0.3 / 0.3  # 0.3 rad at no more than 0.3 rad/s: a second at least, not 0.15 s
+
+        here = w.robot.qpos()[:n].copy()
+        jump = w.robot._target.copy()
+        jump[0] += 1.0  # in one control step
+        with pytest.raises(rw.SafetyLimitError, match=r"faster than 0\.3/s"):
+            w.robot.run_policy(lambda obs: jump, timeout=1.0)
+        w.step(20)
+        assert np.abs(w.robot.qpos()[:n] - here).max() < 0.01  # nothing of it was sent, and the arm holds
+
+        far = w.robot.qpos()[:n].copy()
+        far[list(w.backend.joint_names).index("elbow_flex")] = 1.7
+        with pytest.raises(rw.SafetyLimitError, match="elbow_flex would go to"):
+            w.robot.arm.move_joints(far, speed=0.1)  # slow enough, but past the bound
+
+
+@needs_ros
 def test_says_what_is_missing_when_no_robot_answers():
     with pytest.raises(TimeoutError, match=r"no joint states for .* on /nobody/joint_states within 1.0 s .* is the robot's driver running"):
         _launch(namespace="/nobody", timeout=1.0)

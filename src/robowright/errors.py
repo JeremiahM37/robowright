@@ -43,3 +43,8 @@ class TimeLimitError(Exception):
     Not a RobowrightError on purpose: a trials test counts those as one failed trial and goes on,
     and a test out of time must stop.
     """
+
+
+class SafetyLimitError(ActionError):
+    """A command was refused because it broke the robot's ``[ros2] limits`` (speed or position):
+    nothing of it was sent."""
