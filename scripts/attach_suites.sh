@@ -18,7 +18,7 @@ run() {  # run ENV TESTS...
     "$py" -c "import importlib.metadata as m; m.distribution('robowright')" 2>/dev/null && plugin=""
     "$py" -m pytest $O $plugin "$@" || bad=1
 }
-run envs-venv tests/test_attach.py tests/test_attach_envs.py tests/test_attach_vector.py tests/test_attach_replay.py tests/test_attach_factory.py \
+run envs-venv tests/test_attach.py tests/test_attach_gymnasium_mujoco.py tests/test_attach_envs.py tests/test_attach_vector.py tests/test_attach_replay.py tests/test_attach_factory.py \
     examples/environments/test_gymnasium_robotics.py examples/environments/test_metaworld.py examples/environments/test_robosuite.py
 run envs-dm-venv examples/environments/test_dm_control.py
 run venv-pybullet/.venv tests/test_attach_replay_engines.py examples/environments/test_pybullet_envs.py
