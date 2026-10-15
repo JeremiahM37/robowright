@@ -259,9 +259,12 @@ class Gazebo:
         Gazebo's scene graph has them: each pose is relative to its parent. See :mod:`robowright.obstacles`."""
         from gz.msgs10 import empty_pb2, scene_pb2
 
-        ok, rep = self._request(f"/world/{self.world}/scene/info", empty_pb2.Empty(), scene_pb2.Scene, int(timeout * 1000))
+        for _ in range(3):  # a read: asked again when a busy Gazebo let it go unanswered
+            ok, rep = self._request(f"/world/{self.world}/scene/info", empty_pb2.Empty(), scene_pb2.Scene, int(timeout * 1000))
+            if ok:
+                break
         if not ok:
-            raise TimeoutError(f"Gazebo did not answer /world/{self.world}/scene/info within {timeout:g} s")
+            raise TimeoutError(f"Gazebo did not answer /world/{self.world}/scene/info within {timeout:g} s, 3 times")
         return [_model_dict(m) for m in rep.model]
 
     def velocity(self, name: str) -> np.ndarray:
@@ -368,11 +371,16 @@ class Gazebo:
         self._call("entity/system/add", req, entity_plugin_v_pb2.EntityPlugin_V, what)
 
     # --- changing the world ----------------------------------------------------------------
-    def _call(self, service: str, req, req_type, what: str) -> None:
+    def _call(self, service: str, req, req_type, what: str, attempts: int = 1) -> None:
+        """A request to the world. ``attempts`` > 1 only for one that is the same however often it is made
+        (setting a pose): a busy Gazebo can let one request go unanswered (seen under a full test load)."""
         name = f"/world/{self.world}/{service}"
-        ok, rep = self._request(name, req, self._Boolean.Boolean, _TIMEOUT_MS)
+        for _ in range(attempts):
+            ok, rep = self._request(name, req, self._Boolean.Boolean, _TIMEOUT_MS)
+            if ok:
+                break
         if not ok:
-            raise TimeoutError(f"Gazebo did not answer {name} within {_TIMEOUT_MS / 1000:g} s (asked to {what})")
+            raise TimeoutError(f"Gazebo did not answer {name} within {_TIMEOUT_MS / 1000:g} s, {attempts} time(s) (asked to {what})")
         if not rep.data:
             raise RuntimeError(f"Gazebo refused to {what} ({name})")
 
@@ -537,7 +545,7 @@ class Gazebo:
         p.position.x, p.position.y, p.position.z = map(float, pos)
         w, x, y, z = (1.0, 0.0, 0.0, 0.0) if quat is None else map(float, quat)
         p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z = w, x, y, z
-        self._call("set_pose/blocking", p, self._Pose.Pose, f"move {name!r}")
+        self._call("set_pose/blocking", p, self._Pose.Pose, f"move {name!r}", attempts=3)
         self._placed(name, pos, (w, x, y, z))
 
     def spawn(self, name: str, sdf: str, pos=(0.0, 0.0, 0.0), quat=None, timeout: float = 10.0) -> None:
