@@ -29,7 +29,8 @@ def ur_driver(tmp_path_factory):
     share = Path(os.environ.get("CONDA_PREFIX", "/nonexistent")) / "share" / "ur_robot_driver"
     if not share.is_dir():
         pytest.skip("ur_robot_driver is not installed in this ROS 2 environment")
-    os.environ["ROS_DOMAIN_ID"] = "77"
+    # The driver on this process's own ROS domain: rclpy, started by an earlier test in the same session,
+    # keeps the domain it started with, so a driver moved to another one was never seen (found in the gate).
     os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
     log = tmp_path_factory.mktemp("ur") / "driver.log"
     cmd = [
