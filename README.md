@@ -490,6 +490,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
+| `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |
 | `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
 | retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |

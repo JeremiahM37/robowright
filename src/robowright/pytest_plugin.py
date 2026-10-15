@@ -397,6 +397,57 @@ def ros2(world):
     bridge.close()
 
 
+class _Attacher:
+    """``rw_attach``, Playwright's ``testInfo.attach``: files this test adds to the HTML report
+    (``--rw-report``), kept beside the traces. ``rw_attach("log.txt", text)``,
+    ``rw_attach("bag", path="run.mcap")``, ``rw_attach("grasp.png", image_array)``, or
+    ``rw_attach.camera(world)`` for what a camera sees now."""
+
+    def __init__(self, item):
+        self.item = item
+        self.dir = (
+            Path(item.config.getoption("--rw-trace-dir")) / "attachments" / _safe(_plain(item.nodeid).replace("::", "__").replace("/", "_"))
+        )
+
+    def __call__(self, name: str, body=None, *, path=None, content_type: str | None = None) -> Path:
+        import json
+        import mimetypes
+        import shutil
+
+        import numpy as np
+
+        if (body is None) == (path is None):
+            raise ValueError("rw_attach takes a body or a path=, not both and not neither")
+        self.dir.mkdir(parents=True, exist_ok=True)
+        dst = self.dir / _safe(name)
+        if path is not None:
+            shutil.copyfile(path, dst)
+            kind = content_type or mimetypes.guess_type(str(path))[0]
+        elif isinstance(body, np.ndarray):  # an image (H, W, 3)
+            from PIL import Image
+
+            dst = dst if dst.suffix else dst.with_suffix(".png")
+            Image.fromarray(np.ascontiguousarray(body[..., :3]).astype(np.uint8)).save(dst)
+            kind = "image/png"
+        else:
+            dst.write_bytes(body.encode() if isinstance(body, str) else bytes(body))
+            kind = content_type or mimetypes.guess_type(str(dst))[0] or ("text/plain" if isinstance(body, str) else None)
+        record = {"name": name, "path": str(dst), "type": kind or "application/octet-stream"}
+        self.item.user_properties.append(("robowright_attachment", json.dumps(record)))
+        return dst
+
+    def camera(self, world, camera: str = "front", size: tuple[int, int] = (640, 480), name: str | None = None) -> Path:
+        """Attach what ``camera`` sees now."""
+        world.require("render", "rw_attach.camera")
+        return self(name or f"{camera}-{world.step_count}.png", world.backend.render(camera, *size))
+
+
+@pytest.fixture
+def rw_attach(request):
+    """Add files to this test's entry in the HTML report: see :class:`_Attacher`."""
+    return _Attacher(request.node)
+
+
 @pytest.fixture
 def rw_live(request):
     """The live view (``--rw-live``), or None: ``rw_live.url`` is where to watch."""

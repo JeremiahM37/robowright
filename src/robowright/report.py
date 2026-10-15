@@ -7,6 +7,8 @@ failure the message, the trace as text and a link to the trace in the viewer.
 from __future__ import annotations
 
 import html
+import json
+import os
 import re
 import time
 from pathlib import Path
@@ -23,7 +25,9 @@ class Run:
         self.started = time.time()
 
     def add(self, report) -> None:
-        t = self.tests.setdefault(report.nodeid, {"outcome": "passed", "duration": 0.0, "message": "", "traces": [], "trials": ""})
+        t = self.tests.setdefault(
+            report.nodeid, {"outcome": "passed", "duration": 0.0, "message": "", "traces": [], "trials": "", "attachments": []}
+        )
         t["duration"] += getattr(report, "duration", 0.0)
         retried = report.outcome == "rerun"  # an attempt that failed and was run again (--rw-retries)
         flaky = any(k == "robowright_flaky" for k, _ in report.user_properties)
@@ -34,6 +38,10 @@ class Run:
                 t["trials"] = v
             if k == "robowright_flaky":
                 t["outcome"] = "flaky"  # failed, then passed on a retry: as Playwright reports it
+            if k == "robowright_attachment":
+                a = json.loads(v)
+                if a not in t["attachments"]:
+                    t["attachments"].append(a)
         xfail = hasattr(report, "wasxfail")
         if retried:
             t["message"] = t["message"] or f"attempt failed and was retried:\n{report.longrepr}"
@@ -75,6 +83,16 @@ class Run:
                 except Exception as e:  # noqa: BLE001 - one unreadable trace leaves the report whole
                     text = f"(could not read the trace: {e})"
                 details += f'<div class="trace">{link}<code>{html.escape(str(p))}</code><pre>{html.escape(text)}</pre></div>'
+            for a in t["attachments"]:
+                p = Path(a["path"])
+                if not p.exists():
+                    continue
+                href = html.escape(Path(os.path.relpath(p.resolve(), out.parent.resolve())).as_posix())
+                label, kind = html.escape(a["name"]), html.escape(a["type"])
+                if a["type"].startswith("image/"):
+                    details += f'<figure><img src="{href}" alt="{label}"><figcaption>{label}</figcaption></figure>'
+                else:
+                    details += f'<div class="att"><a href="{href}">{label}</a> <span class="trials">{kind}</span></div>'
             trials = f'<span class="trials">{html.escape(t["trials"])}</span>' if t["trials"] else ""
             name = f"{html.escape(nodeid)}{trials}"
             body = f"<details><summary>{name}</summary>{details}</details>" if details else f"<span>{name}</span>"
@@ -143,7 +161,9 @@ tr.failed td.o, tr.xpassed td.o {{
 }}
 summary {{ cursor:pointer; overflow-wrap:anywhere; }} .trials {{ color:var(--mut); margin-left:8px; }}
 pre {{ background:var(--code); padding:8px; border-radius:6px; overflow-x:auto; font-size:12px; white-space:pre-wrap; }}
-.trace {{ margin-top:8px; }}
+.trace {{ margin-top:8px; }} .att {{ margin-top:6px; }}
+figure {{ margin:8px 0; }} figure img {{ max-width:100%; height:auto; border-radius:6px; border:1px solid var(--line); }}
+figcaption {{ color:var(--mut); font-size:12px; }}
 table {{ table-layout:fixed; }}
 td, code, summary {{ overflow-wrap:anywhere; }}
 pre {{ max-width:100%; box-sizing:border-box; }}
