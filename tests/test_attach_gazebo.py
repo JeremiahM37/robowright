@@ -124,7 +124,9 @@ def test_running_world_moves_on_its_own_and_robowright_observes_its_clock(gz_wor
         # Read it there: the velocity is a finite difference over 0.02 s, which aliases once the rod turns past pi in that
         # span (about 157 rad/s; by 1 rad the rod turns at about -15 rad/s).
         expect(w.joint("rod_1_joint")).to_be_between(1.0, 1e6, timeout=20)
-        assert w.body("rod_1").velocity[5] < -1.0, "the rod's link is not turning about the joint's axis"
+        # Read until it holds, not once: in a world running on its own, two pose samples can land close together under
+        # load and one reading come out low (seen once in a full gate: -0.31 rad/s with the rod well past 1 rad).
+        expect(w.body("rod_1")).to_satisfy(lambda b: b.velocity[5] < -1.0, "turning about the joint's axis (-z)", timeout=2)
 
         # world.step() in observed mode takes the world's own physics steps, so it runs in real time.
         # The clock is read before the first wait, so the world may run free for up to a step before it: the
