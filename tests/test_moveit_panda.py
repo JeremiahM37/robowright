@@ -285,7 +285,8 @@ def test_a_controller_that_is_not_there_is_said_at_once(stack):
             frame=BASE,
             arm={"controller": "panda_arm_controller", "interface": "position"},
             gripper={"interface": "none"},
-            timeout=3.0,
+            # The same timeout bounds reading the robot description first, which on a loaded host took over 3 s
+            timeout=10.0,
             settings=rw.Settings(trace="off"),
         )
     with pytest.raises(ValueError, match="ros2 arm is a table"):
