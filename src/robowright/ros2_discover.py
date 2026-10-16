@@ -163,10 +163,14 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
         deadline = time.monotonic() + timeout
         # Discovery takes a moment; controllers are asked for once their manager is seen
         settled = time.monotonic()
+        shape = None
         while time.monotonic() < deadline:
             topics = {name: list(types) for name, types in node.get_topic_names_and_types()}
-            if topics.keys() != g.topics.keys():
-                settled = time.monotonic()
+            # The names and /clock's publishers: /clock is a name as soon as a node on simulation time subscribes to it
+            # (MoveIt), which can be before the bridge that publishes it is discovered (seen in the full verify)
+            now_shape = (frozenset(topics), node.count_publishers("/clock"))
+            if now_shape != shape:
+                shape, settled = now_shape, time.monotonic()
             g.topics = topics
             g.navigate = find_navigate({n: list(t) for n, t in rclpy_action.get_action_names_and_types(node)}, nav_name)
             if g.manager is None:
@@ -176,7 +180,15 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
             # Each process in the stack is discovered on its own: a graph still growing (the bridge that
             # publishes /clock, seen after the controller manager) is not yet the graph to report
             quiet = time.monotonic() - settled > 0.5
-            if g.description and len(stamps) > 20 and quiet and (g.controllers or time.monotonic() > deadline - timeout / 2):
+            # a clock that nodes wait for and nobody publishes yet: its publisher is still being discovered
+            clock_pending = node.count_subscribers("/clock") > 0 and shape[1] == 0 and time.monotonic() < deadline - timeout / 2
+            if (
+                g.description
+                and len(stamps) > 20
+                and quiet
+                and not clock_pending
+                and (g.controllers or time.monotonic() > deadline - timeout / 2)
+            ):
                 break
             time.sleep(0.1)
         g.sim_time = node.count_publishers("/clock") > 0
