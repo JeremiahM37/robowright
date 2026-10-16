@@ -411,6 +411,21 @@ class Gazebo:
         if not rep.data:
             raise RuntimeError(f"Gazebo refused to {what} ({name})")
 
+    def set_speed(self, factor: float) -> None:
+        """Run the world at ``factor`` times real time (Gazebo's real-time factor; ``float("inf")``: as fast as it
+        steps). The physics step is kept. What runs inside Gazebo's step (gz_ros2_control's controllers) keeps pace
+        exactly; nodes on simulation time follow its clock, and fall behind if the machine cannot keep up."""
+        from gz.msgs10 import physics_pb2
+
+        if not factor > 0:
+            raise ValueError(f"a speed is a factor of real time above 0, not {factor!r}")
+        req = physics_pb2.Physics()
+        req.real_time_factor = 1e6 if factor == float("inf") else float(factor)
+        step = self.physics_step  # a property: None before the clock has moved
+        if step:  # 0 leaves Gazebo's step as it is; given, it is the world's own
+            req.max_step_size = float(step)
+        self._call("set_physics", req, physics_pb2.Physics, f"run at {factor}x real time")
+
     def _control(self, what: str, **fields) -> None:
         req = self._Control.WorldControl(**{k: v for k, v in fields.items() if k != "reset"})
         if fields.get("reset"):

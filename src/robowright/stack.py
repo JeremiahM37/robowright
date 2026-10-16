@@ -82,6 +82,7 @@ class Ros2Stack:
         log_dir: str | Path | None = None,
         ready=None,
         setup=None,
+        speed: float | None = None,
     ):
         self.args = shlex.split(command) if isinstance(command, str) else list(command)
         self.env = dict(env or {})
@@ -94,6 +95,9 @@ class Ros2Stack:
         # Run once when the stack is up, before what reset() puts back is taken (Playwright's globalSetup): tell a
         # localizer where the robot is, load a map, spawn a table. A function of this stack.
         self.setup = setup
+        # Gazebo's real-time factor once the stack is up (inf: as fast as it steps). Tests wait in simulated time, so a
+        # stack whose nodes run on it finishes the same test in less wall time. None leaves the world's own.
+        self.speed = speed
         self.log_dir = Path(log_dir or tempfile.mkdtemp(prefix="robowright-stack-"))
         self.log = self.log_dir / "stack.log"
         self.proc: subprocess.Popen | None = None
@@ -148,6 +152,10 @@ class Ros2Stack:
             if self.setup is not None:
                 self.setup(self)
             self.snapshot = self._take_snapshot()
+            if self.speed is not None:
+                if self.snapshot.world is None:
+                    raise StackError("speed= needs a Gazebo world, and this stack runs none")
+                self._gazebo(self.snapshot.world).set_speed(self.speed)
             self._link.quiet()
         except BaseException:
             self.stop()

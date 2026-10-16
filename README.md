@@ -150,6 +150,12 @@ stopping it 10 s more. In Python, the same is `rw.ros2_stack(command)` (`with` i
 fixture; `stack.reset()` per test; `stack.checkpoint()` makes the stack as it is now what a
 reset returns to, such as a table spawned once).
 
+A stack on simulation time can also run faster than real time: `speed = 4.0` in `[ros2.stack]`
+(or `rw.ros2_stack(..., speed=4.0)`) sets Gazebo's real-time factor once it is up. Tests wait in
+simulated time, so the same test takes less wall time; `ros2_control`'s controllers run inside
+Gazebo's step and keep pace exactly, while nodes outside it (MoveIt, Nav2) follow the clock and
+fall behind if the machine cannot keep up.
+
 Before pointing a test at a real arm, give it limits. A command robowright plans itself
 (`move_to`, `move_joints`, `reset_to`) is planned inside them however fast it was asked to go;
 one it did not plan (a policy's target) that would break them is refused before any of it is

@@ -90,11 +90,12 @@ _DEFAULTS = {
     # the robot is not named.
     "description": "robot_description",
     # The stack the tests run against, started once per pytest worker and put back before each test
-    # (robowright.stack): its command, or {command = "...", env = {...}, timeout = 240, cwd = "..."}.
+    # (robowright.stack): its command, or {command = "...", env = {...}, timeout = 240, cwd = "...", speed = 4.0}
+    # (speed: Gazebo's real-time factor, for a stack on simulation time).
     # Without it, the stack is expected to be running already.
     "stack": None,
 }
-_STACK_KEYS = ("command", "env", "timeout", "cwd")
+_STACK_KEYS = ("command", "env", "timeout", "cwd", "speed")
 _INTERFACES = {"arm": ("position", "trajectory"), "gripper": ("with_arm", "position", "trajectory", "action", "none")}
 
 
