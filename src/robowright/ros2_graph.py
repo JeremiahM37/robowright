@@ -126,3 +126,144 @@ class RosGraph:
     def frame(self, child: str, parent: str) -> FrameSubject:
         """``child``'s pose in ``parent``, from TF (the frames must exist when the pose is read)."""
         return FrameSubject(self, child, parent)
+
+    # -- acting on the graph, as Playwright's ``request`` fixture calls an API directly ------
+    # A test can set the stage, or poke the stack, without rclpy boilerplate. Types come from the
+    # graph, a message may be given as a dict of its fields, and every wait is in the world's time
+    # (the world steps while it waits, as expect does). Each call is in the trace's timeline.
+
+    def publish(self, topic: str, msg, *, type: str | None = None) -> None:
+        """Publish ``msg`` (a message, or a dict of its fields) on ``topic``. The type is the
+        message's own, else ``type``, else the one the graph has for the topic."""
+        full = self.backend.topic_name(topic)
+        if isinstance(msg, dict) or msg is None:
+            type_name = type or self.topics().get(full)
+            if type_name is None:
+                raise LookupError(f"no topic {full!r} in the ROS graph to take its type from: pass type='pkg/msg/Name'")
+            msg = _fill(_cls("msg", type_name), msg)
+        self._take_arm(full)
+        key = (full, _type_of(msg))
+        pubs = self.__dict__.setdefault("_pubs", {})
+        if key not in pubs:
+            pubs[key] = self.node.create_publisher(msg.__class__, full, 10)
+        pubs[key].publish(msg)
+        self._record("publish", full, msg)
+
+    def call(self, service: str, request=None, *, timeout: float = 10.0, type: str | None = None):
+        """Call ``service`` with ``request`` (a request, a dict of its fields, or None for an empty
+        one) and return the response, waiting up to ``timeout`` seconds of the world's time."""
+        full = self.backend.topic_name(service)
+        type_name = type or dict((n, t[0]) for n, t in self.node.get_service_names_and_types() if t).get(full)
+        if type_name is None:
+            raise LookupError(
+                f"no service {full!r} in the ROS graph; it has {sorted(n for n, _ in self.node.get_service_names_and_types())}"
+            )
+        srv = _cls("srv", type_name)
+        req = request if request is not None and not isinstance(request, dict) else _fill(srv.Request, request)
+        clients = self.__dict__.setdefault("_clients", {})
+        client = clients.get(full) or clients.setdefault(full, self.node.create_client(srv, full))
+        self._wait(client.service_is_ready, timeout, f"service {full} to be ready")
+        future = client.call_async(req)
+        self._wait(future.done, timeout, f"a response from {full}")
+        self._record("call", full, req)
+        return future.result()
+
+    def send_goal(self, action: str, goal=None, *, timeout: float = 60.0, type: str | None = None, feedback=None) -> GoalResult:
+        """Send ``goal`` (a goal, a dict of its fields, or None) to ``action``, wait up to ``timeout``
+        seconds of the world's time for its result, and return a :class:`GoalResult` (``.status``:
+        "succeeded", "aborted", "canceled" or "rejected"; ``.result``). ``feedback(msg)`` is called
+        with each feedback message. A goal still running at the timeout is cancelled."""
+        from rclpy.action import ActionClient, get_action_names_and_types
+
+        full = self.backend.topic_name(action)
+        found = {n: t[0] for n, t in get_action_names_and_types(self.node) if t}
+        type_name = type or found.get(full)
+        if type_name is None:
+            raise LookupError(f"no action {full!r} in the ROS graph; it has {sorted(found)}")
+        act = _cls("action", type_name)
+        g = goal if goal is not None and not isinstance(goal, dict) else _fill(act.Goal, goal)
+        clients = self.__dict__.setdefault("_action_clients", {})
+        client = clients.get(full) or clients.setdefault(full, ActionClient(self.node, act, full))
+        self._wait(client.server_is_ready, timeout, f"action server {full} to be ready")
+        self._take_arm(full)
+        self._record("send_goal", full, g)
+        sent = client.send_goal_async(g, feedback_callback=(lambda m: feedback(m.feedback)) if feedback else None)
+        self._wait(sent.done, timeout, f"{full} to accept or reject the goal")
+        handle = sent.result()
+        if not handle.accepted:
+            return GoalResult("rejected", None)
+        done = handle.get_result_async()
+        if not self._wait(done.done, timeout, None):
+            handle.cancel_goal_async()
+            raise TimeoutError(f"{full}: no result within {timeout} s of simulated time (the goal was cancelled)")
+        res = done.result()
+        return GoalResult(_STATUS.get(res.status, f"status {res.status}"), res.result)
+
+    def _take_arm(self, name: str) -> None:
+        """A command on the channel robowright drives the arm on: robowright lets go of the arm (its hold, sent
+        every step, would replace the test's goal) until it moves the arm itself again."""
+        channels = getattr(self.backend, "arm_channels", None)
+        if channels is not None and name in channels():
+            self.backend.yield_arm()
+
+    def _wait(self, ready, timeout: float, what: str | None) -> bool:
+        world = getattr(self, "world", None)
+        if world is not None:
+            ok = world.run_until(ready, timeout=timeout)
+        else:  # no world to step (a graph used on its own): wall time
+            import time
+
+            end = time.monotonic() + timeout
+            while not ready() and time.monotonic() < end:
+                time.sleep(0.01)
+            ok = ready()
+        if not ok and what:
+            raise TimeoutError(f"waited {timeout} s of simulated time for {what}")
+        return ok
+
+    def _record(self, kind: str, name: str, msg) -> None:
+        world = getattr(self, "world", None)
+        if world is not None and world.trace:
+            world.trace.event("edit", f"ros_{kind}", {"name": name, "type": _type_of(msg), "message": _short(msg)})
+
+
+class GoalResult:
+    """What an action goal came to: ``status`` ("succeeded", "aborted", "canceled", "rejected") and ``result``."""
+
+    def __init__(self, status: str, result):
+        self.status, self.result = status, result
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "succeeded"
+
+    def __repr__(self) -> str:
+        return f"GoalResult({self.status!r}, {self.result!r})"
+
+
+_STATUS = {4: "succeeded", 5: "canceled", 6: "aborted"}  # action_msgs/GoalStatus
+
+
+def _cls(kind: str, type_name: str):
+    from rosidl_runtime_py.utilities import get_action, get_message, get_service
+
+    return {"msg": get_message, "srv": get_service, "action": get_action}[kind](type_name)
+
+
+def _fill(cls, fields: dict | None):
+    msg = cls()
+    if fields:
+        from rosidl_runtime_py.set_message import set_message_fields
+
+        set_message_fields(msg, fields)
+    return msg
+
+
+def _type_of(msg) -> str:
+    mod = msg.__class__.__module__.split(".")  # e.g. std_msgs.msg._string
+    return f"{mod[0]}/{mod[1]}/{msg.__class__.__name__}"
+
+
+def _short(msg, limit: int = 300) -> str:
+    text = str(msg)
+    return text if len(text) <= limit else text[:limit] + "..."

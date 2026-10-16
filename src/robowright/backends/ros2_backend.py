@@ -246,6 +246,10 @@ class Ros2Backend(Backend):
         cfg, ns = self.cfg, self.cfg["namespace"]
         arm, grip = cfg["arm"], cfg["gripper"]
         self._grip_pub = self._grip_action = self._traj_action = self._traj = self._arm_pub = None
+        self._traj_name = None
+        # The arm target robowright held when a test took the arm through world.ros (its controller's action or topic),
+        # or None. While set, robowright sends the arm nothing: each step's hold would replace the test's goal.
+        self._yielded = None
         if not self.commands or self.robot_model.family == "mobile":
             arm["interface"] = arm["interface"] or "position"
             grip["interface"] = grip["interface"] or "none"
@@ -451,6 +455,17 @@ class Ros2Backend(Backend):
         """Whether robowright sends this robot commands (``[ros2] command``)."""
         return bool(self.cfg["command"])
 
+    def arm_channels(self) -> set:
+        """The names robowright commands the arm on: its controller's topic and, for whole moves, its action."""
+        names = {self._arm_pub.topic_name} if self._arm_pub is not None else set()
+        return names | ({self._traj_name} if self._traj_name else set())
+
+    def yield_arm(self) -> None:
+        """A test is commanding the arm itself (``world.ros`` on :meth:`arm_channels`): robowright stops holding it
+        until it moves the arm again."""
+        if self.commands:
+            self._yielded = self._ctrl.copy()
+
     def set_ctrl(self, target) -> None:
         self._ctrl = np.array(target, float)
 
@@ -477,14 +492,19 @@ class Ros2Backend(Backend):
             msg.points = [JointTrajectoryPoint(positions=positions, time_from_start=reach)]
             return msg
 
-        if self._traj is None and self.cfg["limits"]:
+        if self._yielded is not None:
+            if np.allclose(arm, self._yielded[: self.n_arm], atol=1e-9):
+                arm = None  # the test has the arm: robowright's hold would replace its goal
+            else:
+                self._yielded = None  # robowright moved the arm again (a move, a reset): it has it back
+        if arm is not None and self._traj is None and self.cfg["limits"]:
             from .. import limits
 
             start = self._arm_sent if self._arm_sent is not None else self.qpos()[: self.n_arm]
             limits.check(self.cfg["limits"], self.ros_names, start, [arm], self.control_dt)
             self._arm_sent = np.array(arm)
-        if self._traj is not None:
-            pass  # the controller has the whole move (start_trajectory): a target now would replace it
+        if self._traj is not None or arm is None:
+            pass  # the controller has the whole move (start_trajectory) or the test's goal: a target now would replace it
         elif self.cfg["arm"]["interface"] == "position":
             self._arm_pub.publish(Float64MultiArray(data=values))
         else:
@@ -509,6 +529,7 @@ class Ros2Backend(Backend):
         from trajectory_msgs.msg import JointTrajectoryPoint
 
         targets = np.asarray(targets, float)
+        self._yielded = None  # robowright's own move: it has the arm back
         with_arm = self.has_gripper and self.cfg["gripper"]["interface"] == "with_arm"
         rows = [[*map(float, t[: self.n_arm]), *([self._grip_q(t[-1])] if with_arm else [])] for t in targets]
         if np.ptp(np.array([self._last_sent(with_arm), *rows]), axis=0).max(initial=0.0) < 1e-9:
@@ -642,6 +663,7 @@ class Ros2Backend(Backend):
         if not self.commands:
             return  # observe-only: the robot stays wherever its own stack has it
         start = self.qpos()
+        self._yielded = None  # robowright drives the arm again
         self._arm_sent = None  # measured from where the arm is now
         span = np.abs(q - start)[: self.n_arm]
         speed = self.cfg["reset_speed"]

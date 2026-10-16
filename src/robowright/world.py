@@ -103,10 +103,18 @@ class World:
 
     @property
     def ros(self):
-        """The ROS 2 graph (topics, TF frames) of a ``backend="ros2"`` world."""
-        if not hasattr(self.backend, "graph"):
-            raise CapabilityError(f"the {self.backend.name} backend has no ROS 2 graph: world.ros needs backend='ros2'")
-        return self.backend.graph()
+        """The ROS 2 graph of a ``backend="ros2"`` world, or of a world the ``ros2`` fixture serves:
+        its topics and TF frames to watch, and ``publish`` / ``call`` / ``send_goal`` to act on it."""
+        graph = getattr(self, "_ros_graph", None)  # set while a Ros2Bridge serves this world
+        if graph is None:
+            if not hasattr(self.backend, "graph"):
+                raise CapabilityError(
+                    f"the {self.backend.name} backend has no ROS 2 graph: world.ros needs backend='ros2', or the world served "
+                    "over ROS 2 (the ros2 fixture)"
+                )
+            graph = self.backend.graph()
+        graph.world = self
+        return graph
 
     # --- capabilities ------------------------------------------------------
     @property

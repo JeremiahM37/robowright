@@ -98,11 +98,14 @@ What your stack receives or sends on a topic can be changed on the way, as Playw
 or cope with late joint readings?
 
 ```python
-with ros2.run("ros2 launch my_robot nav.launch.py", route={
-    "/scan": rw.route.cut(at=5.0, duration=2.0),        # quiet for 2 s of sim time
-    "/joint_states": rw.route.delay(0.2) | rw.route.drop(0.05),
-    "/cmd_vel": lambda msg: None if msg.linear.x > 0.5 else msg,   # your own edit; None drops it
-}):
+with ros2.run(
+    "ros2 launch my_robot nav.launch.py",
+    route={
+        "/scan": rw.route.cut(at=5.0, duration=2.0),  # quiet for 2 s of sim time
+        "/joint_states": rw.route.delay(0.2) | rw.route.drop(0.05),
+        "/cmd_vel": lambda msg: None if msg.linear.x > 0.5 else msg,  # your own edit; None drops it
+    },
+):
     expect(robot).always.to_have_no_collisions()
 ```
 
@@ -308,6 +311,24 @@ its navigation stack where it has one.
 robot.base.drive(0.2, 0.0, 1.0)  # 0.2 m/s for 1 s: the TurtleBot 3 moves 0.178 m (it accelerates at 1 m/s^2)
 robot.base.go_to((0.5, -0.5), yaw=0.0, timeout=90)  # a NavigateToPose goal to Nav2; aborted or refused raises ActionError
 ```
+
+A test can also act on the graph directly, as Playwright's `request` fixture calls an API: no
+client code, types from the graph, messages as dicts, and every wait in the world's time. Each
+request is in the trace's timeline.
+
+```python
+listed = world.ros.call("/controller_manager/list_controllers")
+r = world.ros.send_goal(
+    "/arm_controller/follow_joint_trajectory",
+    {"trajectory": {"joint_names": names, "points": [{"positions": target, "time_from_start": {"sec": 1}}]}},
+)
+assert r.ok  # r.status: "succeeded", "aborted", "canceled" or "rejected"; r.result
+world.ros.publish("/initialpose", {"header": {"frame_id": "map"}, "pose": {"pose": {"position": {"x": 0.5}}}})
+```
+
+A goal or command on the arm's own controller takes the arm: robowright stops holding it (its
+hold would replace your goal) and takes it back when it next moves the arm itself. `world.ros`
+works on a world the `ros2` fixture serves too.
 
 A goal off the map is refused in Nav2's words (`ActionError: navigate_to_pose aborted:
 GOAL_OUTSIDE_MAP`). A goal inside a wall is not: Nav2 plans to the nearest free space, stops
@@ -546,6 +567,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
+| `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |

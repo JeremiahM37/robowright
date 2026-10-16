@@ -139,6 +139,9 @@ class Ros2Bridge:
         self._spin = threading.Thread(target=_spin, args=(self._executor,), name="robowright-ros2", daemon=True)
         self._spin.start()
         w._step_hooks.append(self._on_step)
+        from .ros2_graph import RosGraph
+
+        w._ros_graph = RosGraph(_GraphView(self, ns))  # world.ros: the graph as this bridge's node sees it
         if w.trace:
             w.trace.event("edit", "ros2_bridge", {"namespace": ns, "arm": arm_controller, "gripper": gripper_controller})
         self._publish()
@@ -384,6 +387,8 @@ class Ros2Bridge:
         self._closing.set()  # goals still in flight end now, so the executor's threads can be joined
         if self._on_step in self.world._step_hooks:
             self.world._step_hooks.remove(self._on_step)
+        if getattr(self.world, "_ros_graph", None) is not None and self.world._ros_graph.backend.bridge is self:
+            self.world._ros_graph = None
         self._executor.shutdown(timeout_sec=1.0)
         self.node.destroy_node()
         with contextlib.suppress(Exception):
@@ -398,6 +403,28 @@ class Ros2Bridge:
 
 
 _RENDER = "render"
+
+
+class _GraphView:
+    """What :class:`~robowright.ros2_graph.RosGraph` needs of a backend, from a bridge: its node, the
+    world's time, and topic names under the bridge's namespace. TF frames are the world's own objects
+    here, read from the scene, so ``world.ros.frame`` is not offered."""
+
+    def __init__(self, bridge, namespace: str):
+        self.bridge, self.node, self._ns = bridge, bridge.node, namespace
+        self._lock = threading.Lock()
+
+    @property
+    def time(self) -> float:
+        return self.bridge.world.time
+
+    def topic_name(self, name: str) -> str:
+        return name if name.startswith("/") else f"{self._ns}/{name}" if self._ns else f"/{name}"
+
+    def frame_pose(self, parent, child):
+        from .errors import CapabilityError
+
+        raise CapabilityError("world.ros.frame reads TF from a ROS 2 robot; a served world's objects are scene['name']")
 
 
 def _spin(executor) -> None:

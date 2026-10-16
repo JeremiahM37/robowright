@@ -224,3 +224,22 @@ def test_the_contract_runs_on_a_ros2_robot(rig, tmp_path):
         )
     assert out.returncode == 0, out.stdout[-4000:] + out.stderr[-2000:]
     assert ("9 passed, 7 skipped" if seen else "5 passed, 11 skipped") in out.stdout, out.stdout[-2000:]
+
+
+@needs_ros
+def test_world_ros_calls_the_controller_manager_and_sends_its_controller_a_goal():
+    """``world.ros.call`` / ``send_goal`` against ros2_control's own controller manager and joint
+    trajectory controller: the requests a test makes to set the stage, with no rclpy client code."""
+    opts = {"arm": {"controller": "arm_controller", "interface": "trajectory"}}
+    with _rig().mock_hardware("so101", "trajectory"), _launch(**opts, **BASE) as w:
+        listed = w.ros.call("/controller_manager/list_controllers", timeout=10)
+        states = {c.name: c.state for c in listed.controller}
+        assert states.get("arm_controller") == "active", states
+        names = list(w.backend.ros_names[: w.robot.n_arm])
+        target = [float(v) + 0.1 for v in w.robot.qpos()[: w.robot.n_arm]]
+        goal = {"trajectory": {"joint_names": names, "points": [{"positions": target, "time_from_start": {"sec": 1}}]}}
+        r = w.ros.send_goal("/arm_controller/follow_joint_trajectory", goal, timeout=10)
+        assert r.ok, r
+        w.wait(1.0)  # robowright let go of the arm for the test's goal, and does not pull it back afterwards
+        assert np.allclose(w.robot.qpos()[: w.robot.n_arm], target, atol=0.02), w.robot.qpos()
+        _moves_and_grips(w)  # and takes it back when it moves the arm itself
