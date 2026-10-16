@@ -626,6 +626,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
+| `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
 | `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
@@ -1021,6 +1022,33 @@ wall time, and a condition that is already true costs nothing.
 Matchers: `to_be_near`, `to_be_inside`, `to_be_above`, `to_have_position`, `to_be_at_rest`,
 `to_be_upright`, `to_be_touching`, `to_be_holding`, `to_be_open`, `to_be_closed`,
 `to_have_joint`, `to_have_no_collisions`, `to_satisfy(fn)`.
+
+Your own values wait the same way. `expect.poll` reads a function every control step, and
+`expect(block).to_pass()` tries a block of expectations every step until all of them hold at once:
+
+```python
+expect.poll(lambda: my_controller.state, name="state").to_equal("DONE", timeout=5)
+expect.poll(lambda: node.errors).always.to_equal(0)  # an invariant on a value of yours
+
+
+def settled():
+    expect(cube).to_be_inside(bin)
+    expect(robot.gripper).to_be_open()
+    assert planner.queue_empty()
+
+
+expect(settled).to_pass(timeout=10)
+```
+
+```
+ExpectationError: expect(state).to_equal failed after 5.00s (timeout 5s)
+  state = 'PLANNING' (want 'DONE')
+```
+
+Value matchers: `to_equal`, `to_be_greater_than`, `to_be_less_than`, `to_be_close_to`,
+`to_be_truthy` (on `expect.poll`, and on joints). Inside `to_pass`, each expectation checks once,
+at that step, and a timeout says which one failed last. Codegen writes these as comments: they
+run the test's own code, which a trace does not keep.
 
 ### Policies are first-class
 

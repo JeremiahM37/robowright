@@ -12,6 +12,7 @@ instead: it is checked after every step for the rest of the test.
 
 from __future__ import annotations
 
+import contextvars
 from pathlib import Path
 
 import numpy as np
@@ -32,12 +33,20 @@ def _fmt(p) -> str:
     return "(" + ", ".join(f"{v:.3f}" for v in np.asarray(p).ravel()) + ")"
 
 
+# Set while expect(block).to_pass() runs its block: each expectation in it checks once, now, instead of waiting.
+_ONCE = contextvars.ContextVar("robowright_expect_once", default=False)
+
+
 class Expectation:
     def __init__(self, subject, world=None, timeout=None, negate=False, mode="eventually", message=None, soft=False):
         self.raw = subject
         self.world = world or _world_of(subject)
         if subject is self.world:
             self.subject = _WorldView()  # expect(world): what its cameras see (to_match_snapshot)
+        elif isinstance(subject, _Polled):
+            self.subject = subject
+        elif callable(subject) and not isinstance(subject, Subject):
+            self.subject = _Polled(subject)  # expect(block).to_pass(), or a value as expect.poll reads it
         else:
             self.subject = subject if isinstance(subject, (Robot,)) else as_subject(self.world, subject)
         self.timeout = timeout
@@ -49,11 +58,15 @@ class Expectation:
     # modifiers ---------------------------------------------------------------
     @property
     def not_(self) -> Expectation:
-        return Expectation(self.raw, self.world, self.timeout, not self.negate, self.mode, self.message, self.soft)
+        return Expectation(self._subject_arg, self.world, self.timeout, not self.negate, self.mode, self.message, self.soft)
 
     @property
     def always(self) -> Expectation:
-        return Expectation(self.raw, self.world, self.timeout, self.negate, "always", self.message, self.soft)
+        return Expectation(self._subject_arg, self.world, self.timeout, self.negate, "always", self.message, self.soft)
+
+    @property
+    def _subject_arg(self):
+        return self.subject if isinstance(self.subject, _Polled) else self.raw
 
     # core --------------------------------------------------------------------
     def _run(self, name: str, check, timeout=None, hold: float = 0.0, args=None):
@@ -76,6 +89,15 @@ class Expectation:
             rec["kwargs"]["timeout"] = self.timeout
         if hold:
             rec["kwargs"]["hold"] = hold
+        if isinstance(self.subject, _Polled) or name.startswith("to_satisfy"):
+            rec["code"] = True  # it runs the test's own code, which a trace does not keep: codegen cannot write it again
+        if _ONCE.get():  # inside to_pass's block: checked once, now; to_pass waits and tries the block again
+            if self.mode == "always":
+                raise TypeError(f"{label}: an invariant (.always) is registered once, outside to_pass's block")
+            ok, detail = pred()
+            if ok:
+                return self
+            raise ExpectationError(f"{label}: {detail}")
         if self.mode == "always":
             w.add_invariant(pred, label, rec)
             return self
@@ -370,7 +392,81 @@ class Expectation:
         target = self.world if isinstance(self.subject, _WorldView) else self.subject
         return self._run(f"to_satisfy({description})", lambda: (bool(predicate(target)), description), timeout, hold)
 
+    # value matchers (expect.poll, a joint) ------------------------------------------
+    def to_equal(self, expected, *, timeout=None, hold=0.0):
+        """The value equals ``expected`` (arrays: every element)."""
+
+        def check():
+            v = self._value()
+            same = np.array_equal(v, expected) if isinstance(v, np.ndarray) or isinstance(expected, np.ndarray) else v == expected
+            return bool(same), f"{self.subject.name} = {v!r} (want {expected!r})"
+
+        return self._run("to_equal", check, timeout, hold, {"expected": expected})
+
+    def to_be_greater_than(self, bound, *, timeout=None, hold=0.0):
+        def check():
+            v = self._value()
+            return bool(v > bound), f"{self.subject.name} = {v!r} (want > {bound!r})"
+
+        return self._run("to_be_greater_than", check, timeout, hold, {"bound": bound})
+
+    def to_be_less_than(self, bound, *, timeout=None, hold=0.0):
+        def check():
+            v = self._value()
+            return bool(v < bound), f"{self.subject.name} = {v!r} (want < {bound!r})"
+
+        return self._run("to_be_less_than", check, timeout, hold, {"bound": bound})
+
+    def to_be_close_to(self, expected, tol: float = 1e-6, *, timeout=None, hold=0.0):
+        """Within ``tol`` of ``expected`` (arrays: every element)."""
+
+        def check():
+            v = self._value()
+            err = float(np.max(np.abs(np.asarray(v, dtype=float) - np.asarray(expected, dtype=float))))
+            return err <= tol, f"{self.subject.name} = {v!r} (want {expected!r} within {tol:g}, off by {err:.3g})"
+
+        return self._run("to_be_close_to", check, timeout, hold, {"expected": expected, "tol": tol})
+
+    def to_be_truthy(self, *, timeout=None, hold=0.0):
+        def check():
+            v = self._value()
+            return bool(v), f"{self.subject.name} = {v!r}"
+
+        return self._run("to_be_truthy", check, timeout, hold)
+
+    def to_pass(self, *, timeout=None):
+        """``expect(block).to_pass()``: run ``block()`` every control step until it raises no ExpectationError or
+        AssertionError (Playwright's ``toPass``). Each expectation in it checks once, as things are at that step, and
+        the failure says which one failed last. ``.always.to_pass()`` makes the block an invariant, run after every step.
+        A block should check, not act: what it moves, it moves again at every try."""
+        if not isinstance(self.subject, _Polled):
+            raise TypeError("to_pass takes a block: expect(lambda: ...).to_pass()")
+        if self.negate:
+            raise TypeError("expect(block).not_.to_pass() says nothing a test can rely on: assert the opposite inside the block")
+        block = self.subject.fn
+
+        def check():
+            token = _ONCE.set(True)
+            try:
+                block()
+                return True, "passed"
+            except (ExpectationError, AssertionError) as e:
+                text = str(e).strip()
+                return False, text.splitlines()[0] if text else type(e).__name__
+            finally:
+                _ONCE.reset(token)
+
+        return self._run("to_pass", check, timeout)
+
     # helpers -----------------------------------------------------------------------
+    def _value(self):
+        s = self.subject
+        if isinstance(s, _Polled):
+            return s.value
+        if hasattr(type(s), "value"):  # a joint: its angle or extension
+            return s.value
+        raise TypeError(f"value matchers read expect.poll(...) or a joint, not {s!r}")
+
     def _gripper(self) -> Gripper:
         s = self.subject
         if isinstance(s, Gripper):
@@ -386,6 +482,23 @@ class Expectation:
         if isinstance(s, Gripper):
             return s.robot
         raise TypeError(f"this matcher needs a robot, got {s!r}")
+
+
+class _Polled(Subject):
+    """A value the test computes, read again every control step: ``expect.poll(fn)``, or the block of ``to_pass``."""
+
+    def __init__(self, fn, name: str | None = None):
+        self.fn = fn
+        fn_name = getattr(fn, "__name__", "")
+        self.name = name or (f"{fn_name}()" if fn_name and fn_name != "<lambda>" else "value")
+
+    @property
+    def value(self):
+        return self.fn()
+
+    @property
+    def position(self) -> np.ndarray:
+        raise TypeError("expect.poll(...) takes value matchers (to_equal, to_be_greater_than, ...), not position matchers")
 
 
 class _WorldView(Subject):
@@ -422,6 +535,15 @@ def _soft(subject, *, timeout=None, message=None, world=None) -> Expectation:
 
 
 expect.soft = _soft
+
+
+def _poll(fn, *, name: str | None = None, timeout=None, message=None, world=None) -> Expectation:
+    """``expect.poll(fn).to_equal(3)``: ``fn()`` read again every control step until the matcher holds, in simulated
+    time (Playwright's ``expect.poll``). The failure says the last value it read; ``name`` is what it calls the value."""
+    return Expectation(_Polled(fn, name), world, timeout, message=message)
+
+
+expect.poll = _poll
 
 
 def condition(subject, matcher: str, *args, world=None, **kwargs):

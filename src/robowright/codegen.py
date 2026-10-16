@@ -215,6 +215,8 @@ def generate(
             if a["matcher"] == "to_match_snapshot":
                 # Its baseline image lives beside the test that recorded this trace, not beside this one.
                 line = f"# {line}  (compared with the original test's __snapshots__)"
+            elif a.get("code"):  # expect.poll, to_pass, to_satisfy: the test's own code, which the trace does not keep
+                line = f"# not written again (it ran the original test's own code): {line}"
             body.append(line)
         if e.get("status") == "raised" and (body or not keep_failed):
             # A call that failed but was carried on from (an agent's attempt that moved the world):
@@ -369,6 +371,8 @@ def _attached_event(e: dict, tr: Trace | None = None, stepped: bool = False) -> 
         return line
     if t in ("fault", "edit"):
         return f"# not replayed, because an attached run has no robot to apply it to: {_call(e)}"
+    if t in ("expect", "invariant") and a.get("code"):
+        return f"# not written again (it ran the original test's own code): {t} {a.get('subject')}.{a.get('matcher')}"
     if t in ("expect", "invariant") and "matcher" in a:
         # The time the expectation waited is already in the schedule as steps: it checks the state once, where it was
         # recorded, rather than stepping on for its own timeout.
