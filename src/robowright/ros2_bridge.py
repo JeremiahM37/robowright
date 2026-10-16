@@ -388,6 +388,7 @@ class Ros2Bridge:
         if self._on_step in self.world._step_hooks:
             self.world._step_hooks.remove(self._on_step)
         if getattr(self.world, "_ros_graph", None) is not None and self.world._ros_graph.backend.bridge is self:
+            self.world._ros_graph.close()  # its action clients hold this node (see RosGraph.close)
             self.world._ros_graph = None
         self._executor.shutdown(timeout_sec=1.0)
         self.node.destroy_node()

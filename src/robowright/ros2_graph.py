@@ -200,6 +200,12 @@ class RosGraph:
         res = done.result()
         return _outcome(ev, GoalResult(_STATUS.get(res.status, f"status {res.status}"), res.result))
 
+    def close(self) -> None:
+        """Destroy the action clients this graph made. An rclpy ActionClient holds its node's handle, and
+        Node.destroy_node() does not destroy action clients: one not yet garbage-collected kept the node "in use", and
+        destroy_node() waited on it for ever (a whole Nav2 suite hung in a world's teardown)."""
+        destroy_action_clients(self.__dict__.pop("_action_clients", {}).values())
+
     def _take_arm(self, name: str) -> None:
         """A command on the channel robowright drives the arm on: robowright lets go of the arm (its hold, sent
         every step, would replace the test's goal) until it moves the arm itself again."""
@@ -308,3 +314,14 @@ def _drop_empty(d: dict) -> dict:
 def _short(msg, limit: int = 300) -> str:
     text = str(msg)
     return text if len(text) <= limit else text[:limit] + "..."
+
+
+def destroy_action_clients(clients) -> None:
+    """Destroy rclpy ActionClients before their node is destroyed (see RosGraph.close)."""
+    for c in list(clients):
+        if c is None:
+            continue
+        try:
+            c.destroy()
+        except Exception:  # noqa: BLE001 - already destroyed, or its context is gone: nothing left to hold the node
+            pass

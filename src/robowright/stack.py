@@ -32,6 +32,7 @@ before SIGTERM and 5 s more before SIGKILL, for a simulation being thrown away).
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import os
 import re
@@ -39,6 +40,7 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -144,7 +146,9 @@ class Ros2Stack:
             env={k: str(v) for k, v in {**os.environ, **self.env}.items() if v is not None and v is not False},  # None or false unsets one
             cwd=self.cwd,
             start_new_session=True,
+            preexec_fn=_die_with_parent() if threading.current_thread() is threading.main_thread() else None,
         )
+        _RUNNING.add(self)
         try:
             self._link = _Link(self.namespace)
             self._link.listen()
@@ -164,6 +168,7 @@ class Ros2Stack:
         return self
 
     def stop(self) -> None:
+        _RUNNING.discard(self)
         if self._link is not None:
             self._link.close()
             self._link = None
@@ -328,6 +333,32 @@ def ros2_stack(command: str | list, **kwargs) -> Ros2Stack:
 
 
 # -- helpers ----------------------------------------------------------------------------
+
+
+_RUNNING: set = set()  # stacks this process started and has not stopped
+
+
+@atexit.register
+def _stop_running() -> None:
+    """Stop the stacks still running when this process exits normally (a test run that ended without stopping one)."""
+    for stack in list(_RUNNING):
+        with contextlib.suppress(Exception):
+            stack.stop()
+
+
+def _die_with_parent():
+    """For a stack's launch process: the kernel sends it SIGTERM when this process dies, even killed (SIGKILL), when
+    no cleanup can run. A test run killed by a timeout left Gazebo stacks running for hours otherwise. Only from the
+    main thread: the signal comes when the starting *thread* ends, and the main thread lives as long as the process."""
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    PR_SET_PDEATHSIG = 1
+
+    def preexec() -> None:
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+
+    return preexec
 
 
 def _stop_group(proc: subprocess.Popen, grace: float = 1.0) -> None:
@@ -715,8 +746,12 @@ class _Link:
         return wait
 
     def close(self) -> None:
+        from .ros2_graph import destroy_action_clients
+
         with contextlib.suppress(Exception):
             self._ex.shutdown(timeout_sec=1.0)
+        destroy_action_clients(self._actions.values())  # they hold the node (see RosGraph.close)
+        self._actions = {}
         with contextlib.suppress(Exception):
             self.node.destroy_node()
         with contextlib.suppress(Exception):

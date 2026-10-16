@@ -1021,6 +1021,15 @@ class Ros2Backend(Backend):
             self._spin.join(timeout=2)
             self._executor = None
         if getattr(self, "node", None) is not None:
+            from ..ros2_graph import destroy_action_clients
+
+            # Action clients first: each holds the node's handle, and destroy_node() waited for ever on one not yet
+            # garbage-collected (see RosGraph.close).
+            if getattr(self, "_graph", None) is not None:
+                self._graph.close()
+            nav = getattr(self, "_nav", None)
+            destroy_action_clients([getattr(self, "_traj_action", None), getattr(self, "_grip_action", None), nav[0] if nav else None])
+            self._traj_action = self._grip_action = self._nav = None
             self.node.destroy_node()
             self.node = None
 

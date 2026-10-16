@@ -29,8 +29,17 @@ def test_a_stack_that_ignores_sigint_is_gone_within_its_grace(tmp_path):
     t0 = time.monotonic()
     _stop_group(proc, grace=0.5)
     assert time.monotonic() - t0 < 2.0
+    # the whole group, the background sleep included: gone once reaped (a killed process is a zombie until then, and
+    # killpg still finds a zombie, so this polls briefly)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(proc.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
     with pytest.raises(ProcessLookupError):
-        os.killpg(proc.pid, 0)  # the whole group, the background sleep included
+        os.killpg(proc.pid, 0)
 
 
 def test_spawners_are_counted_in_the_stacks_own_group_only(tmp_path):
@@ -173,3 +182,27 @@ def test_a_stack_a_reset_cannot_put_back_is_restarted(ur):
     assert "scaled_joint_trajectory_controller" in {c.name for c in ur.snapshot.controllers}
     with _world() as w:
         w.robot.arm.move_joints(w.robot.qpos()[: w.robot.n_arm] + 0.1)  # the restarted stack drives the arm
+
+
+def test_a_stack_does_not_outlive_a_test_run_that_was_killed(tmp_path):
+    """A run killed outright (SIGKILL: no cleanup runs) took its stack with it: the kernel signals the launch process.
+    Before, Gazebo stacks from a run a timeout killed were still running hours later."""
+    script = tmp_path / "parent.py"
+    script.write_text(
+        "import os, signal, subprocess, sys\n"
+        "from robowright.stack import _die_with_parent\n"
+        "p = subprocess.Popen(['sleep', '60'], start_new_session=True, preexec_fn=_die_with_parent())\n"
+        "print(p.pid, flush=True)\n"
+        "os.kill(os.getpid(), signal.SIGKILL)\n"
+    )
+    run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30)
+    child = int(run.stdout.split()[0])
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    os.kill(child, 9)
+    pytest.fail("the launch process outlived the run that started it")
