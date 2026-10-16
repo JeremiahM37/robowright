@@ -646,7 +646,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
 | `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
-| trace network log | a trace of a ROS 2 run keeps every topic's publishers, readers, message counts over time and last message, in the viewer's Topics tab and the text summary |
+| trace network log, console | a trace of a ROS 2 run keeps every topic's publishers, readers, message counts over time and last message (the viewer's Topics tab), and every node's log lines at their simulated time (its Log tab) |
 | `recordHar`, `routeFromHAR` | `rw.route.record("scan_bag")` writes a topic to a rosbag as it passes; `rw.route.from_bag("scan_bag")` plays it to your stack instead of the live topic, at its recorded pace (a bag from `ros2 bag record` on the real robot too) |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |
@@ -1214,6 +1214,17 @@ by the moment on the timeline, so "the planner never got a scan" or "the control
 publishing at 4.2 s" is in the trace rather than a guess. Topics a node read but nobody published
 are named in the text summary. Messages are taken raw and only the last of each is decoded; camera
 and point-cloud topics are counted but their messages are not kept, and `/clock` is not counted.
+
+Every node's log lines (`/rosout`) are kept as well, as Playwright keeps a page's console: the
+level, the node and the message, at the simulated time it was logged. The viewer's Log tab shows
+the lines logged by the moment on the timeline, warnings and errors marked, and the text summary
+counts them by level and lists each warning and error:
+
+```
+ros 2 log: 8 INFO, 1 WARN, 1 ERROR
+     1.500s WARN  [route_node] transform from map to base_link timed out
+     2.500s ERROR [route_node] failed to configure the controller
+```
 
 `pytest --rw-trace-text` (or `robowright show-trace --text trace.zip`) prints a trace as
 text, for a CI log or an AI agent:

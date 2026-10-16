@@ -59,6 +59,8 @@ canvas { width: 100%; display: block; }
 .pane h3 { font-size: 12px; margin: 12px 0 4px; color: var(--muted); font-weight: 600; }
 .pane h3:first-child { margin-top: 0; }
 pre { background: var(--code); padding: 8px; border-radius: 6px; overflow: auto; font-size: 11.5px; margin: 0; white-space: pre-wrap; word-break: break-word; }
+.logline { font: 11px/1.4 ui-monospace, monospace; padding: 2px 0; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+.logline.logwarn b { color: #b26a00; } .logline.logbad b { color: #c62828; }
 details.topic { border-bottom: 1px solid var(--line, #ddd); padding: 6px 0; overflow-wrap: anywhere; }
 details.topic summary { cursor: pointer; }
 pre.msg { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 40vh; overflow: auto; }
@@ -92,7 +94,7 @@ th { color: var(--muted); font-weight: 600; }
     <div class="legend" id="legend"></div>
   </section>
   <section>
-    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button><button data-tab="topics" id="topicsTab" hidden>Topics</button></div>
+    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button><button data-tab="topics" id="topicsTab" hidden>Topics</button><button data-tab="log" id="logTab" hidden>Log</button></div>
     <div class="pane" id="pane"></div>
   </section>
 </main>
@@ -100,6 +102,7 @@ th { color: var(--muted); font-weight: 600; }
 const D = __TRACE_DATA__;
 const M = D.meta, N = D.t.length, J = M.joint_names;
 if (M.ros_topics && M.ros_topics.length) document.getElementById("topicsTab").hidden = false;
+if (M.ros_log && M.ros_log.length) document.getElementById("logTab").hidden = false;
 const openTopics = new Set();  // the topics whose last message is shown: kept open as the pane is redrawn
 // On the click itself, not on "toggle": that comes a moment later, and a redraw in between (playback redraws every
 // frame) would have replaced the row it fired on.
@@ -227,6 +230,16 @@ function paneTopics() {
   };
   return `<h3>ROS 2 topics at t=${fmt(now, 2)}s</h3>${ts.map(one).join("")}`;
 }
+function paneLog() {
+  // The nodes' own log lines (/rosout), as Playwright's trace keeps the page's console: those logged by the time shown.
+  const now = D.t[cur], all = M.ros_log || [], shown = all.filter((e) => e.t <= now + 1e-9);
+  const cls = (lv) => lv === "ERROR" || lv === "FATAL" ? "logbad" : lv === "WARN" ? "logwarn" : "";
+  const rows = shown.map((e) => `<div class="logline ${cls(e.level)}"><span class="muted">${fmt(e.t, 2)}s</span> <b>${esc(e.level)}</b> ` +
+    `<span class="muted">[${esc(e.node)}]</span> ${esc(e.msg)}</div>`).join("");
+  const later = all.length - shown.length, dropped = M.ros_log_dropped || 0;
+  return `<h3>ROS 2 log at t=${fmt(now, 2)}s</h3>${rows || '<p class="muted">nothing logged yet</p>'}` +
+    (later ? `<p class="muted">${later} more later in the run</p>` : "") + (dropped ? `<p class="muted">${dropped} more lines were not kept</p>` : "");
+}
 function setTab() { document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab)); }
 document.querySelector(".tabs").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (b) { tab = b.dataset.tab; setTab(); render(); } });
 
@@ -234,7 +247,7 @@ function render() {
   if (cam) { const f = frameAt(cur); if (f) $("frame").src = f; }
   $("clock").textContent = `t = ${fmt(D.t[cur], 2)}s · step ${cur} / ${N - 1}`;
   drawTimeline(); drawPlot();
-  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : tab === "topics" ? paneTopics() : paneRun();
+  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : tab === "topics" ? paneTopics() : tab === "log" ? paneLog() : paneRun();
 }
 
 function tick(ts) {

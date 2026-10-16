@@ -1,5 +1,8 @@
 """What went over the ROS 2 graph during a run, kept in its trace: Playwright's network log, for topics.
 
+Every node's log lines (``/rosout``, the robot's browser console) are kept too, with the simulated time each was
+logged, so a node that warned "transform timeout" or failed to configure says so in the trace of the test it broke.
+
 For every topic seen while the world ran: its type, the nodes that published and subscribed to it, how many messages
 it carried and when (in simulated time, counted in half-second bins), and the last message, as a dict. A test that
 failed because a node never published, published too slowly, or stopped, says so in its trace.
@@ -15,6 +18,9 @@ import threading
 import time
 
 NOT_SUBSCRIBED = ("/clock", "/parameter_events")
+LOG_TOPIC = "/rosout"
+LEVELS = {10: "DEBUG", 20: "INFO", 30: "WARN", 40: "ERROR", 50: "FATAL"}
+MAX_LOG = 5000  # log lines kept per run: the first ones (start-up errors) and, past this, the count of the rest
 BULKY = ("sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/PointCloud2", "sensor_msgs/msg/LaserScan")
 _PRIVATE = "/robowright/"  # routed topics' private names (routes.py): the real name is the one listed
 
@@ -34,6 +40,8 @@ class TopicLog:
         self._next_sim = float("-inf")
         self._own = node.get_fully_qualified_name()
         self.closed = False
+        self._log: list[dict] = []
+        self._log_dropped = 0
 
     def poll(self) -> None:
         if self.closed:
@@ -99,8 +107,34 @@ class TopicLog:
                 t["times"].append(now)
                 t["bytes"] += len(raw)
                 t["last"] = raw
+            if name == LOG_TOPIC:
+                self._on_log(raw, cls, now)
 
         self._subs[name] = (self.node.create_subscription(cls, name, on_msg, qos, raw=True, callback_group=self._cb), cls)
+
+    def _on_log(self, raw: bytes, cls, now: float) -> None:
+        from rclpy.serialization import deserialize_message
+
+        try:
+            m = deserialize_message(raw, cls)
+        except Exception:  # noqa: BLE001 - a line that cannot be read is not a failed test
+            return
+        # The line's own stamp when it is on the simulation's clock (a node with use_sim_time), else when it arrived: a
+        # node on the wall clock, or a line from before robowright subscribed (rosout keeps them, and sends them at once).
+        stamp = m.stamp.sec + m.stamp.nanosec * 1e-9
+        at = stamp if 0.0 <= stamp <= now + 1.0 else now
+        with self._lock:
+            if len(self._log) >= MAX_LOG:
+                self._log_dropped += 1
+                return
+            self._log.append({"t": round(at, 3), "level": LEVELS.get(int(m.level), str(m.level)), "node": m.name, "msg": m.msg[:2000]})
+
+    def trace_fields(self) -> dict:
+        """What the trace keeps (Recorder.meta): the topics, and the log lines in the order of their time."""
+        topics = self.record()
+        with self._lock:
+            log, dropped = sorted(self._log, key=lambda e: e["t"]), self._log_dropped
+        return {"ros_topics": topics, **({"ros_log": log} if log else {}), **({"ros_log_dropped": dropped} if dropped else {})}
 
     def record(self) -> list[dict]:
         """Each topic as the trace keeps it, busiest first."""
@@ -188,4 +222,21 @@ def summary_lines(topics: list[dict], limit: int = 20) -> list[str]:
     quiet = [e["topic"] for e in topics if e["count"] == 0 and "note" not in e and set(e["subscribers"]) - {"robowright"}]
     if quiet:
         lines.append(f"  subscribed to but never published: {', '.join(quiet)}")
+    return lines
+
+
+def log_lines(log: list[dict], dropped: int = 0, limit: int = 15) -> list[str]:
+    """The trace's text summary of its log: how many lines at each level, and the warnings and errors themselves."""
+    if not log:
+        return []
+    counts: dict[str, int] = {}
+    for e in log:
+        counts[e["level"]] = counts.get(e["level"], 0) + 1
+    order = [lv for lv in LEVELS.values() if lv in counts]
+    lines = ["ros 2 log: " + ", ".join(f"{counts[lv]} {lv}" for lv in order) + (f" (+{dropped} not kept)" if dropped else "")]
+    bad = [e for e in log if e["level"] in ("WARN", "ERROR", "FATAL")]
+    for e in bad[:limit]:
+        lines.append(f"  {e['t']:8.3f}s {e['level']:5s} [{e['node']}] {e['msg'].splitlines()[0][:200]}")
+    if len(bad) > limit:
+        lines.append(f"  ... {len(bad) - limit} more warnings and errors")
     return lines

@@ -101,7 +101,7 @@ class World:
             start = getattr(self.backend, "topic_log", None)  # a ROS 2 backend: the graph's topics go in the trace
             if start is not None:
                 log = start(lambda: self.time)
-                self.trace.ros_source = log.record
+                self.trace.ros_source = log.trace_fields
                 self._step_hooks.append(lambda _w: log.poll())
         self._began = False
         self.trace_path: Path | None = None

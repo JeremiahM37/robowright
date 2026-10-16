@@ -144,7 +144,7 @@ class Ros2Bridge:
             from .ros2_topics import TopicLog
 
             self._topic_log = TopicLog(node, lambda: w.time, cb)
-            w.trace.ros_source = self._topic_log.record
+            w.trace.ros_source = self._topic_log.trace_fields
         from .ros2_graph import RosGraph
 
         w._ros_graph = RosGraph(_GraphView(self, ns))  # world.ros: the graph as this bridge's node sees it
@@ -397,8 +397,8 @@ class Ros2Bridge:
         self._closing.set()  # goals still in flight end now, so the executor's threads can be joined
         if self._topic_log is not None:  # kept now: the world saves its trace after this node is gone
             trace = self.world.trace
-            if trace is not None and trace.ros_source == self._topic_log.record:
-                trace.ros_topics, trace.ros_source = self._topic_log.record(), None
+            if trace is not None and trace.ros_source == self._topic_log.trace_fields:
+                trace.ros_fields, trace.ros_source = self._topic_log.trace_fields(), None
             self._topic_log.close()
         if self._on_step in self.world._step_hooks:
             self.world._step_hooks.remove(self._on_step)

@@ -70,3 +70,20 @@ def test_the_trace_keeps_what_the_code_under_test_sent(tmp_path):
     cmd = {e["topic"]: e for e in tr.meta["ros_topics"]}["/forward_position_controller/commands"]
     assert any(p.endswith("/route_node") for p in cmd["publishers"]) and "robowright" in cmd["subscribers"]
     assert cmd["count"] > 10 and len(cmd["last_message"]["data"]) > 0
+
+
+@ros
+def test_the_trace_keeps_the_nodes_log_lines_at_their_simulated_time(tmp_path):
+    tr = _run(tmp_path, "talk", seconds=4.0)
+    log = [e for e in tr.meta["ros_log"] if e["node"] == "route_node"]
+    ticks = [e for e in log if e["msg"].startswith("tick ")]
+    assert len(ticks) >= 4 and all(e["level"] == "INFO" for e in ticks)
+    # Stamped on the simulation's clock, as the node logged them: half a second apart. (After the first: a ROS timer's
+    # first period can be short, while the node's clock jumps from zero to the simulation's as /clock first arrives.)
+    gaps = [b["t"] - a["t"] for a, b in zip(ticks[1:], ticks[2:])]
+    assert all(abs(g - 0.5) < 0.06 for g in gaps), gaps
+    (warn,) = [e for e in log if e["level"] == "WARN"]
+    (err,) = [e for e in log if e["level"] == "ERROR"]
+    assert "timed out" in warn["msg"] and "failed to configure" in err["msg"] and warn["t"] < err["t"]
+    text = tr.summary()
+    assert "ros 2 log:" in text and "ERROR [route_node] failed to configure the controller" in text, text
