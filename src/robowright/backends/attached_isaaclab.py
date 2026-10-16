@@ -232,8 +232,10 @@ class IsaacLabEngine(AttachedEngine):
 
 
 def is_isaaclab(env) -> bool:
+    """An Isaac Lab environment: a subclass of one of Isaac Lab's (ManagerBasedEnv, DirectRLEnv, ...). A task's own class
+    lives in its package (isaaclab_tasks.direct...), not in isaaclab, so the class it derives from is what tells."""
     u = getattr(env, "unwrapped", env)
-    return type(u).__module__.startswith("isaaclab.") and hasattr(u, "scene")
+    return hasattr(u, "scene") and any(c.__module__.startswith("isaaclab.envs") for c in type(u).__mro__)
 
 
 def isaaclab_engine_of(env, *, env_index: int = 0, seed: int = 0, dt: float | None = None) -> IsaacLabEngine | None:
