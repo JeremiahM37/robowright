@@ -51,6 +51,7 @@ def test_spawners_are_counted_in_the_stacks_own_group_only(tmp_path):
     assert _spawners(mine.pid) == 0
 
 
+@pytest.mark.skipif(importlib.util.find_spec("rclpy") is None, reason="a stack is watched through ROS 2 (rclpy)")
 def test_env_none_unsets_a_variable_for_the_stack(tmp_path, monkeypatch):
     monkeypatch.setenv("RW_STACK_PROBE", "set")
     st = rw.ros2_stack(

@@ -44,10 +44,12 @@ def test_trials_stop(world):
 
 def test_a_test_past_its_time_limit_fails_and_says_what_was_running(pytester):
     pytester.makepyfile(test_t=TEST)
-    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "0.5", "-k", "quick or hangs and not setup and not teardown")
+    # 5 s, not less: the limit covers the quick test's setup too, and its first world took over 0.5 s under the full
+    # verify's parallel load. The hanging test hangs for ever, so any limit shows it stopped.
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "5", "-k", "quick or hangs and not setup and not teardown")
     r.assert_outcomes(passed=1, failed=1)
     out = r.stdout.str()
-    assert "TimeLimitError: the test ran past its 0.5 s time limit (wall clock), while step 'wait for a stack that never answers'" in out
+    assert "TimeLimitError: the test ran past its 5 s time limit (wall clock), while step 'wait for a stack that never answers'" in out
     assert "test_t.py__test_hangs[mujoco].zip" in out  # the trace of the run that ran out of time is kept
 
 

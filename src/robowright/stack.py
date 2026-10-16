@@ -109,6 +109,12 @@ class Ros2Stack:
 
     # -- starting and stopping -----------------------------------------------------------
     def start(self) -> Ros2Stack:
+        import importlib.util
+
+        if importlib.util.find_spec("rclpy") is None:
+            raise StackError(
+                "rw.ros2_stack watches the stack through ROS 2: run it where rclpy is (a ROS 2 install, or scripts/ros2_env.sh)"
+            )
         if "GZ_PARTITION" not in self.env and "GZ_PARTITION" not in os.environ:
             # Gazebo's transport is per partition: a partition of this stack's own keeps parallel workers' worlds apart,
             # and this process uses it too, so robowright's Gazebo connection finds this stack's world.
