@@ -68,6 +68,10 @@ class Recorder:
         self.force_names = list(world.object_names) + (["robot"] if world.backend.robot_model.floating else [])
         self.contacts: list[list] = []
         self.frames: dict[str, dict[int, bytes]] = {}
+        # ROS 2 topics seen during the run (ros2_topics.TopicLog): read from ros_source when saved, or kept in
+        # ros_topics by the bridge that recorded them, which is closed before the world saves its trace.
+        self.ros_topics: list | None = None
+        self.ros_source = None
         self.base: list[np.ndarray] = []
         self.state0 = None
         self.begin_index = 0
@@ -166,7 +170,9 @@ class Recorder:
         from .robots.detect import recorded
 
         w = self.world
+        topics = self.ros_source() if self.ros_source is not None else self.ros_topics
         return {
+            **({"ros_topics": topics} if topics else {}),
             "format": FORMAT_VERSION,
             "robowright": _version(),
             "name": w.name,
@@ -374,6 +380,10 @@ class Trace:
             for x, y, f in self.contacts[at]:
                 pairs[(x, y)] = pairs.get((x, y), 0.0) + f
             lines.append("  contacts: " + (", ".join(f"{x}-{y} {f:.2f} N" for (x, y), f in sorted(pairs.items())) or "none"))
+        if m.get("ros_topics"):
+            from .ros2_topics import summary_lines
+
+            lines += summary_lines(m["ros_topics"])
         return "\n".join(lines)
 
 

@@ -160,6 +160,10 @@ def test_a_trace_records_where_the_robot_saw_the_objects(tmp_path):
     cube = w.object_names.index("cube")
     assert np.allclose(pos[0, cube], [0.22, -0.06, 0.0125], atol=2e-3)  # where it started
     assert pos[-1, cube, 2] > 0.04  # and lifted
+    # and the ROS 2 traffic around it (Playwright's network log): the stack's joint states, which robowright's own node
+    # reads, counted over the run (the trace's own watching of every topic is not counted as a reader)
+    js = {e["topic"]: e for e in rw.Trace(path).meta["ros_topics"]}["/joint_states"]
+    assert js["count"] > 10 and "robowright" in js["subscribers"] and "robowright" not in js["publishers"], js
 
 
 @needs_ros

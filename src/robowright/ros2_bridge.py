@@ -139,6 +139,12 @@ class Ros2Bridge:
         self._spin = threading.Thread(target=_spin, args=(self._executor,), name="robowright-ros2", daemon=True)
         self._spin.start()
         w._step_hooks.append(self._on_step)
+        self._topic_log = None
+        if w.trace:  # what goes over the graph while the code under test runs, kept in the trace
+            from .ros2_topics import TopicLog
+
+            self._topic_log = TopicLog(node, lambda: w.time, cb)
+            w.trace.ros_source = self._topic_log.record
         from .ros2_graph import RosGraph
 
         w._ros_graph = RosGraph(_GraphView(self, ns))  # world.ros: the graph as this bridge's node sees it
@@ -148,6 +154,8 @@ class Ros2Bridge:
 
     # -- the world's side (its own thread) ---------------------------------------------
     def _on_step(self, w):
+        if self._topic_log is not None:
+            self._topic_log.poll()
         r = w.robot
         with self._lock:
             traj, grip, fwd = self._trajectory, self._gripper_goal, self._forward
@@ -362,6 +370,8 @@ class Ros2Bridge:
                 e.add_note(f"output of the code under test ({log}):\n{tail}")
             raise
         finally:
+            if self._topic_log is not None:
+                self._topic_log.poll_now()  # who was on the graph, seen before the code under test stops
             _stop(proc)
             self._relays = []
             self.routes = [r.summary() for r in relays]
@@ -385,6 +395,11 @@ class Ros2Bridge:
 
     def close(self):
         self._closing.set()  # goals still in flight end now, so the executor's threads can be joined
+        if self._topic_log is not None:  # kept now: the world saves its trace after this node is gone
+            trace = self.world.trace
+            if trace is not None and trace.ros_source == self._topic_log.record:
+                trace.ros_topics, trace.ros_source = self._topic_log.record(), None
+            self._topic_log.close()
         if self._on_step in self.world._step_hooks:
             self.world._step_hooks.remove(self._on_step)
         if getattr(self.world, "_ros_graph", None) is not None and self.world._ros_graph.backend.bridge is self:

@@ -1011,7 +1011,16 @@ class Ros2Backend(Backend):
             _time.sleep(0.01)
         return _resize(img, width, height)
 
+    def topic_log(self, clock):
+        """Watch every topic this node can see, for the world's trace (ros2_topics.TopicLog)."""
+        from ..ros2_topics import TopicLog
+
+        self._topic_log = TopicLog(self.node, clock)
+        return self._topic_log
+
     def close(self) -> None:
+        if getattr(self, "_topic_log", None) is not None:
+            self._topic_log.close()
         if getattr(self, "gazebo", None) is not None:
             self.gazebo.close()
             self.gazebo = None

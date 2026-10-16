@@ -646,6 +646,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
 | `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
+| trace network log | a trace of a ROS 2 run keeps every topic's publishers, readers, message counts over time and last message, in the viewer's Topics tab and the text summary |
 | `recordHar`, `routeFromHAR` | `rw.route.record("scan_bag")` writes a topic to a rosbag as it passes; `rw.route.from_bag("scan_bag")` plays it to your stack instead of the live topic, at its recorded pace (a bag from `ros2 bag record` on the real robot too) |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |
@@ -1204,6 +1205,15 @@ tests/test_bin.py::test_cube_lands_in_bin[mujoco]
 ```
 
 <p align="center"><img src="docs/viewer.png" alt="robowright trace viewer showing the action list, camera frame, timeline and joint plots of a failing test"></p>
+
+When the robot is behind ROS 2 (`backend="ros2"`, or your stack driving the world through the `ros2`
+fixture), the trace also keeps the graph's traffic, as Playwright's trace keeps the network log: for
+each topic, the nodes that published and read it, how many messages it carried and when (in
+simulated time), and its last message. The viewer's Topics tab shows how much of each had arrived
+by the moment on the timeline, so "the planner never got a scan" or "the controller stopped
+publishing at 4.2 s" is in the trace rather than a guess. Topics a node read but nobody published
+are named in the text summary. Messages are taken raw and only the last of each is decoded; camera
+and point-cloud topics are counted but their messages are not kept, and `/clock` is not counted.
 
 `pytest --rw-trace-text` (or `robowright show-trace --text trace.zip`) prints a trace as
 text, for a CI log or an AI agent:

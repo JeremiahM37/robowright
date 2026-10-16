@@ -98,6 +98,11 @@ class World:
         if self.settings.trace != "off":
             s = self.settings
             self.trace = Recorder(self, s.frame_every, s.trace_cameras, s.image_size)
+            start = getattr(self.backend, "topic_log", None)  # a ROS 2 backend: the graph's topics go in the trace
+            if start is not None:
+                log = start(lambda: self.time)
+                self.trace.ros_source = log.record
+                self._step_hooks.append(lambda _w: log.poll())
         self._began = False
         self.trace_path: Path | None = None
 

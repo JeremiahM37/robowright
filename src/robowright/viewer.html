@@ -59,6 +59,9 @@ canvas { width: 100%; display: block; }
 .pane h3 { font-size: 12px; margin: 12px 0 4px; color: var(--muted); font-weight: 600; }
 .pane h3:first-child { margin-top: 0; }
 pre { background: var(--code); padding: 8px; border-radius: 6px; overflow: auto; font-size: 11.5px; margin: 0; white-space: pre-wrap; word-break: break-word; }
+details.topic { border-bottom: 1px solid var(--line, #ddd); padding: 6px 0; overflow-wrap: anywhere; }
+details.topic summary { cursor: pointer; }
+pre.msg { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 40vh; overflow: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
 td:first-child, th:first-child { text-align: left; font-family: ui-monospace, Menlo, monospace; }
@@ -89,13 +92,21 @@ th { color: var(--muted); font-weight: 600; }
     <div class="legend" id="legend"></div>
   </section>
   <section>
-    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button></div>
+    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button><button data-tab="topics" id="topicsTab" hidden>Topics</button></div>
     <div class="pane" id="pane"></div>
   </section>
 </main>
 <script>
 const D = __TRACE_DATA__;
 const M = D.meta, N = D.t.length, J = M.joint_names;
+if (M.ros_topics && M.ros_topics.length) document.getElementById("topicsTab").hidden = false;
+const openTopics = new Set();  // the topics whose last message is shown: kept open as the pane is redrawn
+// On the click itself, not on "toggle": that comes a moment later, and a redraw in between (playback redraws every
+// frame) would have replaced the row it fired on.
+document.getElementById("pane").addEventListener("click", (ev) => {
+  const d = ev.target.closest("summary") && ev.target.closest("details[data-topic]");
+  if (d) d.open ? openTopics.delete(d.dataset.topic) : openTopics.add(d.dataset.topic);  // (open is the state before the click)
+});
 let cur = 0, sel = -1, tab = "details", cam = Object.keys(D.frames)[0] || null, playing = false, last = 0;
 const $ = (id) => document.getElementById(id);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -202,6 +213,20 @@ function paneState() {
 function paneRun() {
   return `<h3>Faults</h3>${M.faults.length ? kv(M.faults) : '<p class="muted">none</p>'}<h3>Scene</h3>${kv(M.scene)}<h3>Versions</h3><div>robowright ${esc(M.robowright)}, trace format ${M.format}</div>`;
 }
+function paneTopics() {
+  // Playwright's network log, for ROS 2: each topic's traffic, and how much of it had arrived by the time shown.
+  const ts = M.ros_topics || [], now = D.t[cur];
+  const sofar = (e) => !e.bins ? 0 : e.bins.slice(0, Math.floor(now / e.bin_s) + 1).reduce((a, b) => a + b, 0);
+  const who = (xs) => xs.length ? xs.map(esc).join(", ") : "none";
+  const one = (e) => {
+    const traffic = e.note ? e.note : `${sofar(e)} of ${e.count} msgs by now` + (e.hz ? ` · ${fmt(e.hz, 1)} Hz` : "");
+    const last = e.last_message !== undefined ? `<pre class="msg">${esc(JSON.stringify(e.last_message, null, 1))}</pre>` : "";
+    return `<details class="topic" data-topic="${esc(e.topic)}"${openTopics.has(e.topic) ? " open" : ""}>` +
+      `<summary><b>${esc(e.topic)}</b> <span class="muted">${esc(e.type)}</span></summary>` +
+      `<div>${traffic}</div><div class="muted">published by ${who(e.publishers)} · read by ${who(e.subscribers)}</div>${last}</details>`;
+  };
+  return `<h3>ROS 2 topics at t=${fmt(now, 2)}s</h3>${ts.map(one).join("")}`;
+}
 function setTab() { document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab)); }
 document.querySelector(".tabs").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (b) { tab = b.dataset.tab; setTab(); render(); } });
 
@@ -209,7 +234,7 @@ function render() {
   if (cam) { const f = frameAt(cur); if (f) $("frame").src = f; }
   $("clock").textContent = `t = ${fmt(D.t[cur], 2)}s · step ${cur} / ${N - 1}`;
   drawTimeline(); drawPlot();
-  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : paneRun();
+  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : tab === "topics" ? paneTopics() : paneRun();
 }
 
 function tick(ts) {
