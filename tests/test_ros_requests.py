@@ -116,7 +116,19 @@ def test_a_session_of_requests_becomes_a_test_that_passes(tmp_path):
     # takes) was 233 now and then, and the child's ROS failed to start.
     env = {**os.environ, "ROS_DOMAIN_ID": "21", "PYTHONUNBUFFERED": "1"}
     run = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path / "test_requests_again.py")],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:launch_testing",
+            "-p",
+            "no:launch_ros",
+            str(tmp_path / "test_requests_again.py"),
+        ],
         capture_output=True,
         text=True,
         timeout=300,

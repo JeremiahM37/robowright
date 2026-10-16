@@ -148,4 +148,6 @@ def test_closing_with_a_gripper_goal_in_flight_does_not_hang(world):
     closer.join(timeout=15)
     assert not closer.is_alive(), "close() hung with a gripper goal in flight"
     assert time.monotonic() - t0 < 10
+    # The goal's own thread records how it ended: Jazzy's executor waits for it in close(), Humble's need not
+    running.result(timeout=5)
     assert handle.ended == "aborted"
