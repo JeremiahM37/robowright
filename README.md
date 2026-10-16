@@ -636,7 +636,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | web-first assertions | `expect(cube).to_be_inside(bin)` re-checks every control step until it holds or times out, in *simulated* time |
 | locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots |
 | trace viewer | every failure leaves a `.zip` trace with joints, object poses, contacts and the action timeline, viewable as HTML with camera views drawn from it |
-| codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test |
+| codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test; `robowright codegen --robot panda` writes one from what you do in a browser page |
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
@@ -1274,6 +1274,19 @@ recorded motor commands and forces. No test code runs. If anything diverges, it 
 the first step where it does. `codegen` writes the run back out as plain robowright code.
 That includes the exact randomised start poses and injected faults, so a one-in-fifty
 failure becomes a test you can run every time.
+
+With no trace, `codegen` writes a test from what you do, as `npx playwright codegen` does:
+
+```console
+$ robowright codegen --robot panda -o tests/test_put_away.py
+robowright codegen: http://127.0.0.1:8790/ (Save writes tests/test_put_away.py; Ctrl+C to stop)
+```
+
+The page shows the robot's cameras and the scene's objects. Pick, place, open and close the
+gripper, wait, or add a check (`to_be_inside`, `to_be_near`, `to_be_holding`, ...): each runs on
+the robot at once, its result is logged, and the test so far is shown beside it. A step that fails
+is kept out of the test as a comment, as for an agent. Save writes a test that runs the same calls
+and expects the same outcomes (`--backend`, `--seed`, `--port` as you need).
 
 ### AI agents drive robots over MCP
 

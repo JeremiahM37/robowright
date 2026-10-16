@@ -298,6 +298,22 @@ def _replay(args, rest):
 def _codegen(args, rest):
     from .codegen import companion, generate
 
+    if args.trace is None:  # record: the test is written from what is done in the browser
+        from .recorder import Recorder
+
+        rec = Recorder(robot=args.robot, backend=args.backend, seed=args.seed, output=args.output or "test_recorded.py", name=args.name)
+
+        def ready(url):
+            print(f"robowright codegen: {url} (Save writes {rec.output}; Ctrl+C to stop)", flush=True)
+
+        try:
+            rec.serve(port=args.port, ready=ready)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            rec.close()
+        return 0
+
     try:
         code = generate(args.trace, test_name=args.name, stop_at_failure=not args.full, factory=args.factory)
     except ValueError as e:  # an attached run that cannot be turned into a test, or a factory that does not load
@@ -618,9 +634,16 @@ def main(argv=None) -> int:
     r.add_argument(
         "--factory", metavar="MODULE:FUNC", help="for an attached run: the function that builds its simulation (or path/to/file.py:func)"
     )
-    c = sub.add_parser("codegen", help="generate a pytest regression test from a trace")
-    c.add_argument("trace")
+    c = sub.add_parser(
+        "codegen",
+        help="generate a pytest test from a trace, or, with no trace, write one by doing it in your browser (--robot)",
+    )
+    c.add_argument("trace", nargs="?", help="a trace .zip; leave it out to record a test in your browser")
     c.add_argument("-o", "--output")
+    c.add_argument("--robot", default="so101", help="recording: the robot (a name or model file)")
+    c.add_argument("--backend", default="mujoco", help="recording: the engine")
+    c.add_argument("--seed", type=int, default=0, help="recording: the scene's seed")
+    c.add_argument("--port", type=int, default=8790, help="recording: the page's port (0: any free one)")
     c.add_argument("--name")
     c.add_argument("--full", action="store_true", help="include events after the first failure")
     c.add_argument(

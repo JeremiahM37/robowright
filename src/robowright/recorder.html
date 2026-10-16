@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>robowright codegen</title>
+<style>
+:root{--bg:#fafafa;--fg:#1b1b1b;--muted:#666;--panel:#fff;--line:#ddd;--ok:#1a7f37;--bad:#c62828;--accent:#2457c5}
+@media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#e8e8e8;--muted:#9a9a9a;--panel:#1d1d1d;--line:#333;--ok:#4caf50;--bad:#ef5350;--accent:#7aa2ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+header{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;padding:16px}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+img{width:100%;height:auto;border-radius:6px;background:#000}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:12px 0 6px}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0}
+button,select,input{font:inherit;padding:5px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+button{cursor:pointer}button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+pre{white-space:pre;overflow:auto;max-height:60vh;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:12px}
+.log div{padding:2px 0;font-family:ui-monospace,monospace;font-size:12px;overflow-wrap:anywhere}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.muted{color:var(--muted)}
+</style></head><body>
+<header><strong>robowright codegen</strong><span id="robot" class="muted"></span><span id="time" class="muted"></span>
+<span style="flex:1"></span><button class="primary" id="save">Save test</button><span id="saved" class="muted"></span></header>
+<main>
+<section>
+  <div class="row"><select id="camera"></select></div>
+  <img id="frame" alt="the robot's camera">
+  <h2>Do</h2>
+  <div class="row"><select id="obj"></select><button data-act="pick">pick</button>
+    <span class="muted">place on</span><select id="onto"></select><button data-act="place">place</button></div>
+  <div class="row"><button data-act="open">open gripper</button><button data-act="close">close gripper</button>
+    <button data-act="home">home</button><button data-act="wait">wait 1 s</button></div>
+  <h2>Check</h2>
+  <div class="row"><select id="subject"></select><select id="matcher"></select><select id="arg"></select>
+    <label><input type="checkbox" id="negate"> not</label><button data-act="expect">expect</button></div>
+  <h2>Log</h2><div class="log" id="log"></div>
+</section>
+<section><h2>The test</h2><pre id="code"></pre></section>
+</main>
+<script>
+const ARGS = {to_be_inside:"container",to_be_near:"target",to_be_above:"target",to_be_touching:"other",to_be_holding:"obj"};
+const $ = id => document.getElementById(id);
+let S = null;
+function fill(sel, items, keep){const v = sel.value; sel.innerHTML = items.map(i => `<option>${i}</option>`).join(""); if (keep && items.includes(v)) sel.value = v;}
+async function refresh(){
+  S = await (await fetch("state")).json();
+  $("robot").textContent = S.robot; $("time").textContent = `t = ${S.time.toFixed(2)} s`;
+  fill($("camera"), S.cameras, true); fill($("obj"), S.objects, true);
+  const firstFill = !$("onto").options.length; fill($("onto"), S.objects, true); if (firstFill) $("onto").value = S.objects[S.objects.length - 1];
+  fill($("subject"), ["gripper", "robot", ...S.objects], true); fill($("matcher"), S.matchers, true); setArg();
+  $("frame").src = `frame.png?camera=${encodeURIComponent($("camera").value)}&t=${Date.now()}`;
+  $("code").textContent = S.code; $("code").scrollTop = $("code").scrollHeight;  // the newest lines are at the end
+  $("log").innerHTML = S.log.slice().reverse().map(e => `<div class="${e.ok ? "ok" : "bad"}">${e.ok ? "✓" : "✗"} ${e.action} ${JSON.stringify(e.args)}: ${e.result.replace(/</g, "&lt;")}</div>`).join("");
+}
+function setArg(){const k = ARGS[$("matcher").value]; $("arg").style.display = k ? "" : "none"; if (k && S) fill($("arg"), S.objects, true);}
+$("matcher").onchange = setArg; $("camera").onchange = refresh;
+async function act(action, args){
+  document.body.style.cursor = "progress";
+  try { await fetch("act", {method: "POST", body: JSON.stringify({action, args})}); } finally { document.body.style.cursor = ""; }
+  refresh();
+}
+document.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
+  const a = b.dataset.act;
+  if (a === "pick") act("pick", {object: $("obj").value});
+  else if (a === "place") act("place", {on: $("onto").value});
+  else if (a === "open" || a === "close") act("gripper", {action: a});
+  else if (a === "home") act("home", {});
+  else if (a === "wait") act("wait", {seconds: 1.0});
+  else if (a === "expect") {
+    const m = $("matcher").value, k = ARGS[m], args = k ? {[k]: $("arg").value} : {};
+    act("expect", {subject: $("subject").value, matcher: m, args, negate: $("negate").checked});
+  }
+});
+$("save").onclick = async () => { const r = await (await fetch("save", {method: "POST"})).json(); $("saved").textContent = `saved ${r.saved}`; };
+refresh();
+</script></body></html>

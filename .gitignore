@@ -8,6 +8,7 @@ dist/
 robowright-traces/
 bench/results/traces/
 *.html
+!src/robowright/*.html
 !src/robowright/viewer.html
 .verify-artifacts/
 MUJOCO_LOG.TXT
