@@ -1686,9 +1686,14 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 
 - **No physical robot yet:** the ROS 2 backend has run against `ros2_control`'s own controllers
   on mock hardware, against robowright's simulation served over ROS 2, against an SO-101 in
-  Gazebo, and against Universal Robots', MoveIt's, Kinova's and Nav2's own stacks, on Jazzy only. Nothing
+  Gazebo, and against Universal Robots', MoveIt's, Kinova's and Nav2's own stacks. Nothing
   has yet run on a real arm, where timing, a driver's quirks and perception noise will find what
   those could not.
+- **ROS 2 distributions:** everything runs on Jazzy. On Humble, the core suites pass
+  (`ros2_control` on mock hardware, a stack driving robowright's simulation, routes, `world.ros`
+  requests, `rw.ros2_stack`); robowright's Gazebo integration needs Gazebo Harmonic, which it
+  drives through Gazebo's own Python bindings: Humble's default, Fortress, has none, and reached
+  its end of life in September 2026.
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU). Isaac Lab and GPU-batched environments are not attached
   to yet, and vector environments only in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that

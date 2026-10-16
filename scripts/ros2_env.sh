@@ -13,6 +13,7 @@
 #   scripts/ros2_env.sh kortex                  # Kinova's ros2_kortex and Robotiq's descriptions, for the Kinova Gazebo rig
 #   scripts/ros2_env.sh nav2                    # a second environment with Nav2 and its TurtleBot simulations
 #   scripts/ros2_env.sh franka                  # Franka's franka_ros2 and franka_description, built, for the Franka Gazebo tests
+#   scripts/ros2_env.sh humble                  # ROS 2 Humble, the core (set ROBOWRIGHT_ROS2_ENV to a path of its own)
 #   scripts/ros2_env.sh pytest tests/test_ros2.py
 #
 # The environment lives in $ROBOWRIGHT_ROS2_ENV (default ~/.cache/robowright/ros2-jazzy).
@@ -23,6 +24,18 @@ TOOLS="$(dirname "$ENV")/micromamba"
 MM="${ROBOWRIGHT_MICROMAMBA:-$TOOLS/bin/micromamba}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
+if [ "${1:-}" = "humble" ]; then
+    # ROS 2 Humble, the core only (no Gazebo: robowright drives Gazebo Harmonic through its Python bindings, and
+    # Humble's default Gazebo, Fortress, has none): ros2_control, its controllers, and what the core tests use.
+    #   ROBOWRIGHT_ROS2_ENV=~/.cache/robowright/ros2-humble scripts/ros2_env.sh humble
+    [ -x "$MM" ] || { mkdir -p "$TOOLS"; curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C "$TOOLS" bin/micromamba; }
+    MAMBA_ROOT_PREFIX="$TOOLS/root" "$MM" create -y -p "$ENV" -c conda-forge -c robostack-humble \
+        python=3.12 ros-humble-ros-base ros-humble-ros2-control ros-humble-ros2-controllers \
+        ros-humble-controller-manager ros-humble-tf2-ros-py ros-humble-control-msgs \
+        ros-humble-robot-state-publisher ros-humble-gripper-controllers uv
+    "$ENV/bin/uv" pip install --python "$ENV/bin/python" -e "$REPO[dev]"
+    exit 0
+fi
 if [ "${1:-}" = "create" ]; then
     if [ ! -x "$MM" ]; then
         mkdir -p "$TOOLS"
