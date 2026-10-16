@@ -142,6 +142,31 @@ def build_server(session: Session | None = None):
         return await run(s.ros2_inspect, namespace, timeout)
 
     @tool
+    async def ros2_topic(name: str, timeout: float = 2.0) -> str:
+        """The newest message on a ROS 2 topic, with its rate and how many have arrived. Works on a
+        robot behind ROS 2 (robot_launch backend="ros2") or a world served with robot_serve_ros2."""
+        return await run(s.ros_topic, name, timeout)
+
+    @tool
+    async def ros2_call(service: str, request: dict | None = None, timeout: float = 10.0) -> str:
+        """Call a ROS 2 service and return its response. request: the request's fields as a dict
+        (its type is found from the graph), or omitted for an empty request. Time passes while it waits."""
+        return await run(s.ros_call, service, request, timeout)
+
+    @tool
+    async def ros2_send_goal(action: str, goal: dict | None = None, timeout: float = 60.0) -> str:
+        """Send a goal to a ROS 2 action server and wait for its result: succeeded, aborted,
+        canceled or rejected, and the result. goal: its fields as a dict. A goal on the arm's own
+        controller takes the arm from robowright until robowright next moves it."""
+        return await run(s.ros_send_goal, action, goal, timeout)
+
+    @tool
+    async def ros2_publish(topic: str, message: dict, type: str | None = None) -> str:
+        """Publish one message on a ROS 2 topic: its fields as a dict; the type comes from the
+        graph, or pass type="pkg/msg/Name" for a topic nobody has published yet."""
+        return await run(s.ros_publish, topic, message, type)
+
+    @tool
     async def robot_run_policy(
         policy: str, kwargs: dict | None = None, until: dict | None = None, timeout: float = 20.0, hold: float = 0.0
     ) -> str:

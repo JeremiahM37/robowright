@@ -85,3 +85,69 @@ def test_world_ros_is_gone_once_the_bridge_closes(world):
         assert world.ros.topics()
     with pytest.raises(CapabilityError, match="ros2 fixture"):
         world.ros  # noqa: B018
+
+
+def test_a_session_of_requests_becomes_a_test_that_passes(tmp_path):
+    """codegen writes each world.ros request again (the same message, by its fields; a goal's outcome asserted),
+    inside the bridge that served the world, and the generated test passes on its own."""
+    import subprocess
+    import sys
+
+    import robowright as rw
+    from robowright.codegen import generate
+    from robowright.ros2_bridge import Ros2Bridge
+
+    w = rw.launch(robot="so101", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)), name="requests")
+    with Ros2Bridge(w) as bridge:
+        w.ros.call(f"/{bridge.node.get_name()}/list_parameters", timeout=5)
+        _, goal = _goal(w.robot)
+        assert w.ros.send_goal("/arm_controller/follow_joint_trajectory", goal, timeout=10).ok
+        w.ros.publish("/forward_position_controller/commands", {"data": [float(v) for v in w.robot.qpos()]})
+        w.wait(0.2)
+    trace = w.close(trace_path=tmp_path / "requests.zip")
+    code = generate(trace, test_name="test_requests_again")
+    assert "with Ros2Bridge(world" in code and "world.ros.send_goal('/arm_controller/follow_joint_trajectory'" in code
+    assert "assert goal.status == 'succeeded', goal" in code
+    assert "world.ros.publish('/forward_position_controller/commands'" in code
+    (tmp_path / "test_requests_again.py").write_text(code)
+    env = {**os.environ, "ROS_DOMAIN_ID": str(int(os.environ.get("ROS_DOMAIN_ID", "0")) + 1)}
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path / "test_requests_again.py")],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        cwd=tmp_path,
+        env=env,
+    )
+    assert run.returncode == 0, code + "\n" + run.stdout[-3000:] + run.stderr[-2000:]
+
+
+def test_an_agent_reads_calls_and_sends_goals_through_the_session(tmp_path):
+    """The MCP tools ros2_topic / ros2_call / ros2_send_goal / ros2_publish, through the session they call, and the
+    test the session saves repeats them inside the bridge."""
+    from robowright.session import Session
+
+    s = Session(trace_dir=tmp_path)
+    try:
+        s.launch(robot="so101")
+        s.serve_ros2()
+        out = s.ros_topic("/joint_states")
+        assert "sensor_msgs/msg/JointState" in out and "shoulder_pan" in out
+        out = s.ros_call(f"/{s.bridge.node.get_name()}/list_parameters", {}, timeout=5)
+        assert "use_sim_time" in out
+        q = [float(v) + 0.1 for v in s.world.robot.qpos()[: s.world.robot.n_arm]]
+        goal = {
+            "trajectory": {"joint_names": list(s.world.robot.model.arm_joints), "points": [{"positions": q, "time_from_start": {"sec": 1}}]}
+        }
+        assert s.ros_send_goal("/arm_controller/follow_joint_trajectory", goal, timeout=10).startswith(
+            "/arm_controller/follow_joint_trajectory: succeeded"
+        )
+        assert "rejected" in s.ros_send_goal("/arm_controller/follow_joint_trajectory", {"trajectory": {"joint_names": ["nope"]}})
+        assert s.ros_publish("/forward_position_controller/commands", {"data": list(map(float, s.world.robot.qpos()))}) == (
+            "published on /forward_position_controller/commands"
+        )
+        code = s.generate_test("test_agent_session")
+        assert "with Ros2Bridge(world" in code and "assert goal.status == 'rejected', goal" in code
+    finally:
+        if s.world is not None:
+            s.close()

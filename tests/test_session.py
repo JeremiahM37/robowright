@@ -137,6 +137,7 @@ def test_mcp_server_exposes_the_session():
         async with Client(build_server()) as c:
             names = {t.name for t in (await c.list_tools()).tools}
             assert {"robot_launch", "robot_snapshot", "robot_pick", "robot_expect", "robot_generate_test"} <= names
+            assert {"ros2_inspect", "ros2_topic", "ros2_call", "ros2_send_goal", "ros2_publish"} <= names
             r = await c.call_tool("robot_launch", {"robot": "so101"})
             assert "cube" in r.content[0].text
             r = await c.call_tool("robot_pick", {"object": "banana"})

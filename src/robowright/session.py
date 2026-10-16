@@ -611,6 +611,26 @@ class Session:
             raise RobowrightError(f"{w.backend.robot_model.title} is an arm: use pick, place, move_to or gripper")
         return w.robot
 
+    # -- the ROS graph, directly (world.ros) -------------------------------------------------
+    def ros_topic(self, name: str, timeout: float = 2.0) -> str:
+        """The newest message on ``name``, its rate and count (waits up to ``timeout`` s for a first one)."""
+        h = self._w().ros.topic(name)
+        self._w().run_until(lambda: h.latest is not None, timeout=timeout)
+        if h.latest is None:
+            return f"{h.name} ({h.type}): no message within {timeout} s"
+        return f"{h.name} ({h.type}), {h.count} received, {h.hz:.1f} Hz:\n{_yaml(h.latest)}"
+
+    def ros_call(self, service: str, request: dict | None = None, timeout: float = 10.0) -> str:
+        return f"{service} answered:\n{_yaml(self._w().ros.call(service, request, timeout=timeout))}"
+
+    def ros_send_goal(self, action: str, goal: dict | None = None, timeout: float = 60.0) -> str:
+        r = self._w().ros.send_goal(action, goal, timeout=timeout)
+        return f"{action}: {r.status}" + (f"\n{_yaml(r.result)}" if r.result is not None else "")
+
+    def ros_publish(self, topic: str, message: dict, type: str | None = None) -> str:
+        self._w().ros.publish(topic, message, type=type)
+        return f"published on {topic}"
+
     def wait(self, seconds: float) -> str:
         if self.env is not None:
             raise RobowrightError(
@@ -1012,3 +1032,11 @@ def _load_policy(ref: str, kwargs: dict):
         return LearnedPolicy(ref, **kwargs)
     obj = getattr(importlib.import_module(mod), name)
     return obj(**kwargs) if isinstance(obj, type) else obj
+
+
+def _yaml(msg, limit: int = 3000) -> str:
+    """A ROS message as YAML for an agent to read, cut at ``limit`` characters (an image or a map is mostly data)."""
+    from rosidl_runtime_py.convert import message_to_yaml
+
+    text = message_to_yaml(msg, truncate_length=16)
+    return text if len(text) <= limit else text[:limit] + f"\n... ({len(text) - limit} more characters)"

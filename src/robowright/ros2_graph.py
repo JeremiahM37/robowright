@@ -165,7 +165,7 @@ class RosGraph:
         self._wait(client.service_is_ready, timeout, f"service {full} to be ready")
         future = client.call_async(req)
         self._wait(future.done, timeout, f"a response from {full}")
-        self._record("call", full, req)
+        self._record("call", full, req, timeout=timeout)
         return future.result()
 
     def send_goal(self, action: str, goal=None, *, timeout: float = 60.0, type: str | None = None, feedback=None) -> GoalResult:
@@ -186,18 +186,19 @@ class RosGraph:
         client = clients.get(full) or clients.setdefault(full, ActionClient(self.node, act, full))
         self._wait(client.server_is_ready, timeout, f"action server {full} to be ready")
         self._take_arm(full)
-        self._record("send_goal", full, g)
+        ev = self._record("send_goal", full, g, timeout=timeout)
         sent = client.send_goal_async(g, feedback_callback=(lambda m: feedback(m.feedback)) if feedback else None)
         self._wait(sent.done, timeout, f"{full} to accept or reject the goal")
         handle = sent.result()
         if not handle.accepted:
-            return GoalResult("rejected", None)
+            return _outcome(ev, GoalResult("rejected", None))
         done = handle.get_result_async()
         if not self._wait(done.done, timeout, None):
             handle.cancel_goal_async()
+            _outcome(ev, GoalResult("timed out", None))
             raise TimeoutError(f"{full}: no result within {timeout} s of simulated time (the goal was cancelled)")
         res = done.result()
-        return GoalResult(_STATUS.get(res.status, f"status {res.status}"), res.result)
+        return _outcome(ev, GoalResult(_STATUS.get(res.status, f"status {res.status}"), res.result))
 
     def _take_arm(self, name: str) -> None:
         """A command on the channel robowright drives the arm on: robowright lets go of the arm (its hold, sent
@@ -221,10 +222,13 @@ class RosGraph:
             raise TimeoutError(f"waited {timeout} s of simulated time for {what}")
         return ok
 
-    def _record(self, kind: str, name: str, msg) -> None:
+    def _record(self, kind: str, name: str, msg, **extra):
+        """The request in the trace: its fields (so codegen writes it again as a world.ros call) and a short text."""
         world = getattr(self, "world", None)
-        if world is not None and world.trace:
-            world.trace.event("edit", f"ros_{kind}", {"name": name, "type": _type_of(msg), "message": _short(msg)})
+        if world is None or not world.trace:
+            return None
+        args = {"name": name, "type": _type_of(msg), "fields": _fields(msg), "message": _short(msg), **extra}
+        return world.trace.event("edit", f"ros_{kind}", args)
 
 
 class GoalResult:
@@ -262,6 +266,43 @@ def _fill(cls, fields: dict | None):
 def _type_of(msg) -> str:
     mod = msg.__class__.__module__.split(".")  # e.g. std_msgs.msg._string
     return f"{mod[0]}/{mod[1]}/{msg.__class__.__name__}"
+
+
+def _outcome(event, result: GoalResult) -> GoalResult:
+    if event is not None:
+        event.args["status"] = result.status
+    return result
+
+
+def _fields(msg) -> dict:
+    """A message as plain data (JSON for the trace, a dict for set_message_fields), with only the fields that
+    differ from a new message of its type, so a regenerated call says what was set and nothing else."""
+    import json
+
+    from rosidl_runtime_py.convert import message_to_ordereddict
+
+    def plain(m):
+        return json.loads(json.dumps(message_to_ordereddict(m), default=list))
+
+    return _changed(plain(msg), plain(msg.__class__()))
+
+
+def _changed(d: dict, default: dict) -> dict:
+    out = {}
+    for k, v in d.items():
+        base = default.get(k)
+        if isinstance(v, dict) and isinstance(base, dict):
+            sub = _changed(v, base)
+            if sub:
+                out[k] = sub
+        elif v != base:
+            # Messages in a list have no default to compare with; an empty sequence in one is always its default.
+            out[k] = [_drop_empty(x) if isinstance(x, dict) else x for x in v] if isinstance(v, list) else v
+    return out
+
+
+def _drop_empty(d: dict) -> dict:
+    return {k: (_drop_empty(v) if isinstance(v, dict) else v) for k, v in d.items() if v != []}
 
 
 def _short(msg, limit: int = 300) -> str:

@@ -170,8 +170,10 @@ def test_abort_leaves_the_node_hearing_nothing(world, ros2, tmp_path):
 def test_delay_makes_the_readings_late_in_sim_time(world, ros2, tmp_path):
     seen = _listen(world, ros2, tmp_path, route={"/joint_states": rw.route.delay(0.5)})
     assert seen["count"] > 20
-    assert seen["lag"] == pytest.approx(0.5, abs=0.05)  # each reading half a second behind the clock, no more
-    assert min(seen["lags"]) == pytest.approx(0.5, abs=0.05)
+    # Each reading half a second behind the clock. The typical reading, not the earliest or latest: the node reads
+    # its clock from /clock too, and one message reaching it late makes a reading look less or more delayed than it
+    # was (seen: 0.4 s once, on a busy host). A route that delayed by a different amount moves the median.
+    assert float(np.median(seen["lags"])) == pytest.approx(0.5, abs=0.02)
 
 
 @ros
