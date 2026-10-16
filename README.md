@@ -510,10 +510,26 @@ sub-environment `i`, with its own subjects, expectations, invariants and trace, 
 vector env's own `step`. An invariant broken in one sub-environment is reported with its index, and
 an autoreset inside `step` is recorded as a reset on that index's trace. With 8 HalfCheetah
 sub-environments attaching costs 0.02 ms per vector step with traces off and 0.14 ms with them on
-(0.20 ms unattached). An `AsyncVectorEnv` is refused: its sub-environments live in worker
-processes, where robowright cannot read them. Each sub-environment's trace replays and is written as a
-test like any other attached run, autoresets included (the same state at every step over three
-sub-environments, in both of gymnasium's autoreset modes). The first reset must be given a seed
+(0.20 ms unattached).
+
+An `AsyncVectorEnv` runs its sub-environments in worker processes. robowright reaches them the way
+Playwright reaches a browser: from outside, through a wrapper in each worker that answers for that
+worker's own engine. Make the vector env with it, then attach as before:
+
+```python
+vec = gymnasium.make_vec("HalfCheetah-v5", 8, vectorization_mode="async", wrappers=[rw.attachable])
+worlds = rw.attach(vec)  # worlds[i]: sub-environment i, read in its worker
+```
+
+Everything above holds unchanged: subjects, expectations, invariants with the index, pushes (applied
+inside the worker, to that index only), autoresets and traces. Each index reads exactly what the same
+index of a `SyncVectorEnv` reads, step for step (MuJoCo and PyBullet, under `fork`, `spawn` and
+`forkserver`). Reads are fetched once per vector step for every index in one round trip: with 8
+HalfCheetah workers, 0.25 ms per vector step with traces off and 0.38 ms with them on (0.12 ms
+unattached). A vector env made without the wrapper is refused, saying how to add it, and its workers
+keep running. Each sub-environment's trace replays and is written as a test like any other attached run,
+autoresets included (the same state at every step over three sub-environments, in both of gymnasium's
+autoreset modes, from either vector env). The first reset must be given a seed
 (`vec.reset(seed=0)`): gymnasium seeds an unseeded environment from the operating system, so such a
 run cannot be repeated, and `replay` and `codegen` refuse its trace and say so. The same holds for a
 single gymnasium environment.
@@ -1700,8 +1716,8 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   its end of life in September 2026.
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU), and Isaac Lab environments on the GPU, watching one of their
   copies (`env_index`). An Isaac Lab run keeps its trace but is not replayed (its GPU physics is not bit-for-bit
-  repeatable), and contacts there come only from the scene's contact sensors. Vector environments are attached only
-  in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
+  repeatable), and contacts there come only from the scene's contact sensors. An `AsyncVectorEnv` is attached through
+  `rw.attachable` in its workers; other multi-process setups (Stable-Baselines3's `SubprocVecEnv`) are not. MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that
   rebuilds the simulation; Webots runs are replayed and not turned into tests. A gymnasium run
   first reset without a seed is neither.
@@ -1737,7 +1753,8 @@ Each of these builds on the extension points above, not on any one robot or fram
    from simulation as known divergences, as the engines' are.
 2. **More stacks and simulators:** replay for GPU-batched environments (a saved state to start from, and a tolerance for
    physics that is not bit-for-bit repeatable).
-3. **Attaching to sub-environments in other processes** (`AsyncVectorEnv`).
+3. **Other multi-process vector environments** (Stable-Baselines3's `SubprocVecEnv`), the way `AsyncVectorEnv` is
+   attached now.
 
 ## License
 

@@ -1,8 +1,9 @@
 """robowright attached to a gymnasium vector environment: a SyncVectorEnv gives one world per sub-environment.
 
 The sub-environments are gymnasium's own MuJoCo tasks (HalfCheetah-v5; FetchReach-v4 when gymnasium-robotics is
-installed), each read through its own model and data. An AsyncVectorEnv is refused: its sub-environments run in
-other processes. Each test is skipped where its package is not installed.
+installed), each read through its own model and data. An AsyncVectorEnv's sub-environments run in worker processes:
+made with rw.attachable, each index is read in its worker and must read what a SyncVectorEnv's same index
+reads. Each test is skipped where its package is not installed.
 """
 
 import numpy as np
@@ -129,16 +130,112 @@ def test_argument_errors_are_said_in_one_line(make_vec, settings):
         rw.attach(vec, step=lambda: None, settings=settings)
 
 
-def test_an_async_vector_env_is_refused_with_the_reason_and_the_alternative():
-    vec = gym.vector.AsyncVectorEnv([lambda: gym.make("HalfCheetah-v5") for _ in range(2)])
-    try:
-        with pytest.raises(CapabilityError) as info:
-            rw.attach(vec)
-        msg = str(info.value)
-        assert "AsyncVectorEnv" in msg and "worker process" in msg, msg
-        assert "SyncVectorEnv" in msg and "rw.attach(gymnasium.make(env_id))" in msg, msg
-    finally:
+@pytest.fixture
+def make_async():
+    vecs = []
+
+    def make(n: int = 3, env_id: str = "HalfCheetah-v5", wrap: bool = True, **kwargs):
+        wrappers = [rw.attachable] if wrap else None
+        vec = gym.make_vec(env_id, n, vectorization_mode="async", wrappers=wrappers, **kwargs)
+        vecs.append(vec)
+        return vec
+
+    yield make
+    for vec in vecs:
         vec.close()
+
+
+def run_torsos(vec, settings, steps=20, n=3):
+    """Attach, reset with seeds 0..n-1, take ``steps`` seeded random vector steps: each step's torso per index."""
+    worlds = rw.attach(vec, settings=settings)
+    vec.reset(seed=list(range(n)))
+    rng = np.random.default_rng(ACTION_SEED)
+    out = []
+    for _ in range(steps):
+        vec.step(rng.uniform(-1, 1, size=(n, 6)))
+        out.append([w.body("torso").position.copy() for w in worlds])
+    return worlds, np.array(out)
+
+
+def test_an_async_index_reads_what_the_same_sync_index_reads(make_vec, make_async, settings):
+    sync_worlds, sync = run_torsos(make_vec(3), settings)
+    worlds, remote = run_torsos(make_async(3), settings)
+    assert np.array_equal(sync, remote), f"max difference {np.abs(sync - remote).max()}"
+    assert [w.index for w in worlds] == [0, 1, 2]
+    for s, w in zip(sync_worlds, worlds, strict=True):
+        assert w.step_count == s.step_count == 20 and len(w.trace.t) == 21
+        assert w.time == pytest.approx(s.time) and w.backend.control_dt == pytest.approx(s.backend.control_dt)
+        assert w.bodies() == s.bodies() and w.backend.contacts() == s.backend.contacts()
+        assert w.backend.remote_engine == "mujoco"
+
+
+def test_a_push_on_one_async_index_moves_that_index_only(make_async, settings):
+    def run(push: bool):
+        vec = make_async(3, env_id="Ant-v5")  # the Ant's torso is a free body
+        worlds = rw.attach(vec, settings=settings)
+        vec.reset(seed=[0, 1, 2])
+        if push:
+            worlds[1].push("torso", (300.0, 0.0, 0.0), at=0.0, duration=0.1)
+        for _ in range(10):
+            vec.step(np.zeros((3, 8)))
+        out = [w.body("torso").position.copy() for w in worlds]
+        worlds.close()
+        return out
+
+    still, pushed = run(False), run(True)
+    assert np.allclose(still[0], pushed[0]) and np.allclose(still[2], pushed[2]), "the push reached another index"
+    assert np.linalg.norm(pushed[1] - still[1]) > 0.01, "the push did not move the pushed index"
+
+
+def test_an_invariant_violated_in_one_async_index_is_reported_for_that_index(make_async, settings):
+    vec = make_async(3)
+    worlds = rw.attach(vec, settings=settings)
+    vec.reset(seed=[0, 1, 2])
+    start = worlds[2].body("torso").position.copy()
+    expect(worlds[2].body("torso")).always.to_be_near(start, tol=0.05)
+    rng = np.random.default_rng(ACTION_SEED)
+    with pytest.raises(InvariantViolation, match="sub-environment 2: invariant violated"):
+        for _ in range(50):
+            vec.step(rng.uniform(-1, 1, size=(3, 6)))
+    assert worlds[2].step_count < 50
+    vec.step(np.zeros((3, 6)))  # the workers are untouched by the violation, which was raised here
+
+
+def test_an_async_autoreset_is_recorded_on_its_index(make_async, settings):
+    vec = make_async(2, max_episode_steps=5)
+    worlds = rw.attach(vec, settings=settings)
+    vec.reset(seed=[0, 1])
+    for _ in range(12):
+        vec.step(np.zeros((2, 6)))
+    for i, w in enumerate(worlds):
+        resets = [e.step for e in w.trace.events if e.type == "log" and e.name == "env.reset"]
+        assert resets == [0, 5, 10], f"index {i} reset at steps {resets}"
+        assert w.step_count == 10 and len(w.trace.t) == 11
+
+
+def test_closing_async_worlds_releases_the_vector_env(make_async, settings):
+    vec = make_async(2)
+    worlds = rw.attach(vec, settings=settings)
+    with pytest.raises(CapabilityError, match="attached already"):
+        rw.attach(vec, settings=settings)
+    vec.reset(seed=[0, 1])
+    vec.step(np.zeros((2, 6)))
+    worlds.close()
+    vec.step(np.zeros((2, 6)))  # no longer observed
+    assert [w.step_count for w in worlds] == [1, 1]
+    again = rw.attach(vec, settings=settings)
+    vec.step(np.zeros((2, 6)))
+    assert [w.step_count for w in again] == [1, 1]
+
+
+def test_an_async_vector_env_without_robowrights_wrapper_is_refused_and_keeps_running(make_async):
+    vec = make_async(2, wrap=False)
+    with pytest.raises(CapabilityError) as info:
+        rw.attach(vec)
+    msg = str(info.value)
+    assert "worker process" in msg and "wrappers=[rw.attachable]" in msg, msg
+    vec.reset(seed=[0, 1])  # asking did not end a worker (an error in one would)
+    vec.step(np.zeros((2, 6)))
 
 
 def test_fetch_sub_environments_read_their_own_gripper_site(make_vec, settings):

@@ -482,8 +482,11 @@ class AttachedWorld(World):
         except InvariantViolation as e:  # the vector step stops here, so the message must say which index broke
             raise InvariantViolation(f"sub-environment {self.index}: {e}") from e
 
-    def _physics_step(self, fn, pushes: bool = True, action=_OBSERVE, own: bool = False):
-        """One physics step: apply pushes for it, run the environment's own step, then observe the result."""
+    def _physics_step(self, fn, pushes: bool = True, action=_OBSERVE, own: bool = False, forces: dict | None = None, t0=None):
+        """One physics step: apply pushes for it, run the environment's own step, then observe the result.
+
+        ``forces`` and ``t0``: a step already taken elsewhere (an AsyncVectorEnv's worker), with these pushes applied
+        there, from this simulation time."""
         if self.backend.ensure_bound():
             self._adopt()
         if self.backend.pending:
@@ -491,11 +494,14 @@ class AttachedWorld(World):
                 "the simulation has no physics client yet: reset the environment first, or pass rw.attach(engine='pybullet', client=...)"
             )
         self._begin()
-        forces = self.faults.forces_for_step(self.step_count) if pushes else {}
-        saved = self.backend.data.xfrc_applied.copy() if forces and self.backend.engine == "mujoco" else None
-        for name, f in forces.items():
+        taken = forces is not None
+        if not taken:
+            forces = self.faults.forces_for_step(self.step_count) if pushes else {}
+        saved = self.backend.data.xfrc_applied.copy() if forces and not taken and self.backend.engine == "mujoco" else None
+        for name, f in forces.items() if not taken else ():
             self.backend.apply_force(name, f)  # MuJoCo: undone in the finally below; other engines: one step only
-        t0 = self.backend.time
+        if t0 is None:
+            t0 = self.backend.time
         try:
             out = fn() if fn is not None else None
         finally:
@@ -591,7 +597,8 @@ def attach(
     A vector environment (``gymnasium.make_vec(..., vectorization_mode="sync")`` or a ``SyncVectorEnv``) is
     ``attach(vec_env)``, which returns one world per sub-environment: ``worlds[i]`` is index ``i``, and each is
     an ordinary world, so its subjects, expectations, invariants and trace are its own. ``advance`` then steps the
-    whole vector. An ``AsyncVectorEnv`` is refused: its sub-environments run in other processes.
+    whole vector. An ``AsyncVectorEnv`` is attached the same way when its sub-environments are wrapped by
+    :func:`rw.attachable <robowright.attached_remote.attachable>` in their workers (``make_vec(..., wrappers=[rw.attachable])``).
 
     A Gazebo (gz sim) world is ``attach(engine="gazebo")``, with no environment: it attaches to the world running
     in this ``GZ_PARTITION`` (``world_name=`` when several run), over Gazebo's transport and without ROS. A paused
@@ -759,20 +766,20 @@ def _vector_of(env):
 
 
 def _attach_vector(vec, *, advance, engine, dt, name: str, seed: int, settings) -> AttachedVectorWorlds:
-    """One world per sub-environment of a SyncVectorEnv, each through the single-environment path."""
+    """One world per sub-environment of a SyncVectorEnv, each through the single-environment path (an AsyncVectorEnv:
+    :mod:`robowright.attached_remote`)."""
     from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 
     if isinstance(vec, AsyncVectorEnv):
-        raise CapabilityError(
-            "cannot attach to the sub-environments of an AsyncVectorEnv: each one runs in its own worker process, "
-            "and robowright reads the simulation from this process, so its state would have to be fetched or faked. "
-            "Use gymnasium.make_vec(..., vectorization_mode='sync') (a SyncVectorEnv) to attach to every index, "
-            "or attach to one environment built in this process: rw.attach(gymnasium.make(env_id))."
-        )
+        if engine is not None or dt is not None:
+            raise ValueError("an AsyncVectorEnv's engines are found in its workers: attach(vec), with no engine= or dt=")
+        from .attached_remote import attach_async
+
+        return attach_async(vec, advance=advance, name=name, seed=seed, settings=settings)
     if not isinstance(vec, SyncVectorEnv):
         raise CapabilityError(
-            f"cannot attach to {type(vec).__name__}: robowright reaches the sub-environments of a SyncVectorEnv only; "
-            "attach to one environment built in this process instead: rw.attach(env)."
+            f"cannot attach to {type(vec).__name__}: robowright reaches the sub-environments of a SyncVectorEnv, and of an "
+            "AsyncVectorEnv made attachable (see rw.attachable); attach to one environment built in this process instead: rw.attach(env)."
         )
     worlds: list[AttachedWorld] = []
     try:
