@@ -65,6 +65,7 @@ class Snapshot:
     controllers: list = field(default_factory=list)  # ros2_discover.Controller, active ones
     models: dict = field(default_factory=dict)  # Gazebo model -> (pos, quat)
     world: str | None = None  # the Gazebo world, when there is one
+    localized: object = None  # AMCL's pose (geometry_msgs/PoseWithCovarianceStamped), where AMCL runs
 
 
 class Ros2Stack:
@@ -80,6 +81,7 @@ class Ros2Stack:
         namespace: str = "",
         log_dir: str | Path | None = None,
         ready=None,
+        setup=None,
     ):
         self.args = shlex.split(command) if isinstance(command, str) else list(command)
         self.env = dict(env or {})
@@ -89,6 +91,9 @@ class Ros2Stack:
         # More the stack needs before a test may start, beyond what is read from the graph: a function of this stack
         # returning True, or a reason it is not ready yet (Nav2's lifecycle nodes active, a map loaded, ...).
         self.ready = ready
+        # Run once when the stack is up, before what reset() puts back is taken (Playwright's globalSetup): tell a
+        # localizer where the robot is, load a map, spawn a table. A function of this stack.
+        self.setup = setup
         self.log_dir = Path(log_dir or tempfile.mkdtemp(prefix="robowright-stack-"))
         self.log = self.log_dir / "stack.log"
         self.proc: subprocess.Popen | None = None
@@ -134,6 +139,8 @@ class Ros2Stack:
             self._link = _Link(self.namespace)
             self._link.listen()
             self._wait_ready(t0 + self.timeout)
+            if self.setup is not None:
+                self.setup(self)
             self.snapshot = self._take_snapshot()
             self._link.quiet()
         except BaseException:
@@ -187,7 +194,12 @@ class Ros2Stack:
             if time.monotonic() > deadline:
                 raise StackError(f"the stack was not up within {self.timeout:g} s ({why}):\n{self.log_tail()}")
             time.sleep(0.1)
-            controllers = link.controller_list() if link.manager() else []
+            try:
+                controllers = link.controller_list(timeout=1.0) if link.manager() else []
+            except StackError:  # in the graph a moment before it answers, while the stack is still starting
+                why = "the controller manager is not answering yet"
+                last, since = None, None
+                continue
             state = tuple(sorted((c.name, c.state) for c in controllers))
             spawning = _spawners(self.proc.pid)
             extra = self.ready(self) if self.ready is not None else True
@@ -216,7 +228,10 @@ class Ros2Stack:
         from . import ros2_discover as discover
 
         link = self._link
-        snap = Snapshot(joints=link.joints(timeout=3.0), controllers=[c for c in link.controller_list() if c.active])
+        # Controllers only where there is a manager (a stack without ros2_control, Nav2's TurtleBot3, has none)
+        controllers = [c for c in link.controller_list() if c.active] if link.manager() else []
+        snap = Snapshot(joints=link.joints(timeout=3.0), controllers=controllers)
+        snap.localized = link.amcl_pose() if link.has_topic("/amcl_pose") else None
         worlds = discover._gazebo_worlds()
         if worlds:
             snap.world = worlds[0]
@@ -266,6 +281,9 @@ class Ros2Stack:
             if lost:
                 raise StackError(f"controllers no longer active: {lost}")
         took["controllers"], t = round(time.monotonic() - t, 3), time.monotonic()
+        link.cancel_all_goals()  # whatever the last test started (a navigation goal, a trajectory) stops first
+        link.stop_base()
+        took["stopped"], t = round(time.monotonic() - t, 3), time.monotonic()
         if snap.world is not None:
             gz = self._gazebo(snap.world)
             models = set(_models(gz))
@@ -284,7 +302,10 @@ class Ros2Stack:
             link.drive_home(self.namespace, snap)
         finally:
             link.quiet()
-        took["joints"] = round(time.monotonic() - t, 3)
+        took["joints"], t = round(time.monotonic() - t, 3), time.monotonic()
+        if snap.localized is not None:
+            link.relocalize(snap.localized)
+            took["localized"] = round(time.monotonic() - t, 3)
 
 
 def ros2_stack(command: str | list, **kwargs) -> Ros2Stack:
@@ -457,6 +478,154 @@ class _Link:
             out.append(Controller(c.name, c.type, c.state, list(dict.fromkeys(i.rsplit("/", 1)[0] for i in claimed))))
         return out
 
+    def has_topic(self, name: str) -> bool:
+        return any(n == name for n, _ in self.node.get_topic_names_and_types())
+
+    def amcl_pose(self, timeout: float = 5.0):
+        """AMCL's newest pose (it latches it: transient local), or None."""
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        from rclpy.qos import DurabilityPolicy, QoSProfile
+
+        got = []
+        qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        sub = self.node.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", got.append, qos)
+        try:
+            _wait(lambda: bool(got), timeout)
+        finally:
+            self.node.destroy_subscription(sub)
+        return got[-1] if got else None
+
+    def cancel_all_goals(self, timeout: float = 2.0) -> None:
+        """Cancel every goal of every action server in the graph (a zero goal id and stamp means all of them)."""
+        from action_msgs.srv import CancelGoal
+        from rclpy.action import get_action_names_and_types
+
+        pending = []
+        for name, _ in get_action_names_and_types(self.node):
+            client = self._pubs.get(("cancel", name))
+            if client is None:
+                client = self._pubs[("cancel", name)] = self.node.create_client(CancelGoal, f"{name}/_action/cancel_goal")
+            if client.service_is_ready():
+                pending.append(client.call_async(CancelGoal.Request()))
+        _wait(lambda: all(f.done() for f in pending), timeout)
+
+    def stop_base(self) -> None:
+        """A zero velocity on cmd_vel, where something drives on it: a base the last test left moving stops."""
+        from .ros2_discover import CMD_VEL_TYPES, _topic
+
+        topic = _topic(self.namespace, "cmd_vel")
+        types = dict(self.node.get_topic_names_and_types()).get(topic, [])
+        if not self.node.count_subscribers(topic) or not types:
+            return
+        if types[0] == CMD_VEL_TYPES[1]:
+            from geometry_msgs.msg import TwistStamped as T
+        else:
+            from geometry_msgs.msg import Twist as T
+        key = ("cmd_vel", T.__name__)
+        if key not in self._pubs:
+            self._pubs[key] = self.node.create_publisher(T, topic, 10)
+        self._pubs[key].publish(T())
+
+    def relocalize(self, pose, timeout: float = 10.0) -> None:
+        """Tell AMCL the robot is at ``pose`` again (RViz's "2D pose estimate"), clear Nav2's costmaps of what the
+        last test's sensors marked, and wait until AMCL's estimate is back there."""
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+
+        key = ("initialpose",)
+        if key not in self._pubs:
+            self._pubs[key] = self.node.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = pose.header.frame_id or "map"
+        msg.pose.pose = pose.pose.pose
+        # Tight: the robot is exactly where it was put back. The pose kept at the start carries the spread of the first
+        # estimate (RViz's 0.25 m^2), which AMCL narrows only as the robot moves: re-sent, every test started unsure.
+        cov = [0.0] * 36
+        cov[0] = cov[7] = 0.0025  # (5 cm)^2
+        cov[35] = 0.0025  # (0.05 rad)^2
+        msg.pose.covariance = cov
+        target = np.array([pose.pose.pose.position.x, pose.pose.pose.position.y])
+        before = self.newest_map_to_odom()
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self._pubs[key].publish(msg)  # again until AMCL has it: it can miss a message sent as it re-plans
+            now = self.amcl_pose(timeout=1.0)
+            if now is not None and np.linalg.norm(np.array([now.pose.pose.position.x, now.pose.pose.position.y]) - target) < 0.05:
+                break
+        else:
+            raise StackError("AMCL did not take the pose the stack started from")
+        self._wait_map_to_odom(before, timeout=timeout)
+        self._clear_costmaps()
+
+    def _wait_map_to_odom(self, before: float | None, timeout: float) -> None:
+        """Until a lookup of map -> odom at the current time gives AMCL's new transform. AMCL stamps it ahead of the
+        clock (its transform_tolerance, 1 s in Nav2's defaults), so for that long a lookup still found the old one, or
+        interpolated between old and new across the jump the reset made; a goal planned then went nowhere near the robot
+        (Nav2's controller: "Resulting plan has 0 poses in it", FollowPath INVALID_PATH). ``before``: the newest stamp
+        AMCL had published before the re-seed."""
+        from rclpy.qos import qos_profile_sensor_data
+        from rosgraph_msgs.msg import Clock
+        from tf2_msgs.msg import TFMessage
+
+        new: list = []
+        clock: list = []
+
+        def on_tf(m):
+            for t in m.transforms:
+                if t.header.frame_id.lstrip("/") == "map" and t.child_frame_id.lstrip("/") == "odom":
+                    stamp = t.header.stamp.sec + t.header.stamp.nanosec * 1e-9
+                    if before is None or stamp > before:
+                        new.append(stamp)
+
+        subs = [
+            self.node.create_subscription(TFMessage, "/tf", on_tf, 100),
+            self.node.create_subscription(
+                Clock, "/clock", lambda m: clock.append(m.clock.sec + m.clock.nanosec * 1e-9), qos_profile_sensor_data
+            ),
+        ]
+        try:
+            if not _wait(lambda: bool(new) and bool(clock) and clock[-1] >= new[0], timeout):
+                raise StackError("AMCL's new map -> odom transform did not come into effect after it was re-seeded")
+        finally:
+            for sub in subs:
+                self.node.destroy_subscription(sub)
+
+    def newest_map_to_odom(self, timeout: float = 1.0) -> float | None:
+        """The newest stamp of a map -> odom transform heard within ``timeout`` (None: none)."""
+        from tf2_msgs.msg import TFMessage
+
+        stamps: list = []
+
+        def on_tf(m):
+            stamps.extend(
+                t.header.stamp.sec + t.header.stamp.nanosec * 1e-9
+                for t in m.transforms
+                if t.header.frame_id.lstrip("/") == "map" and t.child_frame_id.lstrip("/") == "odom"
+            )
+
+        sub = self.node.create_subscription(TFMessage, "/tf", on_tf, 100)
+        try:
+            _wait(lambda: bool(stamps), timeout)
+        finally:
+            self.node.destroy_subscription(sub)
+        return max(stamps) if stamps else None
+
+    def _clear_costmaps(self, timeout: float = 3.0) -> None:
+        try:
+            from nav2_msgs.srv import ClearEntireCostmap
+        except ImportError:
+            return
+        pending = []
+        for name, types in self.node.get_service_names_and_types():
+            # The local costmaps only: a rolling window of what the sensors saw, which the last test's run filled. Clearing
+            # the global one wiped its static map layer too, until its next update: a goal planned in that moment went
+            # through a wall, and the controller refused the path (FollowPath INVALID_PATH).
+            if "nav2_msgs/srv/ClearEntireCostmap" in types and "local" in name:
+                client = self._pubs.get(("clear", name)) or self.node.create_client(ClearEntireCostmap, name)
+                self._pubs[("clear", name)] = client
+                if client.service_is_ready():
+                    pending.append(client.call_async(ClearEntireCostmap.Request()))
+        _wait(lambda: all(f.done() for f in pending), timeout)
+
     def _action(self, kind, name: str):
         if name not in self._actions:
             from rclpy.action import ActionClient
@@ -466,15 +635,18 @@ class _Link:
 
     def drive_home(self, namespace: str, snap: Snapshot, timeout: float = 30.0) -> None:
         """Each arm and gripper controller's joints back to where they were when the stack came up."""
+        # Only joints a controller drives can be driven back: a wheel that turned is where its base drove, not a
+        # joint to undo (the base itself is put back with Gazebo's models).
+        driven = {j for c in snap.controllers if c.interface is not None for j in c.joints}
+        now = self.joints(timeout=3.0)
+        far = {j: q for j, q in snap.joints.items() if j in driven and j in now and abs(now[j] - q) > _JOINT_TOL}
+        if not far:
+            return
         from builtin_interfaces.msg import Duration
         from control_msgs.action import FollowJointTrajectory, GripperCommand
         from std_msgs.msg import Float64MultiArray
         from trajectory_msgs.msg import JointTrajectoryPoint
 
-        now = self.joints(timeout=3.0)
-        far = {j: q for j, q in snap.joints.items() if j in now and abs(now[j] - q) > _JOINT_TOL}
-        if not far:
-            return
         results = []
         for c in snap.controllers:
             joints = [j for j in c.joints if j in snap.joints]

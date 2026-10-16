@@ -13,6 +13,7 @@ tests/test_nav2_examples.py.
 
 import importlib.util
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -55,11 +56,35 @@ GOAL_TOL = 0.25  # xy_goal_tolerance in nav2_bringup's nav2_params.yaml: where N
 BELIEF_ERROR = 0.1  # how far AMCL's belief is from Gazebo's truth at rest, with margin (measured: at most 0.035 m)
 
 
-@pytest.fixture
-def stack(tmp_path):
-    # One simulation per test, so that each starts from the sandbox as the launch file puts it.
-    with rig.nav2_stack(tmp_path) as st:
+@pytest.fixture(scope="module")
+def nav2(tmp_path_factory):
+    """Nav2's TurtleBot3 simulation, started once for the module (rw.ros2_stack) and put back before each test:
+    the robot back where it spawned, AMCL told so again, goals cancelled and costmaps cleared. It came up as a
+    stack per test before (8-12 s to start and 10 s to stop, against 1-13 s for each test)."""
+    d = tmp_path_factory.mktemp("nav2")
+    cmd = ["ros2", "launch", "nav2_bringup", "tb3_simulation_launch.py", "headless:=True", "use_rviz:=False"]
+    cmd.append(f"world:={rig.observed_world(d)}")
+
+    def localized(st):
+        return bool(rig.LOCALIZED.search(rig._read(st.log))) or "Nav2's localization is not active yet"
+
+    def navigation(st):
+        # AMCL's start pose, as RViz's "2D pose estimate" gives it, then the navigation lifecycle (it waits for it)
+        rig.set_initial_pose(*SPAWN[:2], 0.0)
+        deadline = time.monotonic() + 240
+        while not rig.ACTIVE.search(rig._read(st.log)):
+            if time.monotonic() > deadline or not st.alive:
+                raise RuntimeError(f"Nav2's navigation stack did not become active:\n{st.log_tail()}")
+            time.sleep(0.5)
+
+    with rw.ros2_stack(cmd, env={"DISPLAY": None}, ready=localized, setup=navigation, log_dir=d, timeout=240) as st:
         yield st
+
+
+@pytest.fixture
+def stack(nav2):
+    nav2.reset()
+    return nav2
 
 
 @pytest.fixture
@@ -115,10 +140,9 @@ def test_a_session_observes_the_mobile_robot(stack):
 
 
 @pytest.fixture
-def navigating(tmp_path):
-    # Navigation needs AMCL's initial pose and the navigation lifecycle active: a stack of its own.
-    with rig.nav2_stack(tmp_path, navigation=True) as st:
-        yield st
+def navigating(nav2):
+    nav2.reset()
+    return nav2
 
 
 @pytest.fixture
