@@ -57,6 +57,7 @@ pytest.register_assert_rewrite("robowright.contract")
 _TRACES = pytest.StashKey[list]()
 _REPORTS = pytest.StashKey[dict]()
 _LIVE = pytest.StashKey[object]()
+_STACK = pytest.StashKey[object]()  # this worker's ROS 2 stack ([ros2] stack), or None
 
 
 def pytest_addoption(parser):
@@ -205,11 +206,18 @@ def pytest_xdist_auto_num_workers(config):
     return auto_workers([b.strip() for b in config.getoption("--rw-backend").split(",") if b.strip()])
 
 
+STACK_ROBOT = "stack"  # --rw-robot stack: the robot the ROS 2 stack's own description publishes
+
+
 def _robot_names(config) -> list[str]:
     raw = [r.strip() for r in config.getoption("--rw-robot").split(",") if r.strip()]
+    if raw == ["so101"] and config.getoption("--rw-backend", "") == "ros2" and _stack_configured():
+        return [STACK_ROBOT]  # no robot named, against the project's own stack: its robot
     out = []
     for r in raw:
-        if r in ("all", "arms", "legged"):
+        if r == STACK_ROBOT:
+            out.append(r)
+        elif r in ("all", "arms", "legged"):
             out.extend(_robots.names({"all": "arm", "arms": "arm", "legged": "legged"}[r]))
         elif _robots.is_file(r):  # a model file: tests get its absolute path, so traces replay from anywhere
             from pathlib import Path
@@ -240,7 +248,7 @@ def pytest_generate_tests(metafunc):
         if m:
             names = [n for n in names if n in m.args] or list(m.args[:1])
         if len(names) > 1 or m:
-            metafunc.parametrize("rw_robot", names, ids=[_robots.get(n).name for n in names], scope="function")
+            metafunc.parametrize("rw_robot", names, ids=[_robot_id(n) for n in names], scope="function")
 
 
 @pytest.hookimpl(tryfirst=True)  # before xdist reads the groups into node ids
@@ -275,7 +283,7 @@ def pytest_collection_modifyitems(config, items):
         p = getattr(item, "callspec", None)
         if p is not None and "rw_backend" in p.params:
             robot = p.params.get("rw_robot", "")
-            group = f"{p.params['rw_backend']}-{_robots.get(robot).name if robot else ''}-{item.path.stem}"
+            group = f"{p.params['rw_backend']}-{_robot_id(robot) if robot else ''}-{item.path.stem}"
             if item.get_closest_marker("trials"):
                 # A trials test builds a world per trial, so it shares little with its robot's
                 # other tests, and it is the longest: on its own it can start while they run.
@@ -290,6 +298,8 @@ def rw_robot(request) -> str:  # parametrized by pytest_generate_tests when seve
 
 @pytest.fixture
 def rw_scene(rw_robot) -> SceneSpec:
+    if rw_robot == STACK_ROBOT:  # a robot robowright knows only from the stack: no objects placed for its reach
+        return SceneSpec(robot=None, objects=[], cameras=[])
     return default_scene(rw_robot)
 
 
@@ -301,6 +311,10 @@ def _scene_for(item, request) -> SceneSpec:
     else:
         spec = request.getfixturevalue("rw_scene")
     robot = request.getfixturevalue("rw_robot")
+    if robot == STACK_ROBOT:
+        import dataclasses
+
+        return dataclasses.replace(spec, robot=None, cameras=[c for c in spec.cameras if spec.robot is None])
     if spec.robot != robot:
         import dataclasses
 
@@ -337,13 +351,54 @@ def _attempt(item) -> int:
 def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> World:
     if backend != "ros2":
         rw.world.check_mujoco()
+    stack = _ros2_stack(item.config) if backend == "ros2" else None
+    reset = None
+    if stack is not None:
+        before = stack.restarts
+        reset = {"seconds": round(stack.reset(), 3), "restarted": stack.restarts > before, "parts": dict(stack.last_reset)}
     settings = _settings(item.config, _attempt(item))
-    w = World(_scene_for(item, request), backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=settings)
+    scene = _scene_for(item, request)
+    if backend == "ros2" and scene.robot is None:  # the robot the stack's own description publishes, as rw.launch takes it
+        scene = rw.world.ros2_scene(scene, backend, None, {}, None)
+    w = World(scene, backend=backend, seed=seed, name=_plain(item.nodeid) + suffix, settings=settings)
+    if reset is not None and w.trace:
+        w.trace.event("edit", "ros2_stack_reset", reset)
     rw._current.set(w)
     view = _live(item.config)
     if view is not None:
         view.watch(w)
     return w
+
+
+def _robot_id(name: str) -> str:
+    return name if name == STACK_ROBOT else _robots.get(name).name
+
+
+def _stack_configured() -> bool:
+    try:
+        from .backends.ros2_backend import settings as ros2_settings
+
+        return bool(ros2_settings().get("stack"))
+    except Exception:
+        return False
+
+
+def _ros2_stack(config):
+    """This worker's ROS 2 stack (``[ros2] stack``), started on first use and stopped when the run ends; None when
+    the project names none (the stack is then expected to be running)."""
+    if _STACK not in config.stash:
+        from .backends.ros2_backend import settings as ros2_settings
+        from .stack import Ros2Stack
+
+        spec = ros2_settings().get("stack")
+        stack = None
+        if spec:
+            spec = {"command": spec} if isinstance(spec, (str, list)) else dict(spec)
+            stack = Ros2Stack(spec.pop("command"), **spec)
+            config.add_cleanup(stack.stop)
+            stack.start()
+        config.stash[_STACK] = stack
+    return config.stash[_STACK]
 
 
 def _live(config):
@@ -377,7 +432,10 @@ def world(request, rw_backend, rw_robot):
         yield None  # pytest_pyfunc_call builds one world per trial
         return
     w = _make_world(item, request, rw_backend, _seed(item))
-    w.robot.reset_to()
+    if not (rw_backend == "ros2" and _ros2_stack(item.config) is not None):
+        # With a stack of the project's own, a test starts where the stack's reset put it (where the stack came up):
+        # driving on to robowright's home pose as well moved the arm twice, slowly, before every test.
+        w.robot.reset_to()
     yield w
     rep = getattr(item, "_rw_call_report", None)
     failed = rep is None or rep.failed

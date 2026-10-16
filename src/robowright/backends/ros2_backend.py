@@ -89,7 +89,12 @@ _DEFAULTS = {
     # The topic a robot's own description is on (std_msgs/String, transient local), read when
     # the robot is not named.
     "description": "robot_description",
+    # The stack the tests run against, started once per pytest worker and put back before each test
+    # (robowright.stack): its command, or {command = "...", env = {...}, timeout = 240, cwd = "..."}.
+    # Without it, the stack is expected to be running already.
+    "stack": None,
 }
+_STACK_KEYS = ("command", "env", "timeout", "cwd")
 _INTERFACES = {"arm": ("position", "trajectory"), "gripper": ("with_arm", "position", "trajectory", "action", "none")}
 
 
@@ -112,6 +117,13 @@ def settings(options: dict | None = None) -> dict:
             "ros2 base takes frame and in (where it is), and cmd_vel and navigate (its command topic and navigation action), "
             "e.g. base = {frame = 'base_footprint', in = 'map'}"
         )
+    stack = out["stack"]
+    if stack is not None and not isinstance(stack, (str, list)):
+        if not isinstance(stack, dict) or "command" not in stack or set(stack) - set(_STACK_KEYS):
+            raise ValueError(
+                "ros2 stack is the command that starts it, or a table with command (and env, timeout, cwd), e.g. "
+                "stack = {command = 'ros2 launch my_robot sim.launch.py', timeout = 240}"
+            )
     for part, allowed in _INTERFACES.items():
         if out[part].get("interface") not in (None, *allowed):
             raise ValueError(f"ros2 {part} interface is one of {', '.join(allowed)}, not {out[part].get('interface')!r}")

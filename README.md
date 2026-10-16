@@ -123,6 +123,33 @@ such topic, or nodes that ignored the remapping) fails the test instead of passi
 changes nothing in the robot; it reads joint states and TF, and sends commands only if the
 test asks it to.
 
+Name the stack and robowright starts it, once, as Playwright starts your web server:
+
+```toml
+[ros2]
+use_sim_time = true
+gazebo = true
+[ros2.stack]
+command = "ros2 launch ur_simulation_gz ur_sim_control.launch.py ur_type:=ur5e gazebo_gui:=false"
+env = { DISPLAY = false }  # false unsets it: this launch gives gz sim no headless flag
+```
+
+`pytest --rw-backend ros2` then starts the stack once per worker, waits until it is up (read
+from the ROS graph: joint states arriving, the controllers active and their spawners finished,
+`/clock` moving), and before each test puts it back as it came up, as Playwright gives each
+test a fresh browser context: models the last test added are removed, moved ones put back, and
+each arm and gripper controller driven to where it started. The robot is the one the stack
+describes. A stack a reset cannot put back (a controller that went inactive, a process that
+died) is restarted, and the trace says so. Each `-n` worker gets a stack, a ROS domain and a
+Gazebo partition of its own.
+
+On Universal Robots' Gazebo simulation, four tests that each move the arm and add a cube take
+22 s, 16 s of which is the stack starting once; each further test costs about 0.6 s of setup
+(the reset, then connecting) plus its own motion. Starting a stack per test cost 8-12 s, and
+stopping it 10 s more. In Python, the same is `rw.ros2_stack(command)` (`with` it in a session
+fixture; `stack.reset()` per test; `stack.checkpoint()` makes the stack as it is now what a
+reset returns to, such as a table spawned once).
+
 Before pointing a test at a real arm, give it limits. A command robowright plans itself
 (`move_to`, `move_joints`, `reset_to`) is planned inside them however fast it was asked to go;
 one it did not plan (a policy's target) that would break them is refused before any of it is
@@ -567,6 +594,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
+| `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
 | `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |

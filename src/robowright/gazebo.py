@@ -31,8 +31,10 @@ subscriptions has no callbacks to wait on.
 
 from __future__ import annotations
 
+import atexit
 import base64
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -103,6 +105,31 @@ class _Requests:
                 self._proc.wait()
 
 
+_SHARED: dict[str, _Requests] = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def _requests() -> _Requests:
+    """This process's request helper for its Gazebo partition, shared by every Gazebo connection. One per
+    connection started a Python, imported gz and discovered the world's services again for each world
+    (measured: 2 s of a ROS 2 world's 2.4 s launch, against a Gazebo already running)."""
+    key = os.environ.get("GZ_PARTITION", "")
+    with _SHARED_LOCK:
+        r = _SHARED.get(key)
+        if r is None or r._proc.poll() is not None:
+            r = _SHARED[key] = _Requests()
+            if len(_SHARED) == 1:
+                atexit.register(_close_shared)
+        return r
+
+
+def _close_shared() -> None:
+    with _SHARED_LOCK:
+        for r in _SHARED.values():
+            r.close()
+        _SHARED.clear()
+
+
 def _serve_requests() -> None:
     """The helper: one request per line on stdin, its result on stdout. No subscriptions."""
     from gz.transport13 import Node
@@ -127,7 +154,7 @@ class Gazebo:
     def __init__(self, world: str | None = None, timeout: float = 30.0):
         (Node, self._Boolean, self._Factory, self._Entity, self._Pose, PoseV, self._Control, Stats) = _modules()
         self._node = Node()  # subscriptions only (see _Requests)
-        self._request = _Requests()
+        self._request = _requests()
         self._lock = threading.Lock()
         self._poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._history: dict[str, list[tuple[float, np.ndarray, np.ndarray]]] = {}  # recent (time, position, orientation)
@@ -590,7 +617,7 @@ class Gazebo:
     def close(self) -> None:
         for topic in list(self._node.subscribed_topics()):
             self._node.unsubscribe(topic)
-        self._request.close()
+        # The request helper is the process's, shared with other connections (see _requests): it stays.
 
 
 def _pose_data(p) -> tuple:

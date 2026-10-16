@@ -110,7 +110,11 @@ def test_a_session_of_requests_becomes_a_test_that_passes(tmp_path):
     assert "assert goal.status == 'succeeded', goal" in code
     assert "world.ros.publish('/forward_position_controller/commands'" in code
     (tmp_path / "test_requests_again.py").write_text(code)
-    env = {**os.environ, "ROS_DOMAIN_ID": str(int(os.environ.get("ROS_DOMAIN_ID", "0")) + 1)}
+    # Unbuffered: a child that a native library ends with exit() keeps what it printed (a run that failed with no
+    # output at all is otherwise all there is to go on).
+    # A domain of its own, fixed: one counted up from this run's (another module had set it to 232, the last Fast DDS
+    # takes) was 233 now and then, and the child's ROS failed to start.
+    env = {**os.environ, "ROS_DOMAIN_ID": "21", "PYTHONUNBUFFERED": "1"}
     run = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path / "test_requests_again.py")],
         capture_output=True,

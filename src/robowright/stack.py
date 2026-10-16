@@ -98,6 +98,8 @@ class Ros2Stack:
         self.startup_s = 0.0  # how long the last start took
         self._gz = None
         self.waited: list = []  # how the last start went: (seconds, what it was waiting for)
+        self._domain_set = False
+        self.last_reset: dict = {}  # seconds each part of the last reset took
         self._link = None  # one ROS node for the stack's life: reset() must not pay discovery each time
 
     # -- starting and stopping -----------------------------------------------------------
@@ -108,19 +110,32 @@ class Ros2Stack:
             worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
             os.environ["GZ_PARTITION"] = f"robowright-{os.getpid()}-{worker}"
         os.environ.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "LOCALHOST")
+        worker = os.environ.get("PYTEST_XDIST_WORKER")
+        if worker and "ROS_DOMAIN_ID" not in self.env and not self._domain_set:
+            # Each pytest-xdist worker runs a stack of its own: on one ROS domain they would answer each other's tests.
+            # This process moves with it, so the worlds a test launches see its stack (rclpy reads it per context).
+            base = int(os.environ.get("ROS_DOMAIN_ID", "0") or 0)
+            os.environ["ROS_DOMAIN_ID"] = str((base + 1 + int(worker.removeprefix("gw") or 0)) % 101)
+            self._domain_set = True
+        domain = str(self.env.get("ROS_DOMAIN_ID") or os.environ.get("ROS_DOMAIN_ID") or "0")
+        if not domain.isdigit() or int(domain) > 232:
+            # Past 232 Fast DDS has no ports for the domain: every node fails to start, and a launch can say nothing.
+            raise StackError(f"ROS_DOMAIN_ID={domain} is not a domain ROS 2 can use: 0-232 (0-101 to stay clear of ephemeral ports)")
         t0 = time.monotonic()
         self.proc = subprocess.Popen(
             self.args,
             stdout=self.log.open("a"),
             stderr=subprocess.STDOUT,
-            env={k: v for k, v in {**os.environ, **self.env}.items() if v is not None},  # None unsets a variable
+            env={k: str(v) for k, v in {**os.environ, **self.env}.items() if v is not None and v is not False},  # None or false unsets one
             cwd=self.cwd,
             start_new_session=True,
         )
         try:
             self._link = _Link(self.namespace)
+            self._link.listen()
             self._wait_ready(t0 + self.timeout)
             self.snapshot = self._take_snapshot()
+            self._link.quiet()
         except BaseException:
             self.stop()
             raise
@@ -213,7 +228,11 @@ class Ros2Stack:
         """Make the stack as it is now what ``reset()`` puts back: a table spawned, a map loaded or the
         arm parked once, for every test after (Playwright's ``storageState``, for a robot). A restart
         brings back the stack as it came up, not the checkpoint, and says so in ``restarts``."""
-        self.snapshot = self._take_snapshot()
+        self._link.listen()
+        try:
+            self.snapshot = self._take_snapshot()
+        finally:
+            self._link.quiet()
         return self.snapshot
 
     def _gazebo(self, world: str):
@@ -239,23 +258,33 @@ class Ros2Stack:
 
     def _reset(self) -> None:
         snap, link = self.snapshot, self._link
+        took = self.last_reset = {}  # seconds each part of the last reset took: where the time went
+        t = time.monotonic()
         if link.manager():
             states = {c.name: c.state for c in link.controller_list()}
             lost = [c.name for c in snap.controllers if states.get(c.name) != "active"]
             if lost:
                 raise StackError(f"controllers no longer active: {lost}")
+        took["controllers"], t = round(time.monotonic() - t, 3), time.monotonic()
         if snap.world is not None:
             gz = self._gazebo(snap.world)
             models = set(_models(gz))
             for m in models - set(snap.models):
                 gz.remove(m)
+            took["removed"], t = round(time.monotonic() - t, 3), time.monotonic()
             for m, (pos, quat) in snap.models.items():
                 if m not in models:
                     raise StackError(f"Gazebo model {m!r} is gone")
                 p, q = gz.pose(m)
                 if np.linalg.norm(np.asarray(p) - pos) > _POSE_TOL or abs(abs(float(np.dot(q, quat))) - 1.0) > 1e-6:
                     gz.set_pose(m, pos, quat)
-        link.drive_home(self.namespace, snap)
+            took["moved"], t = round(time.monotonic() - t, 3), time.monotonic()
+        link.listen()
+        try:
+            link.drive_home(self.namespace, snap)
+        finally:
+            link.quiet()
+        took["joints"] = round(time.monotonic() - t, 3)
 
 
 def ros2_stack(command: str | list, **kwargs) -> Ros2Stack:
@@ -326,12 +355,7 @@ class _Link:
         import threading
 
         import rclpy
-        from rclpy.executors import MultiThreadedExecutor
-        from rclpy.qos import qos_profile_sensor_data
-        from rosgraph_msgs.msg import Clock
-        from sensor_msgs.msg import JointState
-
-        from .ros2_discover import _topic
+        from rclpy.executors import SingleThreadedExecutor
 
         self.namespace = namespace
         self._ctx = rclpy.Context()
@@ -340,16 +364,39 @@ class _Link:
         self._lock = threading.Lock()
         self._joints: dict = {}
         self._clock = (None, 0.0)  # (newest /clock stamp, monotonic time it last moved on)
-        self.node.create_subscription(JointState, _topic(namespace, "joint_states"), self._on_joints, qos_profile_sensor_data)
-        self.node.create_subscription(Clock, "/clock", self._on_clock, qos_profile_sensor_data)
+        self._subs: list = []
         self._manager: str | None = None
         self._list = None
         self._actions: dict = {}
         self._pubs: dict = {}
-        self._ex = MultiThreadedExecutor(num_threads=2, context=self._ctx)
+        self._ex = SingleThreadedExecutor(context=self._ctx)
         self._ex.add_node(self.node)
         self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
+
+    def listen(self) -> None:
+        """Subscribe to the joint states and the clock: only while starting and resetting. Kept for the stack's life,
+        a Python node taking /clock at 1 kHz and joint states at hundreds of Hz held the GIL so much that the test's own
+        threads (a robot description being converted, robowright's own node) ran several times slower."""
+        from rclpy.qos import qos_profile_sensor_data
+        from rosgraph_msgs.msg import Clock
+        from sensor_msgs.msg import JointState
+
+        from .ros2_discover import _topic
+
+        if self._subs:
+            return
+        with self._lock:
+            self._joints, self._clock = {}, (None, 0.0)  # what arrives from now on, not what was true when last listened
+        self._subs = [
+            self.node.create_subscription(JointState, _topic(self.namespace, "joint_states"), self._on_joints, qos_profile_sensor_data),
+            self.node.create_subscription(Clock, "/clock", self._on_clock, qos_profile_sensor_data),
+        ]
+
+    def quiet(self) -> None:
+        for sub in self._subs:
+            self.node.destroy_subscription(sub)
+        self._subs = []
 
     def _spin(self) -> None:
         from rclpy.executors import ExternalShutdownException
@@ -424,7 +471,7 @@ class _Link:
         from std_msgs.msg import Float64MultiArray
         from trajectory_msgs.msg import JointTrajectoryPoint
 
-        now = self.joints()
+        now = self.joints(timeout=3.0)
         far = {j: q for j, q in snap.joints.items() if j in now and abs(now[j] - q) > _JOINT_TOL}
         if not far:
             return
