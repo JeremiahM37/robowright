@@ -64,6 +64,7 @@ from .expect import condition, expect  # noqa: E402
 from .locators import ObjectHandle, Point  # noqa: E402
 from .routes import route  # noqa: E402
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene, open_floor, tabletop  # noqa: E402
+from .stack import Ros2Stack, ros2_stack  # noqa: E402
 from .steps import step  # noqa: E402
 from .trace import Trace  # noqa: E402
 from .world import (  # noqa: E402
@@ -105,6 +106,8 @@ __all__ = [
     "condition",
     "expect",
     "route",
+    "ros2_stack",
+    "Ros2Stack",
     "step",
     "launch",
     "ros2_robot",
