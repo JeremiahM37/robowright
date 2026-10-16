@@ -35,6 +35,7 @@ import atexit
 import base64
 import json
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -68,6 +69,9 @@ def worlds(timeout: float = 2.0) -> list[str]:
         _time.sleep(0.05)
 
 
+_HELPER_SLACK = 10.0  # seconds a request helper is given beyond its request's timeout (discovery, start-up)
+
+
 class _Requests:
     """Gazebo service requests, made by a helper process (``python -m robowright.gazebo``)."""
 
@@ -89,6 +93,13 @@ class _Requests:
             if self._proc.poll() is not None:
                 raise RuntimeError(f"robowright's Gazebo request helper exited ({self._proc.returncode})")
             self._proc.stdin.write(json.dumps(line) + "\n")
+            # Bounded: the helper answers within the request's own timeout plus discovery. Unbounded, a helper stalled
+            # in gz-transport would hold this lock, and with it every Gazebo call of the test run, for good.
+            wait = 2 * timeout_ms / 1000 + _HELPER_SLACK
+            if not select.select([self._proc.stdout], [], [], wait)[0]:
+                self._proc.kill()  # the next request starts a new helper (_requests)
+                self._proc.wait()
+                raise TimeoutError(f"robowright's Gazebo request helper did not answer {service} within {wait:g} s")
             out = json.loads(self._proc.stdout.readline())
         rep = rep_type()
         if out["ok"]:

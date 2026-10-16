@@ -187,14 +187,17 @@ def test_a_stack_a_reset_cannot_put_back_is_restarted(ur):
 
 
 def test_a_stack_does_not_outlive_a_test_run_that_was_killed(tmp_path):
-    """A run killed outright (SIGKILL: no cleanup runs) took its stack with it: the kernel signals the launch process.
+    """A run killed outright (SIGKILL: no cleanup runs) takes its whole stack with it, a child the launch started
+    (as ros2 launch starts Gazebo) included.
     Before, Gazebo stacks from a run a timeout killed were still running hours later."""
     script = tmp_path / "parent.py"
     script.write_text(
         "import os, signal, subprocess, sys\n"
-        "from robowright.stack import _die_with_parent\n"
-        "p = subprocess.Popen(['sleep', '60'], start_new_session=True, preexec_fn=_die_with_parent())\n"
-        "print(p.pid, flush=True)\n"
+        "from robowright.stack import _REAPER\n"
+        # a launch that starts a child of its own, as ros2 launch starts Gazebo: both must go
+        "cmd = [sys.executable, '-c', _REAPER, str(os.getpid()), 'bash', '-c', 'sleep 60 & echo $!; wait']\n"
+        "p = subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.PIPE, text=True)\n"
+        "print(p.stdout.readline().strip(), flush=True)\n"
         "os.kill(os.getpid(), signal.SIGKILL)\n"
     )
     run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30)

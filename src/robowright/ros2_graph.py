@@ -316,12 +316,40 @@ def _short(msg, limit: int = 300) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
-def destroy_action_clients(clients) -> None:
-    """Destroy rclpy ActionClients before their node is destroyed (see RosGraph.close)."""
+def destroy_action_clients(clients, timeout: float = 5.0) -> None:
+    """Destroy rclpy ActionClients before their node is destroyed (see RosGraph.close). Each is given ``timeout``
+    seconds: ``ActionClient.destroy()`` waits in ``destroy_when_not_in_use()`` as ``destroy_node`` does (below)."""
     for c in list(clients):
-        if c is None:
-            continue
+        if c is not None:
+            _bounded(c.destroy, timeout, f"an action client of {c._node.get_name()!r}")
+
+
+def destroy_node(node, timeout: float = 5.0) -> bool:
+    """``node.destroy_node()``, given ``timeout`` seconds. rclpy's ends in ``destroy_when_not_in_use()``, which waits for
+    as long as anything still holds the node's handle, and twice a Nav2 suite hung there in a world's teardown for an
+    hour with every action client destroyed. A teardown must end: past the timeout this warns and goes on, and the
+    node is reclaimed when its context shuts down. True when it was destroyed in time."""
+    return _bounded(node.destroy_node, timeout, f"ROS 2 node {node.get_name()!r}")
+
+
+def _bounded(destroy, timeout: float, what: str) -> bool:
+    """Run ``destroy()`` for up to ``timeout`` seconds (in a daemon thread); past that, warn and go on. Errors are
+    ignored: already destroyed, or its context is gone, there is nothing left to wait for."""
+    import threading
+    import warnings
+
+    done = threading.Event()
+
+    def run():
         try:
-            c.destroy()
-        except Exception:  # noqa: BLE001 - already destroyed, or its context is gone: nothing left to hold the node
+            destroy()
+        except Exception:  # noqa: BLE001
             pass
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name="robowright-destroy", daemon=True).start()
+    if done.wait(timeout):
+        return True
+    warnings.warn(f"{what} was still in use {timeout:g} s into its destruction; left to its context's shutdown", RuntimeWarning, 3)
+    return False

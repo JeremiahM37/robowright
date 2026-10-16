@@ -1030,7 +1030,9 @@ class Ros2Backend(Backend):
             nav = getattr(self, "_nav", None)
             destroy_action_clients([getattr(self, "_traj_action", None), getattr(self, "_grip_action", None), nav[0] if nav else None])
             self._traj_action = self._grip_action = self._nav = None
-            self.node.destroy_node()
+            from ..ros2_graph import destroy_node
+
+            destroy_node(self.node)
             self.node = None
 
 

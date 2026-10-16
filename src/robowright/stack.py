@@ -39,6 +39,7 @@ import re
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -139,14 +140,14 @@ class Ros2Stack:
             # Past 232 Fast DDS has no ports for the domain: every node fails to start, and a launch can say nothing.
             raise StackError(f"ROS_DOMAIN_ID={domain} is not a domain ROS 2 can use: 0-232 (0-101 to stay clear of ephemeral ports)")
         t0 = time.monotonic()
+        reaper = threading.current_thread() is threading.main_thread()
         self.proc = subprocess.Popen(
-            self.args,
+            [sys.executable, "-c", _REAPER, str(os.getpid()), *self.args] if reaper else self.args,
             stdout=self.log.open("a"),
             stderr=subprocess.STDOUT,
             env={k: str(v) for k, v in {**os.environ, **self.env}.items() if v is not None and v is not False},  # None or false unsets one
             cwd=self.cwd,
             start_new_session=True,
-            preexec_fn=_die_with_parent() if threading.current_thread() is threading.main_thread() else None,
         )
         _RUNNING.add(self)
         try:
@@ -346,19 +347,21 @@ def _stop_running() -> None:
             stack.stop()
 
 
-def _die_with_parent():
-    """For a stack's launch process: the kernel sends it SIGTERM when this process dies, even killed (SIGKILL), when
-    no cleanup can run. A test run killed by a timeout left Gazebo stacks running for hours otherwise. Only from the
-    main thread: the signal comes when the starting *thread* ends, and the main thread lives as long as the process."""
-    import ctypes
-
-    libc = ctypes.CDLL(None, use_errno=True)
-    PR_SET_PDEATHSIG = 1
-
-    def preexec() -> None:
-        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
-
-    return preexec
+# Leads the stack's process group, with the launch under it. When the test process dies, even killed outright when
+# no cleanup can run, the kernel signals this (PR_SET_PDEATHSIG) and it kills the whole group: the launch and what it
+# started. Signalling the launch alone was not enough: a Gazebo it had started outlived it, for hours. A stop (SIGINT
+# to the group) reaches the launch itself; this only waits for it. Started from the main thread only: the signal comes
+# when the starting *thread* ends, and the main thread lives as long as the process.
+_REAPER = """
+import ctypes, os, signal, subprocess, sys
+parent = int(sys.argv[1])
+ctypes.CDLL(None).prctl(1, signal.SIGUSR1)  # PR_SET_PDEATHSIG
+signal.signal(signal.SIGUSR1, lambda *_: os.killpg(0, signal.SIGKILL))
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+if os.getppid() != parent:  # the test process died before the signal was asked for
+    os.killpg(0, signal.SIGKILL)
+sys.exit(subprocess.Popen(sys.argv[2:]).wait())
+"""
 
 
 def _stop_group(proc: subprocess.Popen, grace: float = 1.0) -> None:
@@ -752,8 +755,10 @@ class _Link:
             self._ex.shutdown(timeout_sec=1.0)
         destroy_action_clients(self._actions.values())  # they hold the node (see RosGraph.close)
         self._actions = {}
+        from .ros2_graph import destroy_node
+
         with contextlib.suppress(Exception):
-            self.node.destroy_node()
+            destroy_node(self.node)
         with contextlib.suppress(Exception):
             self._ctx.try_shutdown()
         self._thread.join(timeout=2.0)

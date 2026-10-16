@@ -391,7 +391,9 @@ class Ros2Bridge:
             self.world._ros_graph.close()  # its action clients hold this node (see RosGraph.close)
             self.world._ros_graph = None
         self._executor.shutdown(timeout_sec=1.0)
-        self.node.destroy_node()
+        from .ros2_graph import destroy_node
+
+        destroy_node(self.node)
         with contextlib.suppress(Exception):
             self._context.try_shutdown()
         self._spin.join(timeout=2.0)
