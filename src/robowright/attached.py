@@ -386,6 +386,8 @@ class AttachedWorld(World):
         if action is _OBSERVE:
             self.controls.append((self.step_count, "observe", None))
             return
+        if hasattr(action, "detach"):  # a torch tensor, which may be on a GPU (Isaac Lab): copied to the host first
+            action = action.detach().cpu().numpy()
         arr = np.array(action, copy=True)
         if self._resets_first and not self._reset_seen:
             # gymnasium refuses a step before a reset, so this environment was reset before it was attached: that
@@ -565,6 +567,7 @@ def attach(
     seed: int = 0,
     settings: Settings | None = None,
     world_name: str | None = None,
+    env_index: int = 0,
 ) -> AttachedWorld:
     """Attach to an environment (``env``), a bare ``model``/``data`` pair, a PyBullet client, or a Drake simulation.
 
@@ -651,11 +654,14 @@ def attach(
         backend = DrakeEngine(diagram, context, plant=plant, seed=seed, dt=dt)
     elif env is not None:
         try:
-            backend = _engine_of_env(env, seed=seed, dt=dt, engine=engine)
+            backend = _engine_of_env(env, seed=seed, dt=dt, engine=engine, env_index=env_index)
         except ValueError:
             # An environment that builds its MuJoCo model in reset (safety-gymnasium): bind at that reset. If no reset
             # builds one, the reset says so: the error is raised there, not silently kept.
-            if engine not in (None, "mujoco") or not callable(getattr(env, "reset", None)) or _has_physics(env):
+            from .backends.attached_isaaclab import is_isaaclab
+
+            # (an Isaac Lab environment is never one: its scene is there from the start, and its errors are its own)
+            if engine not in (None, "mujoco") or not callable(getattr(env, "reset", None)) or _has_physics(env) or is_isaaclab(env):
                 raise
             backend = PendingBackend(seed=seed, dt=dt)
     elif client is not None:
@@ -860,7 +866,7 @@ def _attach_gazebo(*, advance, world_name: str | None, seed: int, settings, name
     return world
 
 
-def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> AttachedEngine:
+def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None, env_index: int = 0) -> AttachedEngine:
     """The adapter for an environment: its MuJoCo model and data if it has them, else its SAPIEN scene, else its PyBullet client."""
     from .backends.attached_genesis import genesis_engine_of
     from .backends.attached_sapien import sapien_engine_of
@@ -869,6 +875,13 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None) -> A
         from .backends.attached_webots import webots_engine_of
 
         return webots_engine_of(env, seed=seed, dt=dt)
+    from .backends.attached_isaaclab import is_isaaclab, isaaclab_engine_of
+
+    if engine == "isaaclab" or (engine is None and is_isaaclab(env)):
+        found = isaaclab_engine_of(env, env_index=env_index, seed=seed, dt=dt)
+        if found is None:
+            raise ValueError(f"cannot attach to {type(env).__name__} as an Isaac Lab environment: it has no Isaac Lab scene")
+        return found
     if engine == "genesis" or (engine is None and type(env).__module__.startswith("genesis.")):
         found = genesis_engine_of(env, seed=seed, dt=dt)
         if found is None:

@@ -1694,8 +1694,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   requests, `rw.ros2_stack`); robowright's Gazebo integration needs Gazebo Harmonic, which it
   drives through Gazebo's own Python bindings: Humble's default, Fortress, has none, and reached
   its end of life in September 2026.
-- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU). Isaac Lab and GPU-batched environments are not attached
-  to yet, and vector environments only in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
+- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU), and Isaac Lab environments on the GPU, watching one of their
+  copies (`env_index`). An Isaac Lab run keeps its trace but is not replayed (its GPU physics is not bit-for-bit
+  repeatable), and contacts there come only from the scene's contact sensors. Vector environments are attached only
+  in one process (`SyncVectorEnv`). MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that
   rebuilds the simulation; Webots runs are replayed and not turned into tests. A gymnasium run
   first reset without a seed is neither.
@@ -1729,7 +1731,8 @@ Each of these builds on the extension points above, not on any one robot or fram
 
 1. **A physical robot behind ROS 2:** run the contract on real arms and record what differs
    from simulation as known divergences, as the engines' are.
-2. **More stacks and simulators:** Isaac Lab and GPU-batched environments for `rw.attach`.
+2. **More stacks and simulators:** replay for GPU-batched environments (a saved state to start from, and a tolerance for
+   physics that is not bit-for-bit repeatable).
 3. **Attaching to sub-environments in other processes** (`AsyncVectorEnv`).
 
 ## License
