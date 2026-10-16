@@ -62,6 +62,7 @@ from .errors import (  # noqa: E402
 )
 from .expect import condition, expect  # noqa: E402
 from .locators import ObjectHandle, Point  # noqa: E402
+from .routes import route  # noqa: E402
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene, open_floor, tabletop  # noqa: E402
 from .steps import step  # noqa: E402
 from .trace import Trace  # noqa: E402
@@ -103,6 +104,7 @@ __all__ = [
     "attach",
     "condition",
     "expect",
+    "route",
     "step",
     "launch",
     "ros2_robot",

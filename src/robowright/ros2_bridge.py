@@ -102,7 +102,9 @@ class Ros2Bridge:
         rclpy.init(context=self._context)
         ns = namespace.rstrip("/")
         self.node = node = rclpy.create_node(node_name, namespace=ns or None, context=self._context)
-        cb = ReentrantCallbackGroup()
+        self._cb = cb = ReentrantCallbackGroup()
+        self._relays: list = []  # routed topics of the command now running (see run's route=)
+        self.routes: list[dict] = []  # what each route of the last run did
         self._clock = node.create_publisher(Clock, "/clock", 10)
         self._states = node.create_publisher(JointState, "joint_states", 10)
         self._images = {c.name: node.create_publisher(Image, f"camera/{c.name}/image_raw", 2) for c in w.spec.cameras}
@@ -168,6 +170,11 @@ class Ros2Bridge:
                 done.set()
             out["still"] = out.get("still", 0) + (not moving)
         self._publish()
+        for relay in self._relays:
+            relay.poll()
+            if relay.error:
+                err, relay.error = relay.error, None
+                raise RuntimeError(err)
         if self.realtime:
             self._pace(w)
 
@@ -186,7 +193,7 @@ class Ros2Bridge:
         from builtin_interfaces.msg import Time
 
         t = w.time
-        stamp = Time(sec=int(t), nanosec=int(round((t - int(t)) * 1e9)) % 1_000_000_000)
+        stamp = Time(**_stamp(t))
         self._clock.publish(self._msgs["Clock"](clock=stamp))
         q, v = w.robot.qpos(), w.backend.qvel()  # readings as the robot reports them (sensor faults apply)
         names, pos, vel = list(self.arm_names), list(map(float, q[: len(self.arm_names)])), list(map(float, v[: len(self.arm_names)]))
@@ -312,23 +319,40 @@ class Ros2Bridge:
 
     # -- running the code under test ----------------------------------------------------
     @contextlib.contextmanager
-    def run(self, command: str | list, env: dict | None = None, cwd: str | None = None, startup: float = 0.0):
+    def run(self, command: str | list, env: dict | None = None, cwd: str | None = None, startup: float = 0.0, route: dict | None = None):
         """Start ``command`` (your launch file, node or script) for the duration of the block, then
         stop it. Its output is kept in a log file whose path is in the trace and in the failure.
         ``startup``: seconds of simulated time to let pass before the block (the world steps,
-        at real-time pace, while your nodes come up)."""
+        at real-time pace, while your nodes come up).
+        ``route``: ``{topic: rw.route...}``, what your nodes receive or send on each topic changed
+        on the way (dropped, delayed, cut, throttled or edited; see :mod:`robowright.routes`)."""
+        from .routes import Relay, as_route, remap_command
+
         log = Path(tempfile.mkstemp(prefix="robowright-stack-", suffix=".log")[1])
         args = shlex.split(command) if isinstance(command, str) else list(command)
+        relays = []
+        if route:
+            args, wrapper = remap_command(args, list(route))
+            if wrapper is not None:
+                path = Path(tempfile.mkstemp(prefix="robowright-routed-", suffix=".launch.py")[1])
+                path.write_text(wrapper)
+                args = [str(path) if a == "{WRAPPER}" else a for a in args]
+            relays = [Relay(self.node, t, as_route(r), lambda: self.world.time, self.world.seed, self._cb) for t, r in route.items()]
+            self._relays = relays
+            for r in relays:
+                self._note(f"route {r.topic}: {r.route.describe()}")
         proc = subprocess.Popen(
             args, stdout=log.open("w"), stderr=subprocess.STDOUT, env={**os.environ, **(env or {})}, cwd=cwd, start_new_session=True
         )
         self._note(f"started: {' '.join(args)} (log {log})")
+        ok = False
         try:
             if startup:
                 self.world.wait(startup)
             if proc.poll() is not None:
                 raise RuntimeError(f"{args[0]} exited with {proc.returncode} at start:\n{log.read_text()[-3000:]}")
             yield proc
+            ok = True
         except BaseException as e:
             tail = log.read_text()[-2000:]
             if tail and hasattr(e, "add_note"):
@@ -336,6 +360,25 @@ class Ros2Bridge:
             raise
         finally:
             _stop(proc)
+            self._relays = []
+            self.routes = [r.summary() for r in relays]
+            for r in relays:
+                r.close()
+                if self.world.trace:
+                    self.world.trace.event("edit", "ros2_route", r.summary())
+        idle = [r.topic for r in relays if r.direction is None]
+        if ok and idle:
+            raise RuntimeError(
+                f"route on {', '.join(idle)} never engaged: nothing published it, outside the command or in it. "
+                "Check the topic name (ros2 topic list while the stack runs)."
+            )
+        bypassed = [r.topic for r in relays if r.direction == "in" and not r.consumed]
+        if ok and bypassed:
+            raise RuntimeError(
+                f"route on {', '.join(bypassed)}: nothing in the command subscribed to the routed topic, so the route "
+                "changed nothing. Its nodes did not take the remapping (a node must pass its command line to "
+                "rclpy.init / rclcpp::init), or none of them reads that topic."
+            )
 
     def close(self):
         self._closing.set()  # goals still in flight end now, so the executor's threads can be joined
@@ -375,6 +418,14 @@ def _stop(proc: subprocess.Popen) -> None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
             proc.wait(5)
+
+
+def _stamp(t: float) -> dict:
+    """``t`` seconds as a ROS time's (sec, nanosec). Split from whole nanoseconds, not as (seconds, rounded
+    fraction): a time a hair under a whole second rounded its fraction up to 1e9, which wrapped to 0 beside the
+    old second, so a /clock or /joint_states stamp now and then read a whole second early."""
+    sec, nanosec = divmod(round(t * 1e9), 1_000_000_000)
+    return {"sec": int(sec), "nanosec": int(nanosec)}
 
 
 def _interpolate(t: float, times: np.ndarray, points: np.ndarray) -> np.ndarray:

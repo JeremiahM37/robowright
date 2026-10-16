@@ -93,6 +93,26 @@ an IK library, the two actions) and [`tests/test_ros2_bridge.py`](tests/test_ros
 tests it that way. `robowright sim --ros2 --live` serves a simulation on its own, for you or
 an agent to drive by hand.
 
+What your stack receives or sends on a topic can be changed on the way, as Playwright's
+`page.route` changes what a page gets from the network. Does it stop when the lidar goes quiet,
+or cope with late joint readings?
+
+```python
+with ros2.run("ros2 launch my_robot nav.launch.py", route={
+    "/scan": rw.route.cut(at=5.0, duration=2.0),        # quiet for 2 s of sim time
+    "/joint_states": rw.route.delay(0.2) | rw.route.drop(0.05),
+    "/cmd_vel": lambda msg: None if msg.linear.x > 0.5 else msg,   # your own edit; None drops it
+}):
+    expect(robot).always.to_have_no_collisions()
+```
+
+Every node the command starts has the topic remapped (a wrapping launch file for `ros2 launch`,
+`--ros-args -r` for a node or script), and robowright relays it through the route: `abort()`,
+`drop(p)` (seeded), `delay(s)`, `cut(at, duration)`, `throttle(hz)` or a function. Whether it
+changes what your nodes read or what they send is found from the graph. `ros2.routes` and the
+trace say what each route passed, dropped and delayed, and a route that changed nothing (no
+such topic, or nodes that ignored the remapping) fails the test instead of passing it silently.
+
 ### Then the same tests against Gazebo or the real arm
 
 `--rw-backend ros2` points the same tests at any robot behind ROS 2: a real arm with a
@@ -526,6 +546,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
+| `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |
 | `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
@@ -1041,6 +1062,9 @@ world.faults.camera_dropout(p=0.1)
 world.faults.push("robot", force=(0, 40, 0), duration=0.1)  # a legged or mobile robot's base; a fixed arm is refused
 world.faults.jitter("cube", xy_std=0.02)  # domain randomisation, seeded
 ```
+
+These change what robowright's own robot and your policy see. For a ROS 2 stack, routes change
+what *its* nodes receive and send (see [Test your ROS 2 stack](#test-your-ros-2-stack)).
 
 ### Traces, replay, codegen
 
