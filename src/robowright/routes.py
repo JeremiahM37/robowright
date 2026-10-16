@@ -27,7 +27,12 @@ The routes, all in simulated time:
   (for the rest of the run when None);
 * ``rw.route.throttle(hz)``: at most ``hz`` messages a second get through;
 * any function ``fn(msg) -> msg | None``: a changed message, or None to drop it (Playwright's
-  ``route.fulfill``).
+  ``route.fulfill``);
+* ``rw.route.record(path)``: every message passes, and is also written to a rosbag at ``path``,
+  at its simulated time (Playwright's ``recordHar``);
+* ``rw.route.from_bag(path)``: your nodes receive the bag's messages instead of the live ones,
+  at the times they were recorded, counted from when the command starts (``routeFromHAR``). A
+  bag recorded with ``ros2 bag record`` on a real robot plays the same way.
 
 Routes chain: ``rw.route.delay(0.2) | rw.route.drop(0.1)``. A route counts what it passed,
 dropped and delayed (``route.stats``), and the counts are written to the trace when the run ends.
@@ -56,6 +61,19 @@ class Route:
 
     def describe(self) -> str:
         return type(self).__name__.lower()
+
+    # A route that keeps or supplies messages (record, from_bag) uses these; the others need none of them.
+    source_type = None  # (not a dataclass field) the message type a route supplies itself, so the relay needs no live publisher
+
+    def bind(self, topic: str, type_name: str) -> None:
+        """Called once, when the relay knows the topic's type."""
+
+    def due(self, now: float) -> list:
+        """Messages the route itself delivers by ``now`` (from_bag)."""
+        return []
+
+    def close(self) -> None:
+        """The command ended: files the route writes are complete now."""
 
     def __or__(self, other) -> Route:
         return _Chain(parts=[self, as_route(other)])
@@ -151,8 +169,134 @@ class _Chain(Route):
     def describe(self):
         return " | ".join(p.describe() for p in self.parts)
 
+    @property
+    def source_type(self):
+        return next((r.source_type for r in self.parts if r.source_type), None)
+
+    def bind(self, topic, type_name):
+        for r in self.parts:
+            r.bind(topic, type_name)
+
+    def due(self, now):
+        return [m for r in self.parts for m in r.due(now)]
+
+    def close(self):
+        for r in self.parts:
+            r.close()
+
     def __or__(self, other):
         return _Chain(parts=[*self.parts, as_route(other)])
+
+
+class _Record(Route):
+    """Every message passes, and is written to a rosbag at ``path`` at its simulated time."""
+
+    def __init__(self, path):
+        super().__init__()
+        from pathlib import Path
+
+        self.path = Path(path)
+        if self.path.exists():
+            raise FileExistsError(f"rw.route.record: {self.path} exists; a bag is written to a new directory")
+        self.stats["recorded"] = 0
+        self._writer = None
+        self._topic = None
+
+    def bind(self, topic, type_name):
+        import rosbag2_py
+
+        self._writer = rosbag2_py.SequentialWriter()
+        self._writer.open(rosbag2_py.StorageOptions(uri=str(self.path)), rosbag2_py.ConverterOptions("cdr", "cdr"))
+        fields = {"name": topic, "type": type_name, "serialization_format": "cdr"}
+        try:
+            meta = rosbag2_py.TopicMetadata(id=0, **fields)  # Jazzy and later
+        except TypeError:
+            meta = rosbag2_py.TopicMetadata(**fields)  # Humble
+        self._writer.create_topic(meta)
+        self._topic = topic
+
+    def handle(self, msg, now, rng):
+        if self._writer is not None:
+            from rclpy.serialization import serialize_message
+
+            self._writer.write(self._topic, serialize_message(msg), round(now * 1e9))
+            self.stats["recorded"] += 1
+        return [(0.0, msg)]
+
+    def close(self):
+        self._writer = None  # rosbag2 finishes the file (and its metadata.yaml) when the writer goes
+
+    def describe(self):
+        return f"record({self.path})"
+
+
+class _FromBag(Route):
+    """The bag's messages instead of the live ones, at their recorded offsets from when the command starts."""
+
+    def __init__(self, path, topic: str | None = None, at: float = 0.0, restamp: bool = True, loop: bool = False):
+        super().__init__()
+        import rosbag2_py
+
+        self.path, self.at, self.restamp, self.loop = str(path), float(at), restamp, loop
+        reader = rosbag2_py.SequentialReader()
+        reader.open(rosbag2_py.StorageOptions(uri=self.path), rosbag2_py.ConverterOptions("cdr", "cdr"))
+        types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+        if topic is None and len(types) != 1:
+            raise ValueError(f"rw.route.from_bag: {self.path} has {len(types)} topics ({', '.join(sorted(types))}); pass topic=")
+        self.bag_topic = topic or next(iter(types))
+        if self.bag_topic not in types:
+            raise ValueError(f"rw.route.from_bag: {self.path} has no {self.bag_topic} (it has {', '.join(sorted(types))})")
+        self.source_type = types[self.bag_topic]
+        self._raw = []
+        while reader.has_next():
+            name, data, t = reader.read_next()
+            if name == self.bag_topic:
+                self._raw.append((t, data))
+        if not self._raw:
+            raise ValueError(f"rw.route.from_bag: {self.path} has no messages on {self.bag_topic}")
+        t0 = self._raw[0][0]
+        self._offsets = [(t - t0) * 1e-9 for t, _ in self._raw]
+        self.length = self._offsets[-1]
+        self._cls = None
+        self._start = None
+        self._next = 0
+        self.stats["played"] = 0
+
+    def bind(self, topic, type_name):
+        from rosidl_runtime_py.utilities import get_message
+
+        self._cls = get_message(self.source_type)
+
+    def handle(self, msg, now, rng):
+        return []  # the live message is replaced by the bag's
+
+    def due(self, now):
+        if self._cls is None:
+            return []
+        if self._start is None:
+            self._start = now + self.at
+        from rclpy.serialization import deserialize_message
+
+        out = []
+        while True:
+            if self._next == len(self._raw):
+                if not self.loop:
+                    break
+                self._start += self.length + (self._offsets[1] if len(self._offsets) > 1 else 0.0)  # one period on
+                self._next = 0
+            if self._start + self._offsets[self._next] > now + 1e-9:
+                break
+            msg = deserialize_message(self._raw[self._next][1], self._cls)
+            if self.restamp and hasattr(msg, "header"):
+                sec, nanosec = divmod(round(now * 1e9), 1_000_000_000)
+                msg.header.stamp.sec, msg.header.stamp.nanosec = int(sec), int(nanosec)
+            out.append(msg)
+            self._next += 1
+        self.stats["played"] += len(out)
+        return out
+
+    def describe(self):
+        return f"from_bag({self.path}, {self.bag_topic})"
 
 
 def as_route(r) -> Route:
@@ -191,6 +335,19 @@ class _Namespace:
         if hz <= 0:
             raise ValueError(f"throttle(hz): got {hz}")
         return _Throttle(hz=hz)
+
+    @staticmethod
+    def record(path) -> Route:
+        """Pass every message, and write each to a rosbag at ``path`` (a new directory) at its simulated time."""
+        return _Record(path)
+
+    @staticmethod
+    def from_bag(path, topic: str | None = None, *, at: float = 0.0, restamp: bool = True, loop: bool = False) -> Route:
+        """Your nodes receive the bag's messages on this topic instead of the live ones, at their recorded offsets from
+        when the command starts (plus ``at``). ``topic``: which of the bag's topics (needed when it has several);
+        ``restamp``: header stamps set to the simulated time each is delivered (a recording's own stamps are from
+        another clock); ``loop``: start over at the end."""
+        return _FromBag(path, topic, at=at, restamp=restamp, loop=loop)
 
     @staticmethod
     def fulfill(fn) -> Route:
@@ -296,16 +453,22 @@ class Relay:
             self._discover()
         if self.direction == "in" and not self.consumed:
             self.consumed = self.node.count_subscribers(self.private) > 0
+        if self._pub is None:
+            return
         now = self.clock()
         with self._lock:
             due = []
             while self._queue and self._queue[0][0] <= now + 1e-9:
                 due.append(heapq.heappop(self._queue)[2])
+        due += self.route.due(now)
         for m in due:
             self._pub.publish(m)
 
     def _discover(self) -> None:
         outside, inside = self._publishers(self.topic), self._publishers(self.private)
+        if self.route.source_type is not None:
+            self._supply(outside, inside)
+            return
         if outside and inside:
             self.error = (
                 f"cannot route {self.topic}: it is published both outside the command "
@@ -334,6 +497,30 @@ class Relay:
         self._pub = self.node.create_publisher(cls, dst, qos)
         self._sub = self.node.create_subscription(cls, src, self._on_msg, qos, callback_group=self._cb)
         self.direction = "in" if outside else "out"
+        self.route.bind(self.topic, self.type_name)
+
+    def _supply(self, outside, inside) -> None:
+        """A route that supplies the topic itself (from_bag): your nodes hear it, and only it, from the start."""
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+        from rosidl_runtime_py.utilities import get_message
+
+        if inside:
+            self.error = (
+                f"cannot play a bag into {self.topic}: your nodes publish it ({', '.join(sorted({p.node_name for p in inside}))}); "
+                "from_bag replaces what they receive"
+            )
+            return
+        live = dict(self.node.get_topic_names_and_types()).get(self.topic) if outside else None
+        if live and live[0] != self.route.source_type:
+            self.error = f"cannot play a bag into {self.topic}: it carries {live[0]}, the bag {self.route.source_type}"
+            return
+        self.type_name = self.route.source_type
+        cls = get_message(self.type_name)
+        self._pub = self.node.create_publisher(cls, self.private, QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
+        if outside:  # the live messages are counted, and go no further
+            self._sub = self.node.create_subscription(cls, self.topic, self._on_msg, qos_profile_sensor_data, callback_group=self._cb)
+        self.direction = "in"
+        self.route.bind(self.topic, self.type_name)
 
     def _on_msg(self, msg) -> None:
         now = self.clock()
@@ -355,6 +542,7 @@ class Relay:
         }
 
     def close(self) -> None:
+        self.route.close()
         for e in (self._sub, self._pub):
             if e is not None:
                 if e is self._sub:

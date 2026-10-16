@@ -143,6 +143,7 @@ ros = pytest.mark.skipif(not HAS_ROS, reason="needs a ROS 2 environment (rclpy)"
 
 
 def _listen(world, ros2, tmp_path, route=None, seconds=3.0, mode="listen"):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     out = tmp_path / "seen.json"
     with ros2.run([sys.executable, str(NODE), mode, str(out)], route=route):
         world.wait(seconds)
@@ -238,3 +239,66 @@ def test_a_launch_file_is_routed_through_its_wrapper(world, ros2, tmp_path):
         seen = json.loads(out.read_text())
     assert seen["count"] == 0
     assert ros2.routes[0]["dropped"] > 50
+
+
+# -- recording a topic, and playing it back (Playwright's recordHar / routeFromHAR) --------
+
+
+def test_record_refuses_to_write_over_an_existing_directory(tmp_path):
+    with pytest.raises(FileExistsError, match="exists"):
+        rw.route.record(tmp_path)
+
+
+def _bag_messages(path):
+    import rosbag2_py
+
+    reader = rosbag2_py.SequentialReader()
+    reader.open(rosbag2_py.StorageOptions(uri=str(path)), rosbag2_py.ConverterOptions("cdr", "cdr"))
+    out = []
+    while reader.has_next():
+        name, _, t = reader.read_next()
+        out.append((name, t))
+    return out
+
+
+@ros
+def test_a_recorded_topic_plays_back_instead_of_the_live_one(world, ros2, tmp_path):
+    def marked(msg):  # a first joint the live robot never has: what the second run hears shows where it came from
+        msg.position = [9.0, *msg.position[1:]]
+        return msg
+
+    bag = tmp_path / "joint_states_bag"
+    first = _listen(world, ros2, tmp_path / "rec", route={"/joint_states": rw.route.fulfill(marked) | rw.route.record(bag)})
+    assert first["first"][0] == 9.0
+    recorded = _bag_messages(bag)
+    assert len(recorded) > 50 and {name for name, _ in recorded} == {"/joint_states"}
+    stamps = [t for _, t in recorded]
+    assert stamps == sorted(stamps) and (stamps[-1] - stamps[0]) * 1e-9 > 2.0  # simulated time, about the run's length
+
+    second = _listen(world, ros2, tmp_path / "play", route={"/joint_states": rw.route.from_bag(bag)})
+    assert second["first"][0] == 9.0, "the node heard the live robot, not the bag"
+    (r,) = ros2.routes
+    assert r["played"] > 50 and r["dropped"] > 50 and r["passed"] == 0  # the live messages went no further
+    assert float(np.median(second["lags"])) == pytest.approx(0.0, abs=0.05)  # restamped as they are delivered
+
+
+@ros
+def test_a_bag_plays_at_its_recorded_pace_in_simulated_time(world, ros2, tmp_path):
+    bag = tmp_path / "paced"
+    _listen(world, ros2, tmp_path / "rec", route={"/joint_states": rw.route.record(bag)}, seconds=2.0)
+    n = len(_bag_messages(bag))
+    seen = _listen(world, ros2, tmp_path / "play", route={"/joint_states": rw.route.from_bag(bag, at=1.0)}, seconds=2.0)
+    # Played from 1 s after the command started, for the 2 s waited (and the moments the node took to write): about
+    # half the recording, not all of it at once.
+    assert 0.25 * n < ros2.routes[0]["played"] < 0.75 * n, (ros2.routes[0], n)
+    assert seen["count"] > 0
+
+
+@ros
+def test_a_bag_from_ros2_bag_record_plays_too(world, ros2, tmp_path):
+    bag = tmp_path / "cli_bag"
+    with ros2.run(["ros2", "bag", "record", "-o", str(bag), "/joint_states"]):
+        world.wait(3.0)  # ros2 bag record stamps by the wall clock it received them on: offsets are what play uses
+    assert len(_bag_messages(bag)) > 20
+    seen = _listen(world, ros2, tmp_path / "play", route={"/joint_states": rw.route.from_bag(bag)}, seconds=2.0)
+    assert seen["count"] > 10 and ros2.routes[0]["played"] > 10

@@ -120,6 +120,21 @@ changes what your nodes read or what they send is found from the graph. `ros2.ro
 trace say what each route passed, dropped and delayed, and a route that changed nothing (no
 such topic, or nodes that ignored the remapping) fails the test instead of passing it silently.
 
+A topic can be recorded and played back, as Playwright records and replays network traffic in a
+HAR file. `rw.route.record(path)` passes every message and writes it to a rosbag at its
+simulated time; `rw.route.from_bag(path)` gives your nodes the bag's messages instead of the live
+ones, at their recorded pace from when the command starts, with their header stamps set to the
+time each arrives. A bag from `ros2 bag record` on the real robot plays the same way, so sensor
+data recorded in the field can be the input of a test:
+
+```python
+with ros2.run("ros2 launch my_robot nav.launch.py", route={"/scan": rw.route.from_bag("field/scan_bag")}):
+    expect(robot.base).to_be_near(goal, tol=0.3, timeout=60)
+```
+
+`from_bag(path, topic=..., at=..., loop=True)` picks one of several topics, starts later, or
+starts over at the end. `ros2.routes` counts what was played and what live messages it held back.
+
 ### Then the same tests against Gazebo or the real arm
 
 `--rw-backend ros2` points the same tests at any robot behind ROS 2: a real arm with a
@@ -631,6 +646,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
 | `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
+| `recordHar`, `routeFromHAR` | `rw.route.record("scan_bag")` writes a topic to a rosbag as it passes; `rw.route.from_bag("scan_bag")` plays it to your stack instead of the live topic, at its recorded pace (a bag from `ros2 bag record` on the real robot too) |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out, and keeps its trace |
 | `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
