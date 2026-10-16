@@ -141,3 +141,32 @@ def test_a_project_runs_its_tests_against_one_stack_reset_between_them(tmp_path)
     assert sum(r["seconds"] for r in resets) < 15, resets
     print(f"three tests against one stack: {took:.1f} s; resets {[(r['seconds'], r['parts']) for r in resets]}")
     print(run.stdout[-1500:])
+
+
+@pytest.mark.skipif(not _have_ur(), reason="needs a ROS 2 environment with ur_simulation_gz")
+def test_init_ros2_makes_a_project_whose_tests_pass_against_the_stack(tmp_path):
+    """robowright init --ros2 "<launch command>" --gazebo, as npm init playwright: the project it writes runs as is
+    (here with the environment UR's launch needs on this machine added to its stack)."""
+    sys.path.insert(0, str(HERE))
+    import ur_moveit_rig as ur
+
+    cmd = "ros2 launch ur_simulation_gz ur_sim_control.launch.py ur_type:=ur5e launch_rviz:=false gazebo_gui:=false"
+    made = subprocess.run(
+        [sys.executable, "-m", "robowright.cli", "init", str(tmp_path), "--ros2", cmd, "--gazebo"], capture_output=True, text=True
+    )
+    assert made.returncode == 0, made.stderr
+    toml = tmp_path / "robowright.toml"
+    env_line = "env = { DISPLAY = false" + (f', LD_PRELOAD = "{ur.CONTROLLER_MANAGER}"' if ur.CONTROLLER_MANAGER.exists() else "") + " }"
+    toml.write_text(toml.read_text().replace("# env = { DISPLAY = false }  # a variable to set for the stack (false unsets it)", env_line))
+    env = {**os.environ, "ROS_DOMAIN_ID": "23", "PYTHONUNBUFFERED": "1"}
+    env.pop("GZ_PARTITION", None)
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:launch_testing", "-p", "no:launch_ros"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert run.returncode == 0, toml.read_text() + run.stdout[-4000:] + run.stderr[-2000:]
+    assert "2 passed" in run.stdout, run.stdout[-2000:]

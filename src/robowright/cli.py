@@ -97,6 +97,51 @@ _INIT_TOML = """# robowright settings for this project.
 # command = false
 """
 
+_INIT_ROS2_TEST = '''"""Tests against your ROS 2 stack, written like Playwright tests. robowright starts the stack once
+(robowright.toml, [ros2.stack]) and puts it back as it came up before each test, as Playwright gives
+each test a fresh browser context; the robot is the one your stack describes.
+
+    pytest                                   # start the stack, run every test against it
+    robowright show-trace robowright-traces/<test>.zip   # every failure leaves a trace
+
+Your own code under test: start it in a test with ros2.run("ros2 launch ...") and assert on what it
+does, or change what it hears with route= (see the README).
+"""
+
+import pytest
+
+from robowright import expect
+
+
+def test_the_stack_reports_the_robots_joints(world):
+    assert world.robot.model.arm_joints or world.robot.model.family == "mobile", "the stack publishes no joints"
+
+
+def test_the_arm_goes_where_its_controller_is_told(world, robot):
+    if not robot.n_arm:
+        pytest.skip("no arm controller in the stack")
+    target = robot.qpos()[: robot.n_arm].copy()
+    target[0] += 0.2  # the first joint, a little: robowright plans the move and sends it through your controller
+    robot.arm.move_joints(target)
+    expect(robot).to_have_joint(robot.model.arm_joints[0], float(target[0]), tol=0.02)
+'''
+
+_INIT_ROS2_TOML = """# robowright settings for this project: a robot behind ROS 2.
+[ros2]
+use_sim_time = {sim_time}  # the stack runs on simulated time ({sim_why})
+gazebo = {gazebo}
+
+# The stack the tests run against, started once per test worker and put back before each test.
+[ros2.stack]
+command = {command}
+# env = {{ DISPLAY = false }}  # a variable to set for the stack (false unsets it)
+# timeout = 240              # seconds it may take to come up
+# speed = 2.0                # Gazebo faster than real time (a stack on simulated time)
+
+# For a real arm, start observe-only (command = false under [ros2]) and set [ros2.limits];
+# see docs/hardware.md.
+"""
+
 _INIT_PYTEST = """[pytest]
 testpaths = tests
 # The robots and engines every test runs on (each is a separate test, like Playwright's projects).
@@ -139,13 +184,30 @@ def _init(args, rest):
     """Set up a project the way ``npm init playwright`` does: an example test, settings, CI, and
     the MCP server registered for AI coding agents. Files that exist are left alone."""
     root = Path(args.dir)
-    files = {
-        root / "tests" / "test_robot.py": _INIT_TEST,
-        root / "robowright.toml": _INIT_TOML,
-        root / "pytest.ini": _INIT_PYTEST.format(robot=args.robot, backend=args.backend),
-        root / ".github" / "workflows" / "robowright.yml": _INIT_CI,
-        root / ".mcp.json": _init_mcp(),
-    }
+    if args.ros2:
+        import json as _json
+
+        gz = args.gazebo
+        files = {
+            root / "tests" / "test_robot.py": _INIT_ROS2_TEST,
+            root / "robowright.toml": _INIT_ROS2_TOML.format(
+                command=_json.dumps(args.ros2),  # a TOML basic string is a JSON string
+                sim_time="true" if gz else "false",
+                sim_why="Gazebo publishes /clock" if gz else "set true for a simulator that publishes /clock",
+                gazebo="true" if gz else "false",
+            ),
+            root
+            / "pytest.ini": "[pytest]\ntestpaths = tests\n# Every test against the stack in robowright.toml\naddopts = --rw-backend ros2\n",
+            root / ".mcp.json": _init_mcp(),
+        }
+    else:
+        files = {
+            root / "tests" / "test_robot.py": _INIT_TEST,
+            root / "robowright.toml": _INIT_TOML,
+            root / "pytest.ini": _INIT_PYTEST.format(robot=args.robot, backend=args.backend),
+            root / ".github" / "workflows" / "robowright.yml": _INIT_CI,
+            root / ".mcp.json": _init_mcp(),
+        }
     for path, text in files.items():
         if path.exists():
             print(f"kept     {path} (exists)")
@@ -158,6 +220,14 @@ def _init(args, rest):
     if "robowright-traces/" not in lines:
         ignore.write_text("\n".join([*lines, "robowright-traces/"]) + "\n")
         print(f"updated  {ignore}")
+    if args.ros2:
+        print(
+            "\nnext (in your ROS 2 environment):\n"
+            "  pytest                            start the stack once, run the tests against it\n"
+            "  robowright show-trace <trace>     look into a failure\n"
+            "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)"
+        )
+        return 0
     print(
         "\nnext:\n"
         "  pytest                            run the tests\n"
@@ -526,6 +596,10 @@ def main(argv=None) -> int:
     i.add_argument("dir", nargs="?", default=".")
     i.add_argument("--robot", default="so101", help="the robots tests run on (default so101)")
     i.add_argument("--backend", default="mujoco", help="the engines tests run on (default mujoco)")
+    i.add_argument(
+        "--ros2", metavar="COMMAND", help='a ROS 2 project: the command that starts your stack ("ros2 launch my_robot sim.launch.py")'
+    )
+    i.add_argument("--gazebo", action="store_true", help="with --ros2: the stack runs Gazebo (simulated time, Gazebo's ground truth)")
     sub.add_parser("test", help="run tests (all arguments are passed to pytest)", add_help=False)
     s = sub.add_parser("show-trace", help="open a trace in the HTML viewer")
     s.add_argument("trace")

@@ -88,6 +88,10 @@ def test_my_stack_puts_the_cube_in_the_bin(scene, ros2):
         expect(scene["cube"]).to_be_inside(scene["bin"], timeout=60)
 ```
 
+`robowright init --ros2 "ros2 launch my_robot sim.launch.py" --gazebo` sets up a project for your
+own stack (settings naming it, pytest against ROS 2, an example test any `ros2_control` robot runs):
+`pytest` then starts the stack once and runs every test against it (see below).
+
 [`examples/ros2_stack/pick_node.py`](examples/ros2_stack/pick_node.py) is a stand-in stack (TF,
 an IK library, the two actions) and [`tests/test_ros2_bridge.py`](tests/test_ros2_bridge.py)
 tests it that way. `robowright sim --ros2 --live` serves a simulation on its own, for you or

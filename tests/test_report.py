@@ -78,3 +78,25 @@ def test_headed_without_a_display_says_so(monkeypatch):
         pytest.skip("the display check is for Linux")
     with pytest.raises(CapabilityError, match="headed runs need a display"):
         rw.launch(settings=rw.Settings(trace="off", headed=True))
+
+
+def test_init_ros2_writes_a_project_for_a_stack(tmp_path):
+    """robowright init --ros2 "<launch command>": the settings name the stack, pytest runs against ROS 2, and the example
+    test is one any ros2_control robot can run (run against UR's Gazebo simulation in tests/test_stack_pytest.py)."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10: robowright depends on tomli there
+        import tomli as tomllib
+
+    cmd = 'ros2 launch my_robot sim.launch.py world:="a b"'
+    r = subprocess.run(
+        [sys.executable, "-m", "robowright.cli", "init", str(tmp_path), "--ros2", cmd, "--gazebo"], capture_output=True, text=True
+    )
+    assert r.returncode == 0, r.stderr
+    cfg = tomllib.loads((tmp_path / "robowright.toml").read_text())
+    assert cfg["ros2"]["stack"]["command"] == cmd  # quoted as TOML, quotes and all
+    assert cfg["ros2"]["use_sim_time"] is True and cfg["ros2"]["gazebo"] is True
+    assert "--rw-backend ros2" in (tmp_path / "pytest.ini").read_text()
+    assert "ros2_control" not in (tmp_path / ".mcp.json").read_text()
+    compile((tmp_path / "tests" / "test_robot.py").read_text(), "test_robot.py", "exec")
+    assert not (tmp_path / ".github").exists()  # a CI runner has no ROS 2 stack: no workflow is written for one
