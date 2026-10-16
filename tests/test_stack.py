@@ -43,8 +43,10 @@ def test_a_stack_that_ignores_sigint_is_gone_within_its_grace(tmp_path):
 
 
 def test_spawners_are_counted_in_the_stacks_own_group_only(tmp_path):
+    # A Python script, as ros2_control's spawner is: one process for its life. A bash one forked a copy of itself to
+    # run sleep, and for that moment counted twice (seen on CI's Python 3.10 runner).
     fake = tmp_path / "spawner"
-    fake.write_text("#!/bin/bash\nsleep 30\n")
+    fake.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
     fake.chmod(0o755)
     mine = subprocess.Popen(["bash", "-c", f"{fake} & {fake} & wait"], start_new_session=True)
     other = subprocess.Popen([str(fake)], start_new_session=True)
