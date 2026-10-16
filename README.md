@@ -527,7 +527,14 @@ index of a `SyncVectorEnv` reads, step for step (MuJoCo and PyBullet, under `for
 `forkserver`). Reads are fetched once per vector step for every index in one round trip: with 8
 HalfCheetah workers, 0.25 ms per vector step with traces off and 0.38 ms with them on (0.12 ms
 unattached). A vector env made without the wrapper is refused, saying how to add it, and its workers
-keep running. Each sub-environment's trace replays and is written as a test like any other attached run,
+keep running.
+
+Stable-Baselines3's vector envs attach the same way: a `DummyVecEnv` like a `SyncVectorEnv`, and a
+`SubprocVecEnv` through `rw.attachable` in its workers
+(`make_vec_env(..., vec_env_cls=SubprocVecEnv, wrapper_class=rw.attachable)`), through `VecNormalize`
+and other wrappers. A `SubprocVecEnv` index reads exactly what the same `DummyVecEnv` index reads, and
+the reset Stable-Baselines3 makes inside the step that ended an episode is on that index's trace, which
+replays. Each sub-environment's trace replays and is written as a test like any other attached run,
 autoresets included (the same state at every step over three sub-environments, in both of gymnasium's
 autoreset modes, from either vector env). The first reset must be given a seed
 (`vec.reset(seed=0)`): gymnasium seeds an unseeded environment from the operating system, so such a
@@ -1717,7 +1724,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
 - **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU), and Isaac Lab environments on the GPU, watching one of their
   copies (`env_index`). An Isaac Lab run keeps its trace but is not replayed (its GPU physics is not bit-for-bit
   repeatable), and contacts there come only from the scene's contact sensors. An `AsyncVectorEnv` is attached through
-  `rw.attachable` in its workers; other multi-process setups (Stable-Baselines3's `SubprocVecEnv`) are not. MuJoCo, PyBullet and
+  `rw.attachable` in its workers, as is Stable-Baselines3's `SubprocVecEnv`; other multi-process setups are not. MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that
   rebuilds the simulation; Webots runs are replayed and not turned into tests. A gymnasium run
   first reset without a seed is neither.
@@ -1753,8 +1760,8 @@ Each of these builds on the extension points above, not on any one robot or fram
    from simulation as known divergences, as the engines' are.
 2. **More stacks and simulators:** replay for GPU-batched environments (a saved state to start from, and a tolerance for
    physics that is not bit-for-bit repeatable).
-3. **Other multi-process vector environments** (Stable-Baselines3's `SubprocVecEnv`), the way `AsyncVectorEnv` is
-   attached now.
+3. **Other multi-process training setups** (Ray RLlib's env runners, EnvPool), the way `AsyncVectorEnv` and
+   `SubprocVecEnv` are attached now.
 
 ## License
 

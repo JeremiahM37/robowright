@@ -1,8 +1,10 @@
-"""``rw.attach`` on a gymnasium ``AsyncVectorEnv``: sub-environments that run in worker processes.
+"""``rw.attach`` on a vector environment whose sub-environments run in worker processes: gymnasium's ``AsyncVectorEnv``
+and Stable-Baselines3's ``SubprocVecEnv``.
 
 A worker's simulation is in its own process, so robowright cannot read it in place as it reads a ``SyncVectorEnv``'s.
 Each sub-environment is wrapped, inside its worker, by :func:`attachable`; robowright then reaches it through the
-vector environment's own pipes (``vec.call``), as Playwright reaches a browser it did not start in-process::
+vector environment's own pipes (``vec.call``, ``vec.env_method``), as Playwright reaches a browser it did not start
+in-process::
 
     vec = gymnasium.make_vec("HalfCheetah-v5", 4, vectorization_mode="async", wrappers=[rw.attachable])
     worlds = rw.attach(vec)
@@ -43,7 +45,7 @@ def _wrapper_class():
     class RobowrightAttachable(gymnasium.Wrapper):
         """robowright's side of an ``AsyncVectorEnv`` worker (see the module)."""
 
-        robowright_index = -1  # set by rw.attach (vec.set_attr): which index this worker is
+        _rw_token = None  # given out once, when rw.attach first asks: requests for this worker are filed under it
 
         def __init__(self, env):
             super().__init__(env)
@@ -92,9 +94,15 @@ def _wrapper_class():
                 self._rw_events.append(("reset", seed, options, rng, seeded, rebound, error))
             return out
 
-        # --- robowright's calls (vec.call("robowright", {index: [(method, args), ...]})) ---
-        def robowright(self, requests: dict):
-            mine = requests.get(self.robowright_index)
+        # --- robowright's calls: vec.call("robowright", {token: [(method, args), ...]}) to every worker -----
+        def robowright(self, requests):
+            if requests == "hello":  # who is this worker: one call to all of them, answered in index order
+                if self._rw_token is None:
+                    import os
+
+                    self._rw_token = os.urandom(8).hex()
+                return self._rw_token
+            mine = requests.get(self._rw_token)
             if mine is None:
                 return None
             return [self._rw_try(key) for key in mine]
@@ -201,19 +209,61 @@ _MUTATIONS = frozenset({"set_state", "set_joint", "set_object_pose"})
 _ERRORS = {"KeyError": KeyError, "ValueError": ValueError, "IndexError": IndexError, "CapabilityError": CapabilityError}
 
 
-def is_attachable(vec) -> bool:
-    """Whether every sub-environment of an AsyncVectorEnv was wrapped by :func:`attachable`. Asked through
-    ``__str__``, which every gymnasium environment has: a call to a missing name would end the worker."""
-    return all(MARK in str(s) for s in vec.call("__str__"))
+class _Gymnasium:
+    """gymnasium's AsyncVectorEnv: ``vec.call`` runs a method in every worker."""
+
+    kind = "AsyncVectorEnv"
+    how = (
+        "gymnasium.make_vec(..., vectorization_mode='async', wrappers=[rw.attachable]), "
+        "or AsyncVectorEnv([lambda: rw.attachable(make_env()), ...])"
+    )
+    steps, resets, user_calls = ("step_async", "step_wait"), "reset_wait", ("call", "set_attr")
+
+    def __init__(self, vec):
+        self.vec, self.n, self._call = vec, vec.num_envs, vec.call
+
+    def call(self, name: str, *args) -> list:
+        return list(self._call(name, *args))
+
+    def split(self, actions) -> list:
+        from gymnasium.vector.utils import iterate
+
+        return list(iterate(self.vec.action_space, actions))
+
+
+class _StableBaselines3(_Gymnasium):
+    """Stable-Baselines3's SubprocVecEnv: ``vec.env_method`` runs a method in every worker."""
+
+    kind = "SubprocVecEnv"
+    how = (
+        "SubprocVecEnv([lambda: rw.attachable(make_env()), ...]), "
+        "or make_vec_env(..., vec_env_cls=SubprocVecEnv, wrapper_class=rw.attachable)"
+    )
+    steps, resets, user_calls = ("step_async", "step_wait"), "reset", ("env_method", "set_attr")
+
+    def __init__(self, vec):
+        self.vec, self.n, self._call = vec, vec.num_envs, vec.env_method
+
+    def split(self, actions) -> list:
+        if isinstance(actions, dict):
+            return [{k: v[i] for k, v in actions.items()} for i in range(self.n)]
+        return [actions[i] for i in range(self.n)]
+
+
+def is_attachable(link) -> bool:
+    """Whether every sub-environment was wrapped by :func:`attachable`. Asked through ``__str__``, which every gymnasium
+    environment has (and prints its wrappers in): a call to a missing name would end the worker."""
+    return all(MARK in str(s) for s in link.call("__str__"))
 
 
 class _Hub:
-    """The test process's link to the workers of one AsyncVectorEnv: one round trip per batch of calls, and per index a
-    cache of what was read since the simulation last moved."""
+    """The test process's link to the workers of one vector environment: one round trip per batch of calls, and per index
+    a cache of what was read since the simulation last moved."""
 
-    def __init__(self, vec):
-        self.vec = vec
-        self.n = vec.num_envs
+    def __init__(self, link):
+        self.link = link
+        self.n = link.n
+        self.tokens = link.call("robowright", "hello")
         self.cache: list[dict] = [{} for _ in range(self.n)]
         self.used: list[set] = [set() for _ in range(self.n)]  # what each index read since its last step
         self.closed = False
@@ -222,7 +272,7 @@ class _Hub:
     def call(self, requests: dict) -> dict:
         if self.closed:
             raise CapabilityError("the AsyncVectorEnv this world was attached to is closed")
-        results = self.vec.robowright_call(requests)
+        results = self.link.call("robowright", {self.tokens[i]: r for i, r in requests.items()})
         return {i: results[i] for i in requests}
 
     @staticmethod
@@ -361,21 +411,20 @@ class RemoteEngine(AttachedEngine):
         self.hub.mutate(self.index, "set_state", np.asarray(state))
 
 
-def attach_async(vec, *, advance, name: str, seed: int, settings):
-    """One world per sub-environment of an AsyncVectorEnv whose sub-environments are :func:`attachable`."""
+def attach_remote(vec, *, advance, name: str, seed: int, settings):
+    """One world per sub-environment of a vector environment whose sub-environments run in worker processes (gymnasium's
+    AsyncVectorEnv, Stable-Baselines3's SubprocVecEnv), each wrapped there by :func:`attachable`."""
     from .attached import AttachedWorld, _current
 
-    if not is_attachable(vec):
-        raise CapabilityError(
-            "cannot attach to this AsyncVectorEnv: its sub-environments run in worker processes, and robowright reaches "
-            "one only through robowright's wrapper inside it. Make it with gymnasium.make_vec(..., vectorization_mode="
-            "'async', wrappers=[rw.attachable]), or AsyncVectorEnv([lambda: rw.attachable(make_env()), ...])"
-        )
+    link = _Gymnasium(vec) if hasattr(vec, "call") else _StableBaselines3(vec)
     if getattr(vec, "_robowright_hub", None) is not None:
-        raise CapabilityError("this AsyncVectorEnv is attached already: close those worlds first")
-    hub = _Hub(vec)
-    vec.robowright_call = lambda requests: vec.call("robowright", requests)
-    vec.set_attr("robowright_index", list(range(hub.n)))
+        raise CapabilityError(f"this {link.kind} is attached already: close those worlds first")
+    if not is_attachable(link):
+        raise CapabilityError(
+            f"cannot attach to this {link.kind}: its sub-environments run in worker processes, and robowright reaches one "
+            f"only through robowright's wrapper inside it. Make it with {link.how}"
+        )
+    hub = _Hub(link)
     infos = hub.call({i: [("attach", ())] for i in range(hub.n)})
     worlds = []
     for i in range(hub.n):
@@ -387,14 +436,14 @@ def attach_async(vec, *, advance, name: str, seed: int, settings):
         worlds.append(w)
     _hook(vec, hub, worlds)
     _current.set(worlds[0])
-    return _async_worlds(worlds, vec, hub)
+    return _remote_worlds(worlds, vec, hub)
 
 
 def _hook(vec, hub: _Hub, worlds: list) -> None:
     """Route the vector environment's steps and resets through the worlds (instance attributes: its class is untouched)."""
-    from gymnasium.vector.utils import iterate
-
-    orig = {k: getattr(vec, k) for k in ("step_async", "step_wait", "reset_wait", "call", "set_attr")}
+    link = hub.link
+    step_async_name, step_wait_name = link.steps
+    orig = {k: getattr(vec, k) for k in (*link.steps, link.resets, *link.user_calls)}
     pending: dict = {}
 
     def step_async(actions):
@@ -414,36 +463,38 @@ def _hook(vec, hub: _Hub, worlds: list) -> None:
             for rs in hub.call(pushes).values():
                 for r in rs:
                     hub.value(r)
-        pending["step"] = (list(iterate(vec.action_space, actions)), forces, times)
-        return orig["step_async"](actions)
+        pending["step"] = (link.split(actions), forces, times)
+        return orig[step_async_name](actions)
 
     def step_wait(*args, **kwargs):
-        out = orig["step_wait"](*args, **kwargs)
+        out = orig[step_wait_name](*args, **kwargs)
         actions, forces, times = pending.pop("step", (None, None, None))
         _moved(hub, worlds, actions, forces, times)
         return out
 
-    def reset_wait(*args, **kwargs):
-        out = orig["reset_wait"](*args, **kwargs)
+    def reset(*args, **kwargs):
+        out = orig[link.resets](*args, **kwargs)
         _moved(hub, worlds, None, None, None)
         return out
 
-    def call(name, *args, **kwargs):  # the user's own calls can change the simulations: reads are taken again
-        for c in hub.cache:
-            c.clear()
-        return orig["call"](name, *args, **kwargs)
+    def user_call(name):
+        def call(*args, **kwargs):  # the user's own calls can change the simulations: reads are taken again
+            for c in hub.cache:
+                c.clear()
+            return orig[name](*args, **kwargs)
 
-    def set_attr(name, values):
-        for c in hub.cache:
-            c.clear()
-        return orig["set_attr"](name, values)
+        return call
 
-    vec.step_async, vec.step_wait, vec.reset_wait, vec.call, vec.set_attr = step_async, step_wait, reset_wait, call, set_attr
-    vec.robowright_call = lambda requests: orig["call"]("robowright", requests)
+    setattr(vec, step_async_name, step_async)
+    setattr(vec, step_wait_name, step_wait)
+    setattr(vec, link.resets, reset)
+    for name in link.user_calls:
+        setattr(vec, name, user_call(name))
+    link._call = orig[link.user_calls[0]]  # robowright's own calls do not clear the reads it keeps
 
     def unhook():
-        for k, v in orig.items():
-            setattr(vec, k, v)
+        for k in orig:
+            vec.__dict__.pop(k, None)  # back to the class's own methods
 
     vec._robowright_hub = hub
     vec._robowright_unhook = unhook
@@ -482,11 +533,12 @@ def _moved(hub: _Hub, worlds: list, actions, forces, times) -> None:
                 w._on_reset(seed, options, rng=rng if w.trace else None)
 
 
-def _async_worlds(worlds, vec, hub):
+def _remote_worlds(worlds, vec, hub):
     from .attached import AttachedVectorWorlds
 
-    class AsyncVectorWorlds(AttachedVectorWorlds):
-        """The worlds of an AsyncVectorEnv. Closing them also releases the vector environment: it can be attached again."""
+    class RemoteVectorWorlds(AttachedVectorWorlds):
+        """The worlds of a vector environment's workers. Closing them also releases the vector environment: it can be
+        attached again."""
 
         def close(self, failed: bool | None = None) -> list:
             try:
@@ -496,7 +548,6 @@ def _async_worlds(worlds, vec, hub):
                 if unhook is not None:
                     unhook()
                 vec.__dict__.pop("_robowright_hub", None)
-                vec.__dict__.pop("robowright_call", None)
                 hub.closed = True
 
-    return AsyncVectorWorlds(worlds)
+    return RemoteVectorWorlds(worlds)

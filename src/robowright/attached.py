@@ -760,26 +760,33 @@ def _vector_of(env):
     gymnasium is optional, and a vector environment can only exist if it is already imported, so it is not imported here.
     """
     vec_mod = sys.modules.get("gymnasium.vector")
-    if vec_mod is None or not isinstance(env, vec_mod.VectorEnv):
-        return None
-    return getattr(env, "unwrapped", env)
+    if vec_mod is not None and isinstance(env, vec_mod.VectorEnv):
+        return getattr(env, "unwrapped", env)
+    sb3 = sys.modules.get("stable_baselines3.common.vec_env")  # Stable-Baselines3's own vector environments
+    if sb3 is not None and isinstance(env, sb3.VecEnv):
+        while isinstance(env, sb3.VecEnvWrapper):  # VecNormalize, VecFrameStack, ...: the steps pass through to .venv
+            env = env.venv
+        return env
+    return None
 
 
 def _attach_vector(vec, *, advance, engine, dt, name: str, seed: int, settings) -> AttachedVectorWorlds:
-    """One world per sub-environment of a SyncVectorEnv, each through the single-environment path (an AsyncVectorEnv:
-    :mod:`robowright.attached_remote`)."""
+    """One world per sub-environment of a SyncVectorEnv (or Stable-Baselines3's DummyVecEnv), each through the
+    single-environment path. Sub-environments in worker processes: :mod:`robowright.attached_remote`."""
     from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
 
-    if isinstance(vec, AsyncVectorEnv):
+    sb3 = sys.modules.get("stable_baselines3.common.vec_env")
+    if isinstance(vec, AsyncVectorEnv) or (sb3 is not None and isinstance(vec, sb3.SubprocVecEnv)):
         if engine is not None or dt is not None:
-            raise ValueError("an AsyncVectorEnv's engines are found in its workers: attach(vec), with no engine= or dt=")
-        from .attached_remote import attach_async
+            raise ValueError(f"a {type(vec).__name__}'s engines are found in its workers: attach(vec), with no engine= or dt=")
+        from .attached_remote import attach_remote
 
-        return attach_async(vec, advance=advance, name=name, seed=seed, settings=settings)
-    if not isinstance(vec, SyncVectorEnv):
+        return attach_remote(vec, advance=advance, name=name, seed=seed, settings=settings)
+    if not isinstance(vec, SyncVectorEnv) and not (sb3 is not None and isinstance(vec, sb3.DummyVecEnv)):
         raise CapabilityError(
-            f"cannot attach to {type(vec).__name__}: robowright reaches the sub-environments of a SyncVectorEnv, and of an "
-            "AsyncVectorEnv made attachable (see rw.attachable); attach to one environment built in this process instead: rw.attach(env)."
+            f"cannot attach to {type(vec).__name__}: robowright reaches the sub-environments of a SyncVectorEnv or DummyVecEnv, "
+            "and of an AsyncVectorEnv or SubprocVecEnv made attachable (see rw.attachable); attach to one environment built "
+            "in this process instead: rw.attach(env)."
         )
     worlds: list[AttachedWorld] = []
     try:
