@@ -34,12 +34,12 @@ steps:
   # in parallel, 1 flake serially) and leave processes that break the next step's simulation.
   - name: ROS 2 both ways (robowright drives ros2_control and Gazebo; a separate ROS 2 stack drives robowright's simulation)
     actions:
-      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_routes.py tests/test_ros_requests.py tests/test_stack.py tests/test_stack_pytest.py tests/test_stack_speed.py tests/test_teardown_bounds.py tests/test_ros_topics.py tests/test_gazebo.py tests/test_ur_driver.py -q -p no:cacheprovider --rw-timeout 600", timeout: 1200 }
+      - shell: { cmd: "capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_routes.py tests/test_ros_requests.py tests/test_stack.py tests/test_stack_pytest.py tests/test_stack_speed.py tests/test_teardown_bounds.py tests/test_ros_topics.py tests/test_ros_stubs.py tests/test_gazebo.py tests/test_ur_driver.py -q -p no:cacheprovider --rw-timeout 600", timeout: 1200 }
 
   # The core again on Humble (scripts/ros2_env.sh humble): its executor and plugins differ from Jazzy's.
   - name: ROS 2 Humble (ros2_control, a stack driving robowright's simulation, routes, world.ros requests, rw.ros2_stack)
     actions:
-      - shell: { cmd: "ROBOWRIGHT_ROS2_ENV=$HOME/.cache/robowright/ros2-humble capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_routes.py tests/test_ros_requests.py tests/test_stack.py tests/test_ros_topics.py -q -p no:cacheprovider --rw-timeout 600", timeout: 1200 }
+      - shell: { cmd: "ROBOWRIGHT_ROS2_ENV=$HOME/.cache/robowright/ros2-humble capped scripts/ros2_env.sh pytest tests/test_ros2.py tests/test_ros2_bridge.py tests/test_routes.py tests/test_ros_requests.py tests/test_stack.py tests/test_ros_topics.py tests/test_ros_stubs.py -q -p no:cacheprovider --rw-timeout 600", timeout: 1200 }
 
   - name: someone else's whole stack (UR's Gazebo simulation and MoveIt, MoveIt's Panda demo, Kinova's and UFACTORY's Gazebo simulations), observed and driven through its own controllers
     actions:

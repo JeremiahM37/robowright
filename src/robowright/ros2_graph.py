@@ -200,6 +200,27 @@ class RosGraph:
         res = done.result()
         return _outcome(ev, GoalResult(_STATUS.get(res.status, f"status {res.status}"), res.result))
 
+    def serve(self, service: str, type: str, respond=None) -> ServiceStub:
+        """Answer ``service`` yourself, in place of the node that would: Playwright's ``route.fulfill``, for a service your
+        stack calls (a perception service, a planner, a driver's ``trigger``). ``respond`` is a response, a dict of its
+        fields, a function ``request -> response | dict | None``, or None for an empty response. Each call is kept
+        (``stub.calls``: its time, request and response, as dicts). It answers until ``stub.close()`` (or the end of a
+        ``with``), and a stack that started before it finds it as it would the real one.
+
+        A service something else already serves is refused: a call would reach either, and the test would not know which."""
+        full = self.backend.topic_name(service)
+        served = {n for n, _ in self.node.get_service_names_and_types()} if hasattr(self.node, "get_service_names_and_types") else set()
+        if full in served:
+            raise RuntimeError(f"{full} is served already: stop the node that serves it, or serve another name")
+        stub = ServiceStub(self, full, _cls("srv", type), respond)
+        self._record_stub(stub)
+        return stub
+
+    def _record_stub(self, stub) -> None:
+        world = getattr(self, "world", None)
+        if world is not None and world.trace:
+            world.trace.event("edit", "ros_serve", {"name": stub.name, "type": stub.type_name})
+
     def close(self) -> None:
         """Destroy the action clients this graph made. An rclpy ActionClient holds its node's handle, and
         Node.destroy_node() does not destroy action clients: one not yet garbage-collected kept the node "in use", and
@@ -235,6 +256,63 @@ class RosGraph:
             return None
         args = {"name": name, "type": _type_of(msg), "fields": _fields(msg), "message": _short(msg), **extra}
         return world.trace.event("edit", f"ros_{kind}", args)
+
+
+class ServiceStub:
+    """A service robowright answers in a test (see :meth:`RosGraph.serve`)."""
+
+    def __init__(self, graph: RosGraph, name: str, srv, respond):
+        import threading
+
+        self.graph, self.name, self.srv = graph, name, srv
+        self.type_name = f"{srv.__module__.split('.')[0]}/srv/{srv.__name__}"
+        self.respond = respond
+        self.calls: list[dict] = []
+        self.error: BaseException | None = None  # what ``respond`` raised, raised again in the test at close()
+        self._lock = threading.Lock()
+        self._server = graph.node.create_service(srv, name, self._on_call)
+
+    @property
+    def count(self) -> int:
+        return len(self.calls)
+
+    def _on_call(self, request, response):
+        world = getattr(self.graph, "world", None)
+        t = world.time if world is not None else None
+        try:
+            out = self.respond(request) if callable(self.respond) else self.respond
+            if isinstance(out, dict):
+                out = _fill(self.srv.Response, out)
+            elif out is None:
+                out = response
+        except BaseException as e:  # noqa: BLE001 - the caller gets an empty response; the test gets the error
+            self.error = self.error or e
+            out = response
+        with self._lock:
+            self.calls.append({"t": t, "request": _fields(request), "response": _fields(out)})
+        return out
+
+    def close(self) -> None:
+        if self._server is not None:
+            self.graph.node.destroy_service(self._server)
+            self._server = None
+            world = getattr(self.graph, "world", None)
+            if world is not None and world.trace:
+                world.trace.event("edit", "ros_serve_closed", {"name": self.name, "calls": self.count})
+        if self.error is not None:
+            err, self.error = self.error, None
+            raise RuntimeError(f"the stub for {self.name} raised while answering a call: {err!r}") from err
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.close()
+        else:  # the test's own error is the one to report
+            self.error = None
+            self.close()
+        return False
 
 
 class GoalResult:

@@ -382,6 +382,26 @@ A goal or command on the arm's own controller takes the arm: robowright stops ho
 hold would replace your goal) and takes it back when it next moves the arm itself. `world.ros`
 works on a world the `ros2` fixture serves too.
 
+A test can also answer a service your stack calls, in place of the node that would, as Playwright's
+`route.fulfill` answers a page's request: a perception service that sees what the test says, a
+planner that fails on purpose, a driver's trigger. Each call is kept with its time, request and
+answer:
+
+```python
+def detect(request):
+    return {"success": True, "message": "cube at 0.22, -0.06"}
+
+
+with world.ros.serve("/detect", "std_srvs/srv/Trigger", detect) as stub:
+    with ros2.run("ros2 launch my_robot pick.launch.py"):
+        expect(cube).to_be_inside(bin, timeout=30)
+assert stub.count == 1
+```
+
+The answer can also be fixed (a response or a dict) or empty. An error raised while answering gives
+the caller an empty response, so the stack does not hang, and is raised in the test when the stub
+closes. A service something else already serves is refused, since a call could reach either.
+
 A goal off the map is refused in Nav2's words (`ActionError: navigate_to_pose aborted:
 GOAL_OUTSIDE_MAP`). A goal inside a wall is not: Nav2 plans to the nearest free space, stops
 0.45 m short and answers SUCCEEDED, with a goal tolerance of 0.25 m. Its answer is not the
@@ -644,6 +664,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
+| `route.fulfill` for an API | `world.ros.serve("/detect", "std_srvs/srv/Trigger", answer)`: the test answers a service your stack calls, each call kept |
 | `request` fixture (API calls) | `world.ros.call(service)`, `world.ros.send_goal(action, {...})`, `world.ros.publish(topic, {...})`: act on the ROS graph from the test, types found, messages as dicts, waits in sim time |
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
 | trace network log, console | a trace of a ROS 2 run keeps every topic's publishers, readers, message counts over time and last message (the viewer's Topics tab), and every node's log lines at their simulated time (its Log tab) |

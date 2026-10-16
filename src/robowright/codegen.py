@@ -175,6 +175,8 @@ def generate(
             body.append(f"world.move_object({a['object']!r}, {_value(a['pos'])}, {_value(a['quat'])})")
         elif t == "edit" and e["name"] in ("ros_publish", "ros_call", "ros_send_goal") and "fields" in a:
             body.extend(_ros_request_lines(e["name"], a))
+        elif t == "edit" and e["name"] == "ros_serve":
+            body.append(f"# not written again: the test answered {a['name']} ({a['type']}) with code of its own (world.ros.serve)")
         elif t == "edit" and e["name"] == "ros2_bridge":
             served = a
         elif t == "edit" and e["name"] == "ros2_goal" and str(a.get("goal", "")).startswith("started: "):
