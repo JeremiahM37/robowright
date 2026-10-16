@@ -138,6 +138,9 @@ def _example_run(name: str, goal) -> Run:
                 expect(world.ros.topic("/scan")).to_publish(hz=SCAN_HZ, tol=0.25, timeout=10)
             except rw.ExpectationError as e:
                 run.scan_error = str(e)
+            # Upright from once it has settled: robowright now connects within a fraction of a second, and caught the
+            # TurtleBot 4 still settling from its spawn (5.1 deg at 0.3 s), which a 2 s connection had never seen.
+            expect(world.robot.base).to_be_upright(tol_deg=UPRIGHT_DEG, hold=0.5, timeout=10)
             expect(world.robot.base).always.to_be_upright(tol_deg=UPRIGHT_DEG)
             started = time.monotonic()
             _run_to_result(world, ex, run, timeout=400.0)
