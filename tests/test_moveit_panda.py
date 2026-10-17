@@ -202,8 +202,19 @@ def test_the_hand_opens_and_closes_as_pymoveit2_says(world):
     budget = {"timeout": 20, "hold": 0.3}
     checks = (("open", lambda: expect(r.gripper).to_be_open(**budget)), ("close", lambda: expect(r.gripper).to_be_closed(**budget)))
     for action, check in checks:
-        proc = _pymoveit2("ex_gripper.py", f"action:={action}", "gripper_command_action_name:=panda_hand_controller/gripper_cmd")
-        _watch(proc, check)
+        for attempt in (1, 2):
+            proc = _pymoveit2("ex_gripper.py", f"action:={action}", "gripper_command_action_name:=panda_hand_controller/gripper_cmd")
+            try:
+                _watch(proc, check)
+            except AssertionError as e:
+                # The example looks for the hand's action server once, from a process that has just started, and gives
+                # up if its discovery has not found it yet ("no gripper action server is available": seen once in a full
+                # gate on a busy machine). That is the example's race, not the hand: it is started once more.
+                notes = "\n".join(getattr(e, "__notes__", []))
+                if attempt == 1 and "no gripper action server is available" in notes:
+                    continue
+                raise
+            break
         out, _ = proc.communicate(timeout=60)
         assert proc.returncode == 0, out
 
