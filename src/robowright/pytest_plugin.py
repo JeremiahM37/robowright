@@ -257,6 +257,13 @@ def pytest_generate_tests(metafunc):
             metafunc.parametrize("rw_robot", names, ids=[_robot_id(n) for n in names], scope="function")
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """A shard that the hash dealt no tests (a small suite over many machines) has passed, as Playwright's does: pytest's
+    "no tests collected" (5) would fail that CI job for having nothing to do."""
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and _shard(session.config) is not None:
+        session.exitstatus = pytest.ExitCode.OK
+
+
 @pytest.hookimpl(tryfirst=True)  # before xdist reads the groups into node ids
 def pytest_collection_modifyitems(config, items):
     """Run each module's tests robot by robot, and group them for ``-n N --dist loadgroup``.
@@ -753,7 +760,7 @@ class _Summary:
             terminalreporter.section("robowright report")
             terminalreporter.line(str(self.run.write(out)))
         blob = terminalreporter.config.getoption("--rw-blob")
-        if blob and self.run.tests:
+        if blob:  # written even for a shard with no tests: the report job expects one blob from each
             terminalreporter.section("robowright report blob")
             terminalreporter.line(str(self.run.save_blob(blob)))
         if self.trials:

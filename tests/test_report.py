@@ -133,3 +133,35 @@ def test_merge_reports_refuses_what_is_not_a_blob(tmp_path):
     cli = [sys.executable, "-m", "robowright.cli", "merge-reports", str(bad), "-o", str(tmp_path / "r.html")]
     r = subprocess.run(cli, capture_output=True, text=True)
     assert r.returncode == 2 and "robowright merge-reports:" in r.stderr
+
+
+def test_the_ci_workflow_init_writes_runs_its_shards_and_merges_them(tmp_path):
+    """The commands the generated workflow runs, as it runs them: each shard's pytest with its blob, then the report
+    job's merge-reports, in the project init made."""
+    import re
+
+    assert subprocess.run([sys.executable, "-m", "robowright.cli", "init", str(tmp_path)], capture_output=True).returncode == 0
+    wf = (tmp_path / ".github" / "workflows" / "robowright.yml").read_text()
+    try:
+        import yaml
+
+        jobs = yaml.safe_load(wf)["jobs"]
+        assert jobs["report"]["needs"] == "test" and jobs["test"]["strategy"]["matrix"]["shard"] == [1, 2]
+    except ImportError:
+        pass
+    runs = re.findall(r"- run: (.+)", wf)
+    shard_cmd = next(r for r in runs if r.startswith("pytest "))
+    merge_cmd = next(r for r in runs if r.startswith("robowright merge-reports"))
+    for n in (1, 2):
+        args = shard_cmd.replace("${{ matrix.shard }}", str(n)).split()[1:]
+        args = [a for a in args if a not in ("-n", "auto")]  # (xdist is optional here)
+        r = subprocess.run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *args], cwd=tmp_path, capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-2000:]  # a shard dealt no tests passes too (here, one of the two is)
+        assert (tmp_path / f"blob-{n}.zip").exists()
+    blobs = sorted(str(p) for p in tmp_path.glob("blob-*.zip"))
+    out = merge_cmd.split(" -o ")[1]
+    cli = [sys.executable, "-m", "robowright.cli", "merge-reports", *blobs, "-o", out]
+    r = subprocess.run(cli, cwd=tmp_path, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    page = (tmp_path / out).read_text()
+    assert "3 tests" in page and "passed 3" in page, page[:1500]  # every test of the example project, across both shards

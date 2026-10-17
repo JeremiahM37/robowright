@@ -154,6 +154,10 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]  # more machines: more numbers here, and the same count in --rw-shard below
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -163,14 +167,34 @@ jobs:
       #   pip install "robowright @ git+https://github.com/JeremiahM37/robowright" pytest-xdist
       - run: pip install robowright pytest-xdist
       # Traces record state, not pictures: no GPU or display is needed to test. --rw-trace-text
-      # prints each failure's trace in the log; the traces themselves are kept as an artifact.
-      # --rw-retries 2 runs a failed test again: one that then passes is reported flaky, not passed.
-      - run: pytest -n auto --rw-retries 2 --rw-trace-text
+      # prints each failure's trace in the log. --rw-retries 2 runs a failed test again: one that
+      # then passes is reported flaky, not passed. Each shard keeps its results, traces included,
+      # in one zip (--rw-blob) for the report job.
+      - run: pytest -n auto --rw-retries 2 --rw-trace-text --rw-shard ${{ matrix.shard }}/2 --rw-blob blob-${{ matrix.shard }}.zip
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: robowright-traces
-          path: robowright-traces/
+          name: robowright-blob-${{ matrix.shard }}
+          path: blob-${{ matrix.shard }}.zip
+  report:
+    # One report of every shard, each failure with its trace (open report.html, or robowright show-report).
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install robowright
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: robowright-blob-*
+          merge-multiple: true
+      - run: robowright merge-reports blob-*.zip -o report/report.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robowright-report
+          path: report/
 """
 
 
