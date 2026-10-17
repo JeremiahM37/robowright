@@ -560,14 +560,50 @@ def _time_limit(item) -> float:
     return float(m.args[0]) if m else float(item.config.getoption("--rw-timeout", 0.0) or 0.0)
 
 
+HANG_GRACE = 60.0  # seconds past --rw-timeout after which a test stuck in a C call ends the process (see below);
+# ROBOWRIGHT_HANG_GRACE overrides it (robowright's own test of it does not wait a minute)
+
+
+def _other_threads(limit: int = 6) -> str:
+    """Where the other threads are, for a time limit's error: what the test waits on is often one of them."""
+    import sys
+    import threading
+    import traceback
+
+    names = {t.ident: t.name for t in threading.enumerate()}
+    out = []
+    for ident, frame in sys._current_frames().items():
+        if ident == threading.main_thread().ident:
+            continue
+        stack = traceback.extract_stack(frame)[-limit:]
+        out.append(f"  thread {names.get(ident, ident)}:\n" + "".join(f"    {s.filename}:{s.lineno} in {s.name}\n" for s in stack))
+    return "other threads:\n" + "".join(out) if out else ""
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_setup(item):
     """Start the test's clock (``--rw-timeout``): from its fixtures, where a stack that never comes up
-    waits, to the end of its body. Checked between Python operations, which a long C call delays."""
+    waits, to the end of its body. Checked between Python operations, which a long C call delays.
+
+    A main thread stuck inside a C call never gets back to Python to see the limit pass (a ROS 2 node's destroy that
+    waits for ever, a join on a thread blocked in C). For that, faulthandler's own watchdog, which runs in C: if the test
+    is still running HANG_GRACE seconds after its limit, every thread's stack goes to ``hung-<test>.txt`` in the trace
+    directory and the process ends, so a hang costs its limit and a minute, not the rest of the CI job."""
     limit = _time_limit(item)
     if limit > 0:
+        import faulthandler
         import signal
         import threading
+
+        name = _safe(_plain(item.nodeid).replace("::", "__").replace("/", "_"))
+        hung = Path(item.config.getoption("--rw-trace-dir")) / f"hung-{name}.txt"
+        try:
+            hung.parent.mkdir(parents=True, exist_ok=True)
+            item._rw_hung = hung.open("w")
+            grace = float(os.environ.get("ROBOWRIGHT_HANG_GRACE", HANG_GRACE))
+            faulthandler.dump_traceback_later(limit + grace, exit=True, file=item._rw_hung)
+        except OSError:
+            pass
 
         if hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread():
 
@@ -579,7 +615,7 @@ def pytest_runtest_setup(item):
                 tr = getattr(w, "trace", None) if w is not None else None
                 running = [e for e in (tr.events if tr else []) if e.status == "running"]
                 where = f", while {running[-1].type} {running[-1].name!r} was running" if running else ""
-                raise TimeLimitError(f"the test ran past its {limit:g} s time limit (wall clock){where}")
+                raise TimeLimitError(f"the test ran past its {limit:g} s time limit (wall clock){where}\n{_other_threads()}")
 
             item._rw_alarm = signal.signal(signal.SIGALRM, expired)
             signal.setitimer(signal.ITIMER_REAL, limit)
@@ -600,6 +636,13 @@ def pytest_runtest_teardown(item, nextitem):
 
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, item.__dict__.pop("_rw_alarm"))
+        f = item.__dict__.pop("_rw_hung", None)
+        if f is not None:
+            import faulthandler
+
+            faulthandler.cancel_dump_traceback_later()
+            f.close()
+            Path(f.name).unlink(missing_ok=True)  # it did not hang: nothing to keep
 
 
 @pytest.hookimpl(wrapper=True)
