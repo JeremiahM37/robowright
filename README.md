@@ -1827,8 +1827,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   requests, `rw.ros2_stack`); robowright's Gazebo integration needs Gazebo Harmonic, which it
   drives through Gazebo's own Python bindings: Humble's default, Fortress, has none, and reached
   its end of life in September 2026.
-- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU), and Isaac Lab environments on the GPU, watching one of their
-  copies (`env_index`). An Isaac Lab run keeps its trace but is not replayed (its GPU physics is not bit-for-bit
+- **Attached simulations:** `rw.attach` reads MuJoCo, PyBullet, SAPIEN, Drake, Genesis, Webots and Gazebo simulations (on the CPU), Isaac Lab environments on the GPU, watching one of their
+  copies (`env_index`), and an Isaac Sim script's own `World` (`isaacsim.core.api`), whose velocities are taken from
+  the change in pose (Isaac Sim's own, for a body that has settled, is the one it had as it landed) and whose contacts
+  are not read. An Isaac Lab or Isaac Sim run keeps its trace but is not replayed (its GPU physics is not bit-for-bit
   repeatable), and contacts there come only from the scene's contact sensors. An `AsyncVectorEnv` is attached through
   `rw.attachable` in its workers, as is Stable-Baselines3's `SubprocVecEnv`; other multi-process setups are not. MuJoCo, PyBullet and
   SAPIEN runs are replayed and turned into tests; Drake and Genesis runs too, given a factory that

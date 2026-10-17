@@ -626,8 +626,11 @@ def attach(
                 "a vector environment is attached by itself: attach(vec_env, advance=...), not with model, data, client or step"
             )
         return _attach_vector(vector, advance=advance, engine=engine, dt=dt, name=name, seed=seed, settings=settings)
-    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis", "webots", "gazebo"):
-        raise ValueError(f"engine must be 'mujoco', 'pybullet', 'sapien', 'drake', 'genesis', 'webots' or 'gazebo', not {engine!r}")
+    if engine not in (None, "mujoco", "pybullet", "sapien", "drake", "genesis", "webots", "gazebo", "isaaclab", "isaacsim"):
+        raise ValueError(
+            "engine must be 'mujoco', 'pybullet', 'sapien', 'drake', 'genesis', 'webots', 'gazebo', 'isaaclab' or 'isaacsim', "
+            f"not {engine!r}"
+        )
     if simulator is not None or diagram is not None or context is not None or plant is not None:
         if env is not None or model is not None or data is not None or client is not None or engine not in (None, "drake"):
             raise ValueError("a Drake simulation is attached with simulator= (or a diagram and context=), not with other arguments")
@@ -688,8 +691,8 @@ def attach(
         _current.set(world)
         return world
     world = AttachedWorld(backend, advance, name=_safe(name), seed=seed, settings=settings)
-    if env is not None and backend.engine == "genesis":
-        _wrap_scene(env, world)  # a Genesis scene has no reset that rebuilds anything: the step is the one hook
+    if env is not None and backend.engine in ("genesis", "isaacsim"):
+        _wrap_scene(env, world)  # a Genesis scene or Isaac Sim world: its own step and reset are the hooks
     elif env is not None and not callable(getattr(env, "step", None)):
         pass  # an object that holds the simulation's client and has no step of its own: its loop calls observe()
     elif env is not None and backend.engine == "sapien" and _is_bare_sapien(env):
@@ -896,6 +899,13 @@ def _engine_of_env(env, *, seed: int, dt: float | None, engine: str | None, env_
         if found is None:
             raise ValueError(f"cannot attach to {type(env).__name__} as an Isaac Lab environment: it has no Isaac Lab scene")
         return found
+    from .backends.attached_isaacsim import is_isaacsim_world, isaacsim_engine_of
+
+    if engine == "isaacsim" or (engine is None and is_isaacsim_world(env)):
+        found = isaacsim_engine_of(env, seed=seed, dt=dt)
+        if found is None:
+            raise ValueError(f"cannot attach to {type(env).__name__} as an Isaac Sim world: pass the isaacsim.core.api World")
+        return found
     if engine == "genesis" or (engine is None and type(env).__module__.startswith("genesis.")):
         found = genesis_engine_of(env, seed=seed, dt=dt)
         if found is None:
@@ -1011,7 +1021,8 @@ def _registered_max_episode_steps(env_id: str, library: str = "gymnasium"):
 
 
 def _wrap_scene(scene, world: AttachedWorld) -> None:
-    """Route a Genesis scene's ``step`` through the world. Its ``reset`` only restores the initial state, so it is an event."""
+    """Route a Genesis scene's (or an Isaac Sim world's) ``step`` through the world. Its ``reset`` only restores the initial
+    state, so it is an event."""
     orig_step, orig_reset = scene.step, scene.reset
 
     def step(*args, **kwargs):

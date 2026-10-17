@@ -179,11 +179,11 @@ def _replay_attached(tr: Trace, make_env, tol: float) -> ReplayResult:
 
     if not (tr.meta.get("env") or {}).get("actions_recorded", True):
         raise ValueError(f"this run cannot be replayed: {tr.meta['env']['note']}")
-    if tr.meta["attached"].get("engine") == "isaaclab":
+    if tr.meta["attached"].get("engine") in ("isaaclab", "isaacsim"):
         # Not "pass make_env": a replay checks the run comes again bit for bit, and Isaac Lab's GPU physics does not
         # promise that, nor does this adapter save a state to start from. The trace is still the record of the run.
         raise ValueError(
-            "an Isaac Lab run cannot be replayed: its GPU physics is not bit-for-bit repeatable and no state of it is "
+            "an Isaac Lab or Isaac Sim run cannot be replayed: its physics is not bit-for-bit repeatable and no state of it is "
             "saved. Its trace is still the record of what happened (robowright show-trace)"
         )
     bare = bool((tr.meta.get("env") or {}).get("bare"))

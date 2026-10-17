@@ -122,5 +122,5 @@ def test_a_run_keeps_its_trace_and_replay_says_it_cannot_rebuild_it(env, tmp_pat
     assert tr.meta["attached"]["engine"] == "isaaclab"
     assert tr.meta["attached"]["env_index"] == 0 and tr.meta["attached"]["num_envs"] == N
     assert any("to_be_above" in str(e) for e in tr.events)
-    with pytest.raises(ValueError, match="an Isaac Lab run cannot be replayed"):
+    with pytest.raises(ValueError, match="an Isaac Lab or Isaac Sim run cannot be replayed"):
         replay(path)
