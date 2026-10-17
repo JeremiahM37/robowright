@@ -22,6 +22,16 @@ from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 
+
+def _write(path, data):
+    """All at once (a file renamed into place): the test reads it while this node runs, and must never see half."""
+    import os
+
+    with open(path + ".tmp", "w") as fh:
+        json.dump(data, fh)
+    os.replace(path + ".tmp", path)
+
+
 argv = remove_ros_args(sys.argv)
 mode = argv[1]
 rclpy.init(args=[] if mode == "deaf" else sys.argv)
@@ -54,8 +64,7 @@ if mode in ("listen", "deaf"):
     node.create_subscription(JointState, "/joint_states", on_states, qos_profile_sensor_data)
 
     def dump():
-        with open(out, "w") as f:
-            json.dump({k: v for k, v in state.items() if k != "clock"}, f)
+        _write(out, {k: v for k, v in state.items() if k != "clock"})
 
     node.create_timer(0.1, dump)
 else:
@@ -68,15 +77,6 @@ else:
 
     node.create_subscription(JointState, "/joint_states", first_states, qos_profile_sensor_data)
     node.create_timer(0.05, lambda: sent["q"] is not None and pub.publish(Float64MultiArray(data=sent["q"])))
-
-
-def _write(path, data):
-    """All at once (a file renamed into place): the test reads it while this node runs, and must never see half."""
-    import os
-
-    with open(path + ".tmp", "w") as fh:
-        json.dump(data, fh)
-    os.replace(path + ".tmp", path)
 
 
 if mode == "client":

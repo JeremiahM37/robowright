@@ -78,10 +78,11 @@ def test_the_trace_keeps_the_nodes_log_lines_at_their_simulated_time(tmp_path):
     log = [e for e in tr.meta["ros_log"] if e["node"] == "route_node"]
     ticks = [e for e in log if e["msg"].startswith("tick ")]
     assert len(ticks) >= 4 and all(e["level"] == "INFO" for e in ticks)
-    # Stamped on the simulation's clock, as the node logged them: half a second apart. (After the first: a ROS timer's
-    # first period can be short, while the node's clock jumps from zero to the simulation's as /clock first arrives.)
-    gaps = [b["t"] - a["t"] for a, b in zip(ticks[1:], ticks[2:])]
-    assert all(abs(g - 0.5) < 0.06 for g in gaps), gaps
+    # Stamped on the simulation's clock, as the node logged them: half a second apart once its timer is steady. (Its
+    # first periods can be short, while the node's clock jumps from zero to the simulation's as /clock arrives: seen
+    # 0.42 s and 0.26 s.)
+    gaps = [b["t"] - a["t"] for a, b in zip(ticks, ticks[1:])]
+    assert all(abs(g - 0.5) < 0.06 for g in gaps[-3:]), gaps
     (warn,) = [e for e in log if e["level"] == "WARN"]
     (err,) = [e for e in log if e["level"] == "ERROR"]
     assert "timed out" in warn["msg"] and "failed to configure" in err["msg"] and warn["t"] < err["t"]
