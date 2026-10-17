@@ -13,3 +13,4 @@ bench/results/traces/
 .verify-artifacts/
 MUJOCO_LOG.TXT
 demo.mp4
+site/

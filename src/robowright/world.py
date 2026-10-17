@@ -51,6 +51,13 @@ class Settings:
 
 
 class World:
+    """A simulated world for one test: the scene, the robot in it, the engine underneath, and its trace.
+
+    Made by ``rw.launch()`` (or the ``world`` fixture). ``world.robot`` drives, ``world.scene["cube"]`` finds an
+    object, ``expect(...)`` asserts, and ``world.faults`` injects trouble. Time is simulated: it moves only when the
+    world steps, which actions, waits and waiting matchers do for you.
+    """
+
     def __init__(
         self, spec: SceneSpec, backend: str = "mujoco", seed: int = 0, name: str = "world", settings: Settings | None = None, **backend_kw
     ):
@@ -124,23 +131,28 @@ class World:
     # --- capabilities ------------------------------------------------------
     @property
     def has_ground_truth(self) -> bool:
+        """Whether the engine reports where everything is (a simulator does; a real robot reports only what it perceives)."""
         return backends.GROUND_TRUTH in self.backend.capabilities
 
     @property
     def has_contacts(self) -> bool:
+        """Whether the engine reports contacts, which ``to_be_touching``, ``to_be_holding`` and collision checks need."""
         return backends.CONTACTS in self.backend.capabilities
 
     def require(self, cap: str, what: str):
+        """Raise ``CapabilityError`` naming ``what`` if the engine lacks capability ``cap``."""
         if cap not in self.backend.capabilities:
             raise CapabilityError(f"{what} needs the {cap!r} capability, which the {self.backend.name} backend does not provide")
 
     # --- time ----------------------------------------------------------------
     @property
     def time(self) -> float:
+        """Simulated time, in seconds since the world started."""
         return self.backend.time
 
     @property
     def dt(self) -> float:
+        """One control period, in seconds: what ``step()`` advances."""
         return self.backend.control_dt
 
     def _begin(self):
@@ -210,6 +222,8 @@ class World:
 
     # --- invariants ------------------------------------------------------------
     def add_invariant(self, check, description: str, record: dict | None = None):
+        """Check ``check() -> (ok, detail)`` after every step from now on; the first step it fails raises
+        ``InvariantViolation``. ``expect(...).always`` is the usual way in."""
         self._invariants.append((check, description))
         if self.trace:
             self.trace.event("invariant", description, record or {}, status="ok", detail="registered")
@@ -226,6 +240,7 @@ class World:
 
     # --- world edits (recorded so replay can reproduce them) ---------------------
     def move_object(self, name: str, pos, quat=None):
+        """Put free object ``name`` at ``pos`` (and ``quat``, w x y z), at rest. Recorded, so a replay makes the same edit."""
         self.backend.set_object_pose(name, pos, quat)
         if self.trace:
             self.trace.event(
@@ -235,14 +250,18 @@ class World:
             )
 
     def log(self, message: str):
+        """Add ``message`` to the trace's timeline at the current time."""
         if self.trace:
             self.trace.event("log", message)
 
     def soft_fail(self, message: str):
+        """Record a failure without stopping the test; ``close()`` raises them all together."""
         self._soft_failures.append(message)
 
     # --- lifecycle ---------------------------------------------------------------
     def close(self, failed: bool | None = None, trace_path: str | Path | None = None) -> Path | None:
+        """End the world: save its trace (always, or on failure, as ``Settings.trace`` says), release the engine, and
+        raise any soft failures. Returns the trace's path, if one was saved. A ``with`` block calls it for you."""
         if failed is None:
             failed = self.status == "failed"
         if self._soft_failures and not failed:

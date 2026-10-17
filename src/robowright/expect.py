@@ -38,6 +38,14 @@ _ONCE = contextvars.ContextVar("robowright_expect_once", default=False)
 
 
 class Expectation:
+    """What ``expect(subject)`` returns: one matcher call is one assertion.
+
+    Every matcher waits. It checks at each control step until it holds, then for ``hold`` more seconds if given, and
+    fails with what it last saw once ``timeout`` seconds of simulated time have gone (``expect(..., timeout=)``, or
+    ``Settings.expect_timeout``). ``.not_`` asserts the opposite; ``.always`` makes the matcher an invariant, checked
+    after every step for the rest of the test. A matcher returns the expectation, so calls can be chained.
+    """
+
     def __init__(self, subject, world=None, timeout=None, negate=False, mode="eventually", message=None, soft=False):
         self.raw = subject
         self.world = world or _world_of(subject)
@@ -58,10 +66,13 @@ class Expectation:
     # modifiers ---------------------------------------------------------------
     @property
     def not_(self) -> Expectation:
+        """The same expectation, inverted: ``expect(cube).not_.to_be_touching("floor")``."""
         return Expectation(self._subject_arg, self.world, self.timeout, not self.negate, self.mode, self.message, self.soft)
 
     @property
     def always(self) -> Expectation:
+        """The matcher as an invariant: registered now, checked after every step, and the test fails at the step it
+        stops holding (``InvariantViolation``). ``expect(robot).always.to_have_no_collisions()``."""
         return Expectation(self._subject_arg, self.world, self.timeout, self.negate, "always", self.message, self.soft)
 
     @property
@@ -183,6 +194,7 @@ class Expectation:
         return self._run("to_be_above", check, timeout, hold, {"target": target, "by": by})
 
     def to_have_position(self, xyz, tol: float = 0.01, **kw):
+        """At ``xyz`` (world frame, metres) to within ``tol``: ``to_be_near`` a point."""
         return self.to_be_near(Point(xyz), tol, **kw)
 
     def to_have_heading(self, yaw: float, tol: float = 0.05, *, timeout=None, hold=0.0):
@@ -285,6 +297,8 @@ class Expectation:
         return self._run("to_be_at_rest", check, timeout, hold, {"lin_tol": lin_tol, "ang_tol": ang_tol})
 
     def to_be_upright(self, tol_deg: float = 10.0, *, timeout=None, hold=0.0):
+        """Its up axis within ``tol_deg`` degrees of vertical: a box that has not tipped over, a legged robot standing."""
+
         def check():
             up = self.subject.up_axis
             ang = float(np.degrees(np.arccos(np.clip(up[2], -1, 1))))
@@ -293,6 +307,7 @@ class Expectation:
         return self._run("to_be_upright", check, timeout, hold, {"tol_deg": tol_deg})
 
     def to_be_touching(self, other, *, timeout=None, hold=0.0):
+        """In contact with ``other`` (a name or handle). Needs an engine that reports contacts."""
         o = other if isinstance(other, str) else as_subject(self.world, other).name
 
         def check():
@@ -340,6 +355,7 @@ class Expectation:
         return check
 
     def to_be_open(self, min_opening: float = 0.8, **kw):
+        """A gripper (or a robot's) opened to at least ``min_opening`` of its range (0 closed, 1 fully open)."""
         g = self._gripper()
         return self._run(
             "to_be_open",
@@ -350,6 +366,7 @@ class Expectation:
         )
 
     def to_be_closed(self, max_opening: float = 0.1, **kw):
+        """A gripper (or a robot's) closed to at most ``max_opening`` of its range (0 closed, 1 fully open)."""
         g = self._gripper()
         return self._run(
             "to_be_closed",
@@ -360,6 +377,7 @@ class Expectation:
         )
 
     def to_have_joint(self, joint: str, value: float, tol: float = 0.02, **kw):
+        """The robot's ``joint`` at ``value`` (rad, or m for a slide) to within ``tol``."""
         r = self._robot()
 
         def check():
@@ -404,6 +422,8 @@ class Expectation:
         return self._run("to_equal", check, timeout, hold, {"expected": expected})
 
     def to_be_greater_than(self, bound, *, timeout=None, hold=0.0):
+        """The value (``expect.poll``, or a joint's) is greater than ``bound``."""
+
         def check():
             v = self._value()
             return bool(v > bound), f"{self.subject.name} = {v!r} (want > {bound!r})"
@@ -411,6 +431,8 @@ class Expectation:
         return self._run("to_be_greater_than", check, timeout, hold, {"bound": bound})
 
     def to_be_less_than(self, bound, *, timeout=None, hold=0.0):
+        """The value (``expect.poll``, or a joint's) is less than ``bound``."""
+
         def check():
             v = self._value()
             return bool(v < bound), f"{self.subject.name} = {v!r} (want < {bound!r})"
@@ -428,6 +450,8 @@ class Expectation:
         return self._run("to_be_close_to", check, timeout, hold, {"expected": expected, "tol": tol})
 
     def to_be_truthy(self, *, timeout=None, hold=0.0):
+        """The value (``expect.poll``, or a joint's) is truthy."""
+
         def check():
             v = self._value()
             return bool(v), f"{self.subject.name} = {v!r}"
@@ -526,6 +550,15 @@ def _world_of(subject):
 
 
 def expect(subject, *, timeout: float | None = None, message: str | None = None, world=None) -> Expectation:
+    """Start an assertion on ``subject``: a scene object or its name, the robot, its gripper or base, a joint, a ROS
+    topic, the world itself (what its cameras see), or a block of assertions (``to_pass``).
+
+    ``timeout`` overrides the matcher's wait (seconds of simulated time), ``message`` heads the failure, and
+    ``world`` is needed only when the subject does not know its world. Two more forms:
+
+    * ``expect.soft(subject)``: a failure is recorded and the test carries on; it fails at teardown.
+    * ``expect.poll(fn, name=None)``: ``fn()`` is read again at every control step until the matcher holds.
+    """
     return Expectation(subject, world, timeout, message=message)
 
 

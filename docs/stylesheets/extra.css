@@ -1,0 +1,2 @@
+/* the Overview's title is the logo under it: the heading stays for search and screen readers, out of sight */
+.md-typeset h1.rw-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); margin: 0; }

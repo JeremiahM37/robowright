@@ -1,0 +1,3 @@
+# Errors
+
+::: robowright.errors

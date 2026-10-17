@@ -36,6 +36,23 @@ jobs:
           name: traces-unit-py${{ matrix.python }}
           path: robowright-traces/
 
+  docs:
+    # The documentation site, strictly: a README section a page takes that is gone, a broken link or anchor, or an
+    # API page whose object moved fails the build. (The CLI reference runs the commands' own --help, so it installs.)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[docs]"
+      - run: pytest tests/test_docs_pages.py -p no:cacheprovider
+      - run: mkdocs build --strict
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site/
+
   matrix:
     # Every robot on every engine CI can run (Isaac Sim needs an NVIDIA GPU machine): the backend
     # contract and the legged contract. The statistical examples on every robot (20-trial runs) are

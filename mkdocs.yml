@@ -1,0 +1,95 @@
+site_name: robowright
+site_description: Playwright-style testing for robot software
+site_url: https://jeremiahm37.github.io/robowright/
+repo_url: https://github.com/JeremiahM37/robowright
+repo_name: JeremiahM37/robowright
+edit_uri: ""
+docs_dir: docs
+strict: true
+exclude_docs: |
+  make_assets.py
+  __pycache__/
+  hooks/
+
+theme:
+  name: material
+  logo: logo-symbol.svg
+  favicon: logo-symbol.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: cyan
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: cyan
+      toggle: {icon: material/weather-sunny, name: Light mode}
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+hooks:
+  - docs/hooks/readme_pages.py
+  - docs/hooks/cli_page.py
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: sphinx
+            show_root_heading: true
+            show_source: false
+            members_order: source
+            filters: ["!^_"]
+            merge_init_into_class: true
+            show_signature_annotations: true
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+
+validation:
+  links:
+    anchors: warn
+
+nav:
+  - Overview: index.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - Install: install.md
+  - Guides:
+      - A tour: tour.md
+      - Robots: robots.md
+      - Every robot on every engine: matrix.md
+      - Real hardware: hardware.md
+      - Extending robowright: extending.md
+      - How it works: how-it-works.md
+      - Limitations and roadmap: limitations.md
+  - Reference:
+      - World and launch: api/world.md
+      - expect: api/expect.md
+      - rw.attach: api/attach.md
+      - Robot and scene: api/robot.md
+      - ROS 2: api/ros2.md
+      - Traces and steps: api/trace.md
+      - Errors: api/errors.md
+      - Command line: api/cli.md

@@ -52,3 +52,9 @@ Ground rules:
   trace, or replay and codegen silently drift. `tests/test_trace_replay_codegen.py`
   checks bit-identical replay and codegen round trips; keep them green.
 - Benchmark numbers in docs come from `bench/run.py` and `bench/matrix.py`, never by hand.
+
+**The documentation site:** `pip install -e ".[docs]"`, then `mkdocs serve`. The guide pages
+are README.md, cut at its `## ` headings (`docs/hooks/readme_pages.py` says which sections
+each page takes), so a guide is edited in the README; the reference pages are the
+docstrings, and the command-line page is the commands' own `--help`. CI builds it with
+`--strict`, so a broken link or anchor fails.

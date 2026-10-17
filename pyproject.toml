@@ -45,6 +45,8 @@ onnx = ["onnxruntime>=1.17"]
 urdf = ["trimesh>=4", "scipy>=1.10", "pycollada>=0.8", "coacd>=1.0", "xacro>=2"]
 # No PyBullet here: it has wheels only up to Python 3.11, and later Pythons build it from source
 # (a C++ compiler and the Python headers). Add it with ".[dev,pybullet]"; its tests skip without it.
+# the documentation site (mkdocs build): MkDocs 2 drops the plugin system this site is built with
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5,<10", "mkdocstrings[python]>=1,<2"]
 dev = ["pytest-xdist>=3", "ruff>=0.5", "imageio>=2.31", "imageio-ffmpeg>=0.4", "mcp>=1.2", "trimesh>=4", "scipy>=1.10", "pycollada>=0.8", "xacro>=2", "onnxruntime>=1.17"]
 
 [project.scripts]
