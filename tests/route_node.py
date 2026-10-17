@@ -6,6 +6,8 @@ route_node.py command         # publishes arm commands on /forward_position_cont
 route_node.py deaf OUT        # as listen, but ignores its command line (so takes no remapping)
 route_node.py client OUT      # calls /detect (std_srvs/srv/Trigger) every 0.2 s once it exists, and writes each answer
                               # to OUT, as JSON (tests/test_ros_stubs.py: a service the test answers)
+route_node.py grasp OUT       # sends /grasp goals (control_msgs/action/GripperCommand), one after another, and writes
+                              # each outcome (4 succeeded, 6 aborted) and result to OUT, as JSON
 route_node.py talk            # logs on the simulation's clock: INFO every 0.5 s, a WARN at the 3rd tick and an ERROR at
                               # the 5th (tests/test_ros_topics.py: the trace keeps a node's log lines)
 """
@@ -67,6 +69,16 @@ else:
     node.create_subscription(JointState, "/joint_states", first_states, qos_profile_sensor_data)
     node.create_timer(0.05, lambda: sent["q"] is not None and pub.publish(Float64MultiArray(data=sent["q"])))
 
+
+def _write(path, data):
+    """All at once (a file renamed into place): the test reads it while this node runs, and must never see half."""
+    import os
+
+    with open(path + ".tmp", "w") as fh:
+        json.dump(data, fh)
+    os.replace(path + ".tmp", path)
+
+
 if mode == "client":
     from std_srvs.srv import Trigger
 
@@ -78,13 +90,37 @@ if mode == "client":
         if f is not None and f.done():
             r = f.result()
             answers.append({"success": r.success, "message": r.message})
-            with open(out, "w") as fh:
-                json.dump(answers, fh)
+            _write(out, answers)
             pending["f"] = None
         if pending["f"] is None and client.service_is_ready():
             pending["f"] = client.call_async(Trigger.Request())
 
     node.create_timer(0.2, ask)
+
+if mode == "grasp":
+    from control_msgs.action import GripperCommand
+    from rclpy.action import ActionClient
+
+    out, client, outcomes = argv[2], ActionClient(node, GripperCommand, "/grasp"), []
+    busy = {"on": False}
+
+    def done(f):
+        r = f.result()
+        outcomes.append({"status": r.status, "position": r.result.position, "reached": r.result.reached_goal})
+        _write(out, outcomes)
+        busy["on"] = False
+
+    def accepted(f):
+        f.result().get_result_async().add_done_callback(done)
+
+    def send():
+        if not busy["on"] and client.server_is_ready():
+            busy["on"] = True
+            goal = GripperCommand.Goal()
+            goal.command.position = 0.01 * (len(outcomes) + 1)
+            client.send_goal_async(goal).add_done_callback(accepted)
+
+    node.create_timer(0.2, send)
 
 if mode == "talk":
     ticks = {"n": 0}

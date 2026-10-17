@@ -210,11 +210,35 @@ class RosGraph:
         A service something else already serves is refused: a call would reach either, and the test would not know which."""
         full = self.backend.topic_name(service)
         served = {n for n, _ in self.node.get_service_names_and_types()} if hasattr(self.node, "get_service_names_and_types") else set()
-        if full in served:
+        if full in served and full not in self._stubbed():
             raise RuntimeError(f"{full} is served already: stop the node that serves it, or serve another name")
         stub = ServiceStub(self, full, _cls("srv", type), respond)
         self._record_stub(stub)
         return stub
+
+    def serve_action(self, action: str, type: str, result=None, outcome: str = "succeeded") -> ActionStub:
+        """Answer the action ``action`` yourself, as :meth:`serve` answers a service: every goal is accepted and finished
+        at once, with ``result`` (a result, a dict of its fields, a function ``goal -> result | dict | None``, or None for
+        an empty one) and ``outcome`` ("succeeded" or "aborted", or a function ``goal -> outcome``). Each goal is kept
+        (``stub.goals``: its time, goal, outcome and result, as dicts). A grasp that fails, a navigation that aborts:
+        the stack's own handling of it is what the test then watches.
+
+        An action something else already serves is refused, as :meth:`serve` refuses a service."""
+        from rclpy.action import get_action_names_and_types
+
+        if not callable(outcome) and outcome not in ("succeeded", "aborted"):
+            raise ValueError(f"outcome is 'succeeded' or 'aborted' (or a function of the goal), not {outcome!r}")
+        full = self.backend.topic_name(action)
+        if full in {n for n, _ in get_action_names_and_types(self.node)} and full not in self._stubbed():
+            raise RuntimeError(f"{full} is served already: stop the node that serves it, or serve another name")
+        stub = ActionStub(self, full, _cls("action", type), type, result, outcome)
+        self._record_stub(stub)
+        return stub
+
+    def _stubbed(self) -> set:
+        """Names this graph's own stubs served and closed: the graph lists a closed server for a moment longer, and a
+        test that serves the same name again must not be refused for it."""
+        return self.__dict__.setdefault("_stub_names", set())
 
     def _record_stub(self, stub) -> None:
         world = getattr(self, "world", None)
@@ -296,6 +320,7 @@ class ServiceStub:
         if self._server is not None:
             self.graph.node.destroy_service(self._server)
             self._server = None
+            self.graph._stubbed().add(self.name)
             world = getattr(self.graph, "world", None)
             if world is not None and world.trace:
                 world.trace.event("edit", "ros_serve_closed", {"name": self.name, "calls": self.count})
@@ -313,6 +338,57 @@ class ServiceStub:
             self.error = None
             self.close()
         return False
+
+
+class ActionStub(ServiceStub):
+    """An action robowright answers in a test (see :meth:`RosGraph.serve_action`)."""
+
+    def __init__(self, graph: RosGraph, name: str, act, type_name: str, result, outcome):
+        import threading
+
+        from rclpy.action import ActionServer
+
+        self.graph, self.name, self.act, self.type_name = graph, name, act, type_name
+        self.result, self.outcome = result, outcome
+        self.calls: list[dict] = []
+        self.error = None
+        self._lock = threading.Lock()
+        self._server = ActionServer(graph.node, act, name, execute_callback=self._execute)
+
+    @property
+    def goals(self) -> list[dict]:
+        return self.calls
+
+    def _execute(self, handle):
+        world = getattr(self.graph, "world", None)
+        t = world.time if world is not None else None
+        goal = handle.request
+        try:
+            outcome = self.outcome(goal) if callable(self.outcome) else self.outcome
+            res = self.result(goal) if callable(self.result) else self.result
+            if isinstance(res, dict):
+                res = _fill(self.act.Result, res)
+            elif res is None:
+                res = self.act.Result()
+        except BaseException as e:  # noqa: BLE001 - the goal is aborted; the test gets the error at close()
+            self.error = self.error or e
+            outcome, res = "aborted", self.act.Result()
+        handle.abort() if outcome == "aborted" else handle.succeed()
+        with self._lock:
+            self.calls.append({"t": t, "goal": _fields(goal), "outcome": outcome, "result": _fields(res)})
+        return res
+
+    def close(self) -> None:
+        if self._server is not None:
+            destroy_action_clients([self._server])  # an ActionServer is destroyed the same way: bounded
+            self._server = None
+            self.graph._stubbed().add(self.name)
+            world = getattr(self.graph, "world", None)
+            if world is not None and world.trace:
+                world.trace.event("edit", "ros_serve_closed", {"name": self.name, "calls": self.count})
+        if self.error is not None:
+            err, self.error = self.error, None
+            raise RuntimeError(f"the stub for {self.name} raised while answering a goal: {err!r}") from err
 
 
 class GoalResult:
