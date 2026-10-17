@@ -99,11 +99,17 @@ class TCP(Subject):
 
     @property
     def position(self):
+        """Where the tool centre point is (x, y, z, metres, world frame)."""
         r = self.robot
         return r.kin.tcp(r.true_qpos()[: r.n_arm])
 
 
 class Arm:
+    """``robot.arm``: the arm's motions. Each one waits until the arm has settled at its goal, and raises
+    :class:`~robowright.errors.ActionTimeoutError` if it does not within ``timeout`` seconds (the world's
+    ``action_timeout`` when not given), or :class:`~robowright.errors.UnreachableError` if no joint angles reach it.
+    """
+
     _label = "arm"
 
     def __init__(self, robot):
@@ -112,6 +118,7 @@ class Arm:
 
     @property
     def home_q(self) -> np.ndarray:
+        """The arm's home joint angles (radians): fingers down at the model's home point, solved from its keyframe."""
         return self.robot.home_q
 
     @action
@@ -223,10 +230,16 @@ class Arm:
 
     @action
     def home(self, timeout: float | None = None):
+        """Move the arm back to :attr:`home_q`."""
         self.move_joints.__wrapped__(self, self.robot.home_q, timeout=timeout)
 
 
 class Gripper(Subject):
+    """``robot.gripper``: the jaws. It is also a subject for ``expect`` (``expect(robot.gripper).to_be_open()``,
+    ``.to_be_touching("cube")``), at the tool centre point. A robot loaded without a gripper raises
+    :class:`~robowright.errors.CapabilityError` from everything that needs jaws.
+    """
+
     _label = "gripper"
     name = "gripper"
 
@@ -236,6 +249,7 @@ class Gripper(Subject):
 
     @property
     def position(self):
+        """The tool centre point, between the fingertips (x, y, z, metres)."""
         return self.robot.tcp.position
 
     def _need(self) -> None:
@@ -261,12 +275,14 @@ class Gripper(Subject):
         return fixed, moving
 
     def holding(self) -> str | None:
+        """The object both fingers touch (by name), or None. Needs contacts from the engine."""
         fixed, moving = self.touching()
         both = (fixed & moving) - {"floor"}
         return sorted(both)[0] if both else None
 
     @action
     def open(self, amount: float = 1.0, timeout: float | None = None):
+        """Open to ``amount`` of the full stroke (1 = wide open) and wait until the jaws get there."""
         self._go(GRIPPER_CLOSED + amount * (GRIPPER_OPEN - GRIPPER_CLOSED), timeout)
 
     @action
@@ -309,6 +325,12 @@ def _footprint(spec) -> float:
 
 
 class Robot:
+    """``world.robot``: one robot arm, whichever engine it runs on. ``robot.arm`` moves it, ``robot.gripper`` opens and
+    closes the jaws, ``robot.tcp`` is the tool centre point, and :meth:`pick` and :meth:`place` do a whole grasp.
+    Joint readings come from the engine; :meth:`qpos` is what the robot's own sensors report (with any injected
+    noise), :meth:`true_qpos` the engine's ground truth.
+    """
+
     _label = "robot"
     name = "robot"
 
@@ -339,6 +361,7 @@ class Robot:
 
     @property
     def base(self):
+        """Legged robots only: an arm raises AttributeError, saying what it has instead."""
         raise AttributeError(
             f"{self.model.title} is a fixed-base arm: robot.base exists on legged robots. Arms have robot.arm, robot.gripper and robot.tcp"
         )
@@ -357,15 +380,18 @@ class Robot:
 
     @property
     def joint_names(self) -> list[str]:
+        """The robot's joints, in the order :meth:`qpos` gives them."""
         return self.world.backend.joint_names
 
     @property
     def home_q(self) -> np.ndarray:
+        """The arm's home joint angles (radians): fingers down at the model's home point, solved from its keyframe."""
         if self._home_q is None:
             self._home_q = home_q(self.model.name)
         return self._home_q
 
     def true_qpos(self) -> np.ndarray:
+        """Joint positions as the engine has them, with no sensor noise (ground truth, for checking)."""
         return self.world.backend.qpos()
 
     def qpos(self) -> np.ndarray:
@@ -378,6 +404,7 @@ class Robot:
 
     @property
     def joints(self) -> dict[str, float]:
+        """Joint readings by name, as :meth:`qpos` reports them."""
         return dict(zip(self.joint_names, map(float, self.qpos())))
 
     def reset_to(self, q_arm=None, gripper: float = GRIPPER_OPEN):
