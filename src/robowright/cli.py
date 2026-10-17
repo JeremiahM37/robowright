@@ -17,11 +17,17 @@ def _test(args, rest):
     if "-h" in rest or "--help" in rest:
         # pytest's usage text alone reads as if `robowright test` were pytest itself; say what it is first.
         print(
-            "usage: robowright test [pytest arguments]\n\n"
+            "usage: robowright test [--watch] [pytest arguments]\n\n"
             "Runs this project's robot tests. Every argument goes to pytest unchanged, so the\n"
-            "options below are pytest's, plus robowright's --rw-* options (see `pytest --help`).\n"
+            "options below are pytest's, plus robowright's --rw-* options (see `pytest --help`).\n\n"
+            "  --watch    run again whenever a file changes: the changed test files when only\n"
+            "             tests changed, everything otherwise (Enter runs everything)\n"
         )
-    return pytest.main(rest)
+    if "--watch" in rest and not ("-h" in rest or "--help" in rest):
+        from .watch import watch
+
+        return watch([a for a in rest if a != "--watch"])
+    return pytest.main([a for a in rest if a != "--watch"])
 
 
 _INIT_TEST = '''"""Robot tests, written like Playwright tests: your code drives the robot, the test watches and
@@ -652,7 +658,7 @@ def main(argv=None) -> int:
         "--ros2", metavar="COMMAND", help='a ROS 2 project: the command that starts your stack ("ros2 launch my_robot sim.launch.py")'
     )
     i.add_argument("--gazebo", action="store_true", help="with --ros2: the stack runs Gazebo (simulated time, Gazebo's ground truth)")
-    sub.add_parser("test", help="run tests (all arguments are passed to pytest)", add_help=False)
+    sub.add_parser("test", help="run tests (all arguments are passed to pytest; --watch runs them again on every change)", add_help=False)
     s = sub.add_parser("show-trace", help="open a trace in the HTML viewer")
     s.add_argument("trace")
     s.add_argument("-o", "--out")

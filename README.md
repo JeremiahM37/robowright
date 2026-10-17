@@ -66,6 +66,7 @@ def test_my_controller_puts_the_cube_in_the_bin(robot, scene):
 ```bash
 pytest test_my_controller.py --rw-trace on       # the SO-101 in MuJoCo: about a second
 pytest test_my_controller.py --rw-live            # watch it live in a browser as it runs
+robowright test --watch test_my_controller.py     # run it again on every save
 robowright show-trace robowright-traces/*.zip --no-open -o trace.html
 ```
 
@@ -681,6 +682,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | blob reporter, `merge-reports` | `pytest --rw-shard 2/4 --rw-blob shard-2.zip` on each machine, then `robowright merge-reports shard-*.zip -o report.html`: one report of the whole run, each failure's trace carried inside its shard's zip |
 | retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |
 | `--headed`, UI mode | `pytest --rw-live`: watch each test live in a browser (camera, joints, contacts, the current action); `--rw-headed`: MuJoCo's own window |
+| watch mode | `robowright test --watch` (any pytest arguments): runs again on every save, only the changed test files when only tests changed and everything when your code, a robot model or the settings did; Enter runs everything |
 | Playwright MCP, test agents | `robowright mcp`: an agent runs your policy or starts your ROS 2 stack against a robot, watches, asserts, saves a test, runs the suite and reads each failure's trace |
 
 On top of that, it adds things robots need and web pages don't:
