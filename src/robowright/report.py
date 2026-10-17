@@ -2,6 +2,11 @@
 
 One page: every test with its outcome and duration, trials with their rates, and for each
 failure the message, the trace as text and a link to the trace in the viewer.
+
+A sharded run (``--rw-shard 2/4`` on four CI machines) writes a blob per shard instead (``pytest --rw-blob
+shard-2.zip``): the results with every failure's trace and attachments inside it, so it can be carried off the machine
+that ran it. ``robowright merge-reports shard-*.zip -o report.html`` makes one report of them, as Playwright's blob
+reporter and ``merge-reports`` do.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import json
 import os
 import re
 import time
+import zipfile
 from pathlib import Path
 
 _TRACE = re.compile(r"trace: (\S+\.zip)")
@@ -23,6 +29,7 @@ class Run:
     def __init__(self):
         self.tests: dict[str, dict] = {}
         self.started = time.time()
+        self.seconds: float | None = None  # a merged run's span; a live run's is measured when written
 
     def add(self, report) -> None:
         t = self.tests.setdefault(
@@ -105,12 +112,66 @@ class Run:
                 title="robowright report",
                 when=time.strftime("%Y-%m-%d %H:%M", time.localtime(self.started)),
                 total=len(self.tests),
-                seconds=time.time() - self.started,
+                seconds=self.seconds if self.seconds is not None else time.time() - self.started,
                 buttons=buttons,
                 rows="\n".join(r for _, r in sorted(rows, key=lambda x: x[0])),
             )
         )
         return out
+
+    def save_blob(self, path: str | Path) -> Path:
+        """The results, with the trace and attachment files they name, in one zip (see the module)."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tests, n = {}, 0
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for nodeid, t in self.tests.items():
+                t = {**t, "traces": [], "attachments": []}
+                for src in self.tests[nodeid]["traces"]:
+                    if Path(src).exists():
+                        n += 1
+                        name = f"files/{n}/{Path(src).name}"
+                        z.write(src, name)
+                        t["traces"].append(name)
+                for a in self.tests[nodeid]["attachments"]:
+                    if Path(a["path"]).exists():
+                        n += 1
+                        name = f"files/{n}/{Path(a['path']).name}"
+                        z.write(a["path"], name)
+                        t["attachments"].append({**a, "path": name})
+                tests[nodeid] = t
+            run = {"format": 1, "started": self.started, "seconds": time.time() - self.started, "tests": tests}
+            z.writestr("run.json", json.dumps(run))
+        return path
+
+
+def merge(blobs: list, out: str | Path) -> Path:
+    """One HTML report at ``out`` from the blobs of a sharded run. Their files are unpacked next to it, in
+    ``<report>-files/<blob>/``. A test in more than one blob (the same suite run twice) is listed once for each."""
+    out = Path(out)
+    files = out.parent / (out.stem + "-files")
+    run, spans = Run(), []
+    for blob in blobs:
+        blob = Path(blob)
+        dest = files / blob.stem
+        with zipfile.ZipFile(blob) as z:
+            data = json.loads(z.read("run.json"))
+            if data.get("format") != 1:
+                raise ValueError(f"{blob}: not a robowright report blob (pytest --rw-blob)")
+            for name in z.namelist():
+                if name.startswith("files/") and ".." not in Path(name).parts:
+                    z.extract(name, dest)
+        spans.append((data["started"], data["started"] + data["seconds"]))
+        for nodeid, t in data["tests"].items():
+            t["traces"] = [str(dest / p) for p in t["traces"]]
+            t["attachments"] = [{**a, "path": str(dest / a["path"])} for a in t["attachments"]]
+            key = nodeid if nodeid not in run.tests else f"{nodeid} [{blob.stem}]"
+            run.tests[key] = t
+    if not spans:
+        raise ValueError("merge-reports needs at least one blob")
+    run.started = min(a for a, _ in spans)
+    run.seconds = max(b for _, b in spans) - run.started  # from the first shard's start to the last one's end
+    return run.write(out)
 
 
 _PAGE = """<!doctype html>

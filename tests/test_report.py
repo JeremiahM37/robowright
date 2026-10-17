@@ -100,3 +100,36 @@ def test_init_ros2_writes_a_project_for_a_stack(tmp_path):
     assert "ros2_control" not in (tmp_path / ".mcp.json").read_text()
     compile((tmp_path / "tests" / "test_robot.py").read_text(), "test_robot.py", "exec")
     assert not (tmp_path / ".github").exists()  # a CI runner has no ROS 2 stack: no workflow is written for one
+
+
+def test_a_sharded_run_merges_into_one_report(pytester):
+    """Two shards, each run as on its own CI machine (its own trace directory, deleted once its blob is written: the
+    blob must carry everything), merged into one report with every test and the failure's trace."""
+    import shutil
+
+    pytester.makepyfile(test_robots=TEST)
+    for shard in ("1/2", "2/2"):
+        n = shard[0]
+        r = pytester.runpytest(
+            "-p", "no:cacheprovider", "--rw-shard", shard, "--rw-trace-dir", f"machine{n}/traces", "--rw-blob", f"blobs/shard-{n}.zip"
+        )
+        assert r.ret in (0, 1), r.stdout.str()
+        shutil.rmtree(pytester.path / f"machine{n}", ignore_errors=True)  # (a shard that only passed made none)
+    blobs = sorted(str(p) for p in (pytester.path / "blobs").glob("*.zip"))
+    assert len(blobs) == 2
+    cli = [sys.executable, "-m", "robowright.cli", "merge-reports", *blobs, "-o", str(pytester.path / "merged" / "report.html")]
+    r = subprocess.run(cli, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    page = (pytester.path / "merged" / "report.html").read_text()
+    assert "2 tests" in page and "failed 1" in page and "passed 1" in page, page[:2000]
+    assert "test_wrong_spot[mujoco]" in page and "at the failure" in page  # the trace, read from the blob
+    viewer = pytester.path / "merged" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].html"
+    assert viewer.exists() and 'href="report-traces/' in page
+
+
+def test_merge_reports_refuses_what_is_not_a_blob(tmp_path):
+    bad = tmp_path / "not-a-blob.zip"
+    bad.write_bytes(b"not a zip")
+    cli = [sys.executable, "-m", "robowright.cli", "merge-reports", str(bad), "-o", str(tmp_path / "r.html")]
+    r = subprocess.run(cli, capture_output=True, text=True)
+    assert r.returncode == 2 and "robowright merge-reports:" in r.stderr

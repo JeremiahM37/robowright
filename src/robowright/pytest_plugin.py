@@ -18,6 +18,7 @@ Options::
     --rw-shard K/N                   run the K-th of N parts of the suite, one part per CI machine
     --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
     --rw-report report.html          an HTML report of the run, each failure with its trace
+    --rw-blob shard-2.zip            the run's results and traces in one zip, for robowright merge-reports
     --rw-fidelity published|adjusted robots as their model files have them (default), or with robowright's tuning
     --rw-live [PORT]                 watch each test live in a browser (http://127.0.0.1:8765)
     --rw-headed                      watch each test in MuJoCo's window as it runs, at real-time pace
@@ -105,6 +106,11 @@ def pytest_addoption(parser):
     )
     g.addoption("--rw-headed", action="store_true", help="watch each test in the engine's window, at real-time pace (MuJoCo)")
     g.addoption("--rw-report", metavar="PATH", help="write an HTML report of the run: every test, and each failure with its trace")
+    g.addoption(
+        "--rw-blob",
+        metavar="PATH",
+        help="write this run's results, traces included, to one zip, for robowright merge-reports (a sharded CI run)",
+    )
     g.addoption(
         "--rw-timeout",
         type=float,
@@ -746,6 +752,10 @@ class _Summary:
         if out and self.run.tests:
             terminalreporter.section("robowright report")
             terminalreporter.line(str(self.run.write(out)))
+        blob = terminalreporter.config.getoption("--rw-blob")
+        if blob and self.run.tests:
+            terminalreporter.section("robowright report blob")
+            terminalreporter.line(str(self.run.save_blob(blob)))
         if self.trials:
             terminalreporter.section("robowright trials")
             for nodeid, summary, outcome in self.trials:

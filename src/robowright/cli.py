@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 import webbrowser
+import zipfile
 from pathlib import Path
 
 
@@ -335,6 +336,17 @@ def _codegen(args, rest):
     return 0
 
 
+def _merge_reports(args, rest):
+    from .report import merge
+
+    try:
+        print(merge(args.blobs, args.output))
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile) as e:
+        print(f"robowright merge-reports: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _info(args, rest):
     import platform
 
@@ -622,6 +634,9 @@ def main(argv=None) -> int:
     s.add_argument("-o", "--out")
     s.add_argument("--no-open", action="store_true", help="write the HTML but do not open a browser")
     s.add_argument("--text", action="store_true", help="print what ran, what failed and the state at the failure, as text")
+    mr = sub.add_parser("merge-reports", help="one HTML report from the blobs of a sharded run (pytest --rw-blob)")
+    mr.add_argument("blobs", nargs="+", help="the blobs, one per shard")
+    mr.add_argument("-o", "--output", default="report.html")
     sr = sub.add_parser("show-report", help="open the HTML report a run wrote (pytest --rw-report)")
     sr.add_argument("report", nargs="?", default="report.html", help="the report, or the folder it is in (default report.html)")
     sr.add_argument("--port", type=int, help="serve it over HTTP on this port (0: any free one) instead of opening the file")
@@ -698,6 +713,7 @@ def main(argv=None) -> int:
     commands = {
         "show-trace": _show,
         "show-report": _show_report,
+        "merge-reports": _merge_reports,
         "replay": _replay,
         "codegen": _codegen,
         "render": _render,
