@@ -45,6 +45,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # importing robowright imports mujoco, which loads EGL (MUJOCO_GL above)
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
       - run: pip install -e ".[docs]"
       - run: pytest tests/test_docs_pages.py -p no:cacheprovider
       - run: mkdocs build --strict
