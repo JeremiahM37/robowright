@@ -60,8 +60,15 @@ def plan(args: list[str], files: list[str]) -> list[str]:
     return list(args)
 
 
+def run_env() -> dict:
+    """The environment a run gets. It writes no bytecode cache: a .pyc is trusted when its source's size and
+    modification time (in whole seconds) match, so a save in the same second as the last run that keeps the file's
+    size (``1 == 3`` to ``1 == 2``) would run the old code."""
+    return {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+
+
 def _run_pytest(args: list[str]) -> int:
-    return subprocess.call([sys.executable, "-m", "pytest", *args])
+    return subprocess.call([sys.executable, "-m", "pytest", *args], env=run_env())
 
 
 def _enter_presses() -> threading.Event:

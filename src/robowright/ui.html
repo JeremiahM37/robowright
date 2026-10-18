@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>robowright UI</title>
+<link rel="icon" href="/favicon.ico" type="image/svg+xml">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2129; --muted: #667085; --line: #e3e6eb;
+  --accent: #2f6fde; --ok: #188a4a; --bad: #d1323f; --warn: #b7791f; --sel: #eaf1fd; --code: #f1f3f6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111318; --panel: #1a1d24; --ink: #e6e8ec; --muted: #98a0ae; --line: #2a2f39;
+    --accent: #6e9cf5; --ok: #43c07a; --bad: #f06872; --warn: #e2b04a; --sel: #222c3d; --code: #22262f;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+header { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 600; }
+button, input[type=search] { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 4px 10px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; border-color: var(--line); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+label.toggle { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; color: var(--muted); }
+label.toggle input { accent-color: var(--accent); }
+.counts { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; }
+.counts b { font-weight: 600; }
+.c-failed { color: var(--bad); } .c-passed { color: var(--ok); }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.side-head { padding: 8px; border-bottom: 1px solid var(--line); display: flex; gap: 6px; }
+.side-head input { flex: 1; min-width: 0; }
+#tree { list-style: none; margin: 0; padding: 4px 0; overflow: auto; flex: 1; }
+#tree li { display: grid; grid-template-columns: 16px 1fr auto auto; gap: 6px; align-items: center; padding: 3px 8px 3px 10px; border-left: 3px solid transparent; cursor: pointer; }
+#tree li.file { font-weight: 600; margin-top: 4px; }
+#tree li.test { padding-left: 26px; }
+#tree li:hover { background: var(--sel); }
+#tree li.sel { background: var(--sel); border-left-color: var(--accent); }
+#tree .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-word; }
+#tree .dur { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+#tree .run { border: none; background: none; padding: 0 4px; color: var(--muted); opacity: .5; }
+#tree li:hover .run, #tree li.sel .run { opacity: 1; }
+#tree .run:hover { color: var(--accent); }
+.st { text-align: center; font-size: 12px; color: var(--muted); }
+.st.passed { color: var(--ok); } .st.failed { color: var(--bad); } .st.flaky { color: var(--warn); }
+.st.running { color: var(--accent); animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.detail-head { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
+.detail-head h2 { margin: 0; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; font-weight: 600; }
+.pill { padding: 1px 8px; border-radius: 99px; font-weight: 600; font-size: 12px; background: var(--code); color: var(--muted); }
+.pill.passed { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.pill.failed { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+.pill.flaky { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+.tabs { display: flex; border-bottom: 1px solid var(--line); }
+.tabs button { flex: 0 0 auto; border: none; border-radius: 0; background: none; color: var(--muted); padding: 8px 14px; border-bottom: 2px solid transparent; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.pane { flex: 1; min-height: 0; overflow: auto; }
+.pane iframe { width: 100%; height: 100%; min-height: 480px; border: 0; display: block; background: var(--bg); }
+pre { margin: 0; padding: 10px 12px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+pre.error { color: var(--bad); }
+.empty { padding: 24px; color: var(--muted); }
+.hidden { display: none !important; }
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; grid-template-rows: minmax(240px, 40vh) minmax(480px, auto); padding: 8px; }
+  header { padding: 8px; }
+  .counts { margin-left: 0; width: 100%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>robowright</h1>
+  <button id="runAll" class="primary" title="Run every test">&#9654; Run all</button>
+  <button id="stop" title="Stop the run" disabled>&#9632; Stop</button>
+  <button id="reload" title="List the tests again">&#8635; Reload</button>
+  <label class="toggle" title="Run again whenever a file changes"><input type="checkbox" id="watch"> Watch</label>
+  <label class="toggle" title="Show the camera live as a test runs (tests then run at real-time pace)"><input type="checkbox" id="live"> Live</label>
+  <div class="counts" id="counts"></div>
+</header>
+<main>
+  <section>
+    <div class="side-head">
+      <input type="search" id="filter" placeholder="Filter tests" aria-label="Filter tests">
+      <button id="failedOnly" title="Show only failed tests">Failed</button>
+    </div>
+    <ul id="tree"></ul>
+  </section>
+  <section>
+    <div class="detail-head" id="dhead"><h2>Pick a test</h2></div>
+    <div class="tabs" id="tabs">
+      <button data-tab="trace" class="on">Trace</button>
+      <button data-tab="live">Live</button>
+      <button data-tab="error">Errors</button>
+      <button data-tab="output">Output</button>
+    </div>
+    <div class="pane" id="pane"></div>
+  </section>
+</main>
+<script>
+const TOKEN = "__TOKEN__";
+const ICON = {passed: "✓", failed: "✕", flaky: "⚠", skipped: "−", xfailed: "−", xpassed: "!", running: "↻", queued: "•"};
+let S = null, sel = null, tab = "trace", failedOnly = false, shownTrace = null, shownLive = null;
+const $ = id => document.getElementById(id);
+
+async function api(path, body) {
+  const r = await fetch(path, {method: body ? "POST" : "GET", headers: {"X-RW-Token": TOKEN, "Content-Type": "application/json"}, body: body ? JSON.stringify(body) : undefined});
+  return r.json();
+}
+const run = ids => api("/api/run", {ids});
+const fileOf = id => id.split("::")[0];
+const shortName = id => id.split("::").slice(1).join("::") || id;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+function fileStatus(tests) {
+  const o = tests.map(t => t.outcome);
+  for (const k of ["running", "queued", "failed", "flaky"]) if (o.includes(k)) return k;
+  if (o.length && o.every(x => x === "passed" || x === "skipped" || x === "xfailed")) return o.includes("passed") ? "passed" : "skipped";
+  return "";
+}
+
+function renderTree() {
+  const q = $("filter").value.trim().toLowerCase();
+  const files = new Map();
+  for (const t of S.tests) {
+    if (q && !t.id.toLowerCase().includes(q)) continue;
+    if (failedOnly && t.outcome !== "failed" && t.outcome !== "flaky") continue;
+    if (!files.has(fileOf(t.id))) files.set(fileOf(t.id), []);
+    files.get(fileOf(t.id)).push(t);
+  }
+  const rows = [];
+  for (const [f, ts] of files) {
+    const st = fileStatus(ts);
+    rows.push(`<li class="file${sel === f ? " sel" : ""}" data-id="${esc(f)}"><span class="st ${st}">${ICON[st] || ""}</span><span class="name">${esc(f)}</span><span class="dur">${ts.length}</span><button class="run" title="Run this file" data-run="${esc(f)}">&#9654;</button></li>`);
+    for (const t of ts) {
+      const d = t.duration != null && t.outcome && t.outcome !== "running" && t.outcome !== "queued" ? t.duration.toFixed(1) + "s" : "";
+      rows.push(`<li class="test${sel === t.id ? " sel" : ""}" data-id="${esc(t.id)}"><span class="st ${t.outcome || ""}">${ICON[t.outcome] || ""}</span><span class="name">${esc(shortName(t.id))}</span><span class="dur">${d}</span><button class="run" title="Run this test" data-run="${esc(t.id)}">&#9654;</button></li>`);
+    }
+  }
+  if (!rows.length) rows.push(`<li class="empty">${S.tests.length ? "No test matches." : S.collect_error ? "The tests could not be listed: see Errors." : "No tests found."}</li>`);
+  $("tree").innerHTML = rows.join("");
+}
+
+function renderCounts() {
+  const n = k => S.tests.filter(t => t.outcome === k).length;
+  const parts = [`<span>${S.tests.length} tests</span>`];
+  if (n("passed")) parts.push(`<span class="c-passed"><b>${n("passed")}</b> passed</span>`);
+  if (n("failed")) parts.push(`<span class="c-failed"><b>${n("failed")}</b> failed</span>`);
+  if (n("flaky")) parts.push(`<span><b>${n("flaky")}</b> flaky</span>`);
+  if (n("skipped")) parts.push(`<span><b>${n("skipped")}</b> skipped</span>`);
+  if (S.running) parts.push(`<span>running…</span>`);
+  $("counts").innerHTML = parts.join("");
+}
+
+function selected() {
+  if (!sel) return null;
+  const t = S.tests.find(x => x.id === sel);
+  if (t) return {kind: "test", ...t};
+  const ts = S.tests.filter(x => fileOf(x.id) === sel);
+  return ts.length ? {kind: "file", id: sel, outcome: fileStatus(ts), tests: ts} : null;
+}
+
+function renderDetail() {
+  const s = selected();
+  const pill = s && s.outcome ? `<span class="pill ${s.outcome}">${esc(s.outcome)}</span>` : "";
+  const done = s && s.outcome && s.outcome !== "queued" && s.outcome !== "running";
+  const dur = done && s.kind === "test" && s.duration != null ? `<span class="pill">${s.duration.toFixed(2)} s</span>` : "";
+  $("dhead").innerHTML = s ? `<h2>${esc(s.id)}</h2>${pill}${dur}<button id="runSel">&#9654; Run</button>` : `<h2>${S.tests.length ? "Pick a test" : "robowright"}</h2>`;
+  if (s) $("runSel").onclick = () => run([s.id]);
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === tab);
+  const pane = $("pane");
+  if (tab === "trace") {
+    const trace = s && s.kind === "test" && s.traces && s.traces[0];
+    if (trace !== shownTrace || !pane.querySelector("iframe")) {
+      shownTrace = trace || null; shownLive = null;
+      pane.innerHTML = trace ? `<iframe title="trace" src="/trace?token=${encodeURIComponent(TOKEN)}&path=${encodeURIComponent(trace)}"></iframe>`
+        : `<div class="empty">${!s ? "Pick a test to see its trace." : s.kind === "file" ? "Pick one of this file's tests to see its trace." : s.outcome === "running" ? "Running… (turn on Live to watch it)" : s.outcome ? "This run recorded no trace: only a test using the world fixture has one." : "Run it to record a trace."}</div>`;
+    }
+    return;
+  }
+  shownTrace = null;
+  if (tab === "live") {
+    if (!S.live) { shownLive = null; pane.innerHTML = `<div class="empty">Turn on Live, then run a test: its camera, joints and contacts show here as it runs (at real-time pace).</div>`; return; }
+    if (!S.running) { shownLive = null; pane.innerHTML = `<div class="empty">Nothing is running. Run a test to watch it.</div>`; return; }
+    if (!S.live_ready) { shownLive = null; pane.innerHTML = `<div class="empty">Starting\u2026 the camera shows once a test builds its world.</div>`; return; }
+    if (shownLive !== S.live_url) { shownLive = S.live_url; pane.innerHTML = `<iframe title="live" src="${esc(S.live_url)}"></iframe>`; }
+    return;
+  }
+  shownLive = null;
+  if (tab === "error") {
+    const msgs = s && s.kind === "file" ? s.tests.filter(t => t.message && (t.outcome === "failed" || t.outcome === "flaky")).map(t => `${t.id}\n${t.message}`) : s && s.message ? [s.message] : [];
+    if (S.collect_error) msgs.unshift("Collecting the tests failed:\n" + S.collect_error);
+    pane.innerHTML = msgs.length ? `<pre class="error">${esc(msgs.join("\n\n"))}</pre>` : `<div class="empty">No errors.</div>`;
+    return;
+  }
+  const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 20;
+  pane.innerHTML = `<pre>${esc(S.log || "No run yet.")}</pre>`;
+  if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+function render() {
+  $("stop").disabled = !S.running;
+  $("runAll").disabled = S.running;
+  $("watch").checked = S.watching;
+  $("live").checked = S.live;
+  renderCounts(); renderTree(); renderDetail();
+}
+
+async function poll() {
+  try {
+    const st = await api("/api/state");
+    if (!S || st.version !== S.version || st.live_ready !== S.live_ready) { S = st; render(); }
+  } catch (e) { $("counts").textContent = "The UI's server has stopped."; return; }
+  setTimeout(poll, 400);
+}
+
+$("tree").addEventListener("click", e => {
+  const r = e.target.closest("[data-run]");
+  if (r) { e.stopPropagation(); sel = r.dataset.run; run([sel]); render(); return; }
+  const li = e.target.closest("li[data-id]");
+  if (li) { sel = li.dataset.id; render(); }
+});
+$("tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) { tab = b.dataset.tab; renderDetail(); } });
+$("runAll").onclick = () => run([]);
+$("stop").onclick = () => api("/api/stop", {});
+$("reload").onclick = () => api("/api/collect", {});
+$("watch").onchange = e => api("/api/watch", {on: e.target.checked});
+$("live").onchange = e => api("/api/live", {on: e.target.checked});
+$("filter").oninput = () => renderTree();
+$("failedOnly").onclick = e => { failedOnly = !failedOnly; e.target.classList.toggle("primary", failedOnly); renderTree(); };
+poll();
+</script>
+</body>
+</html>
