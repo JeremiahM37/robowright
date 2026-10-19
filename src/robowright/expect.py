@@ -280,6 +280,46 @@ class Expectation:
 
         return self._run(label, check, timeout, 0.0, args)
 
+    def to_match_state_snapshot(self, name: str, *, tol: float = 0.01, joint_tol: float = 0.05, timeout: float = 0.0):
+        """The world's state matches the text kept for this test: where each object is (within ``tol`` m), the
+        robot's joints (within ``joint_tol`` rad) and a mobile robot's base. Playwright's ``toMatchAriaSnapshot``
+        for a world: ``expect(world).to_match_state_snapshot("tidy")``. The baseline is
+        ``__snapshots__/<test file>/<name>-<engine>-<robot>.state.txt``, written by the first run (which fails: read
+        it, then run again) and by ``pytest --rw-update-snapshots``. It is plain text: delete a line to stop checking
+        that object or joint. See robowright.snapshots."""
+        from . import snapshots
+
+        if self.negate:
+            raise ValueError("to_match_state_snapshot cannot be negated: say what the state should be")
+        w = self.world
+        w.require("ground_truth", "to_match_state_snapshot")
+        path = snapshots.baseline_path(Path(name).stem + ".txt", w.backend.name, w.spec.robot or "robot")
+        path = path.with_suffix(snapshots.STATE_SUFFIX)
+        args = {"name": name, "tol": tol, "joint_tol": joint_tol}
+        label = f"to_match_state_snapshot({name!r})"
+        header = f"robowright state snapshot {name!r}: {w.backend.name}, {w.spec.robot or 'robot'}"
+        if snapshots.updating() or not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(snapshots.format_state(snapshots.state_of(w), header))
+            if snapshots.updating():
+                return self._run(label, lambda: (True, f"wrote {path}"), timeout, 0.0, args)
+            missing = f"no snapshot {path} yet: wrote it from this run; read it, then run again"
+            return self._run(label, lambda: (False, missing), 0.0, 0.0, args)
+        expected = snapshots.parse_state(path.read_text(), path)
+        out = Path(w.settings.trace_dir) / "snapshots" / (snapshots._slug(f"{w.name}-{Path(name).stem}") + snapshots.STATE_SUFFIX)
+
+        def check():
+            actual = snapshots.state_of(w)
+            diffs = snapshots.compare_state(actual, expected, tol, joint_tol)
+            if not diffs:
+                return True, f"matches {path}"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(snapshots.format_state(actual, header))
+            n = f"{len(diffs)} entries differ" if len(diffs) > 1 else "1 entry differs"
+            return False, f"{n} from {path}:\n  " + "\n  ".join(diffs) + f"\n  this run's state: {out}"
+
+        return self._run(label, check, timeout, 0.0, args)
+
     # state matchers -------------------------------------------------------------
     def to_be_at_rest(self, lin_tol: float = 0.01, ang_tol: float = 0.1, *, timeout=None, hold=None):
         """Linear speed below ``lin_tol`` m/s and angular below ``ang_tol`` rad/s, for ``hold`` seconds (0.1 unless

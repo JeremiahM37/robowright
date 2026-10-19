@@ -214,8 +214,8 @@ def generate(
             neg = ".not_" if a.get("negate") else ""
             mode = ".always" if t == "invariant" else ""
             line = f"expect({_subject(a['subject'])}){mode}{neg}.{a['matcher']}({_kwargs(a['kwargs'])})"
-            if a["matcher"] == "to_match_snapshot":
-                # Its baseline image lives beside the test that recorded this trace, not beside this one.
+            if a["matcher"] in ("to_match_snapshot", "to_match_state_snapshot"):
+                # Its baseline lives beside the test that recorded this trace, not beside this one.
                 line = f"# {line}  (compared with the original test's __snapshots__)"
             elif a.get("code"):  # expect.poll, to_pass, to_satisfy: the test's own code, which the trace does not keep
                 line = f"# not written again (it ran the original test's own code): {line}"

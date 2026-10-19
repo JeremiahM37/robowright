@@ -671,6 +671,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
+| `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: object positions, joints and a mobile robot's base, against text kept beside the test, each within a tolerance; delete a line to stop checking it |
 | `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
@@ -1288,6 +1289,25 @@ and fails, so a missing baseline is never a pass: look at it, then run again. A 
 fails with the number of pixels that moved, and writes the actual image and a diff (changed
 pixels in red) next to the traces. `threshold` (per pixel, 0..1) and `max_diff_pixel_ratio`
 set what counts as the same view; `pytest --rw-update-snapshots` writes every baseline again.
+
+`expect(world).to_match_state_snapshot("tidy")` does the same for the world's state, as
+Playwright's `toMatchAriaSnapshot` does for a page's structure: where every object is, the
+robot's joints and, for a robot that moves about, its base, kept as text in
+`__snapshots__/<test file>/tidy-<engine>-<robot>.state.txt`:
+
+```text
+objects:
+  cube: [0.2200, -0.0600, 0.0125]
+  bin: [0.2000, 0.1200, 0.0000]
+joints:
+  shoulder_pan: -0.0011
+  ...
+```
+
+Positions match within `tol` (1 cm) and joints within `joint_tol` (0.05 rad). Only what the
+file lists is checked, so delete a line to stop checking that object or joint. A failure names
+each entry that moved and by how much, and writes this run's state beside the traces. Unlike an
+image it reads the same on every engine, and needs no rendering.
 
 A real simulator or robot can fail a test once for a reason outside your code: a clock that
 stalled, a stack that started slowly. `pytest --rw-retries 2` runs a failed test again, up to
