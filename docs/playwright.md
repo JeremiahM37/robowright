@@ -61,7 +61,7 @@ becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plai
 | watch mode | `robowright test --watch` | same |
 | codegen | `robowright codegen` (in a browser, or from a trace: the failure as a regression test) | same |
 | VS Code extension | `editors/vscode`: Test Explorer, run, failures on their line, open the trace | partial: built and tested, not on the Marketplace |
-| MCP server, test agents | `robowright mcp`: an agent drives a simulated robot, runs your policy or stack, writes tests | partial: no planner/generator/healer agents |
+| MCP server, test agents (`init-agents`) | `robowright mcp`; `robowright init-agents` writes a planner, a generator and a healer for Claude Code that use it | same |
 | `--repeat-each` to find flakes | see above; plus `robowright crosscheck` (the same calls on another engine) | robot |
 | bit-for-bit replay | `robowright replay trace.zip` | robot (Playwright has none) |
 

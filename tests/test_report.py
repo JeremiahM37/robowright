@@ -165,3 +165,24 @@ def test_the_ci_workflow_init_writes_runs_its_shards_and_merges_them(tmp_path):
     assert r.returncode == 0, r.stderr
     page = (tmp_path / out).read_text()
     assert "3 tests" in page and "passed 3" in page, page[:1500]  # every test of the example project, across both shards
+
+
+def test_init_agents_writes_a_planner_a_generator_and_a_healer(tmp_path):
+    """As `npx playwright init-agents`: Claude Code agent definitions that use robowright's MCP tools."""
+    import re
+    from pathlib import Path
+
+    cli = [sys.executable, "-m", "robowright.cli", "init-agents", str(tmp_path)]
+    r = subprocess.run(cli, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    tools = set(re.findall(r"async def ((?:robot|ros2|sim)_\w+)", (Path(__file__).parents[1] / "src/robowright/mcp_server.py").read_text()))
+    for name in ("robowright-planner", "robowright-generator", "robowright-healer"):
+        text = (tmp_path / ".claude" / "agents" / f"{name}.md").read_text()
+        head, body = text.split("\n---\n", 1)
+        assert head.startswith("---\n") and f"name: {name}\n" in head and "\ndescription: " in head
+        named = set(re.findall(r"\b((?:robot|ros2|sim)_[a-z_]+)\b", body))
+        assert named and named <= tools, named - tools  # every tool it is told to use exists
+    assert json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["robowright"]
+    healer = tmp_path / ".claude" / "agents" / "robowright-healer.md"
+    healer.write_text("mine\n")
+    assert "kept     " in subprocess.run(cli, capture_output=True, text=True).stdout and healer.read_text() == "mine\n"

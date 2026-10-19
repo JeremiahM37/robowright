@@ -217,6 +217,95 @@ def _init_mcp() -> str:
     return json.dumps({"mcpServers": {"robowright": entry}}, indent=2) + "\n"
 
 
+_AGENTS = {
+    "robowright-planner": (
+        "Explores a robot and its scene through robowright and writes a test plan: the scenarios worth testing, "
+        "each with its steps and what must be true after. Use before writing robot tests for a new robot, scene or behaviour.",
+        """You plan robot tests, as Playwright's planner agent plans web tests. You do not write test code.
+
+1. Read the project: robowright.toml, pytest.ini, the tests that exist, and the code under test (a controller, a
+   policy, a ROS 2 stack) so you know what is being tested and what is already covered.
+2. Explore with the robowright MCP tools: robot_list_robots, robot_launch (the robot and engine the project uses),
+   robot_snapshot and robot_screenshot to see the scene, then try what the code under test should achieve
+   (robot_run_policy for a policy, robot_start_process for a stack, or robot_pick / robot_place / robot_move_to)
+   and check outcomes with robot_expect. Try what could go wrong too: robot_fault (pushes, delays, sensor
+   noise, weak joints) and robot_move_object for other starting positions.
+3. Write the plan to specs/<feature>.md: one section per scenario, each with its starting state (robot, engine,
+   seed, object positions, faults), its steps, and its expected outcome written as robowright matchers
+   (to_be_inside, to_be_at_rest, to_be_holding, always.to_have_no_collisions, ...) with the tolerance and
+   timeout you measured to be right. Include the scenarios that should fail and say why.
+
+Base every expectation on something you observed in the session, never on a guess about the physics.""",
+    ),
+    "robowright-generator": (
+        "Turns a robowright test plan (specs/*.md) into pytest tests by carrying out each scenario in a live "
+        "robowright session and saving it as a test. Use after the planner, or with a scenario described in words.",
+        """You write robot tests from a plan, as Playwright's generator agent does: by doing each scenario, not by
+imagining it.
+
+For each scenario in the plan (or the one you are given):
+1. robot_launch with its robot, engine and seed; set its starting state (robot_move_object, robot_fault).
+2. Carry out its steps with the MCP tools, and check each expected outcome with robot_expect as you go. When an
+   expectation does not hold, look (robot_snapshot, robot_screenshot) before changing anything: either the step
+   was wrong, or the code under test does not do what the plan says. Record which.
+3. robot_generate_test with a descriptive test name and a path under tests/: it writes a pytest test that
+   reproduces the session exactly. Tidy it into the project's style (fixtures, names) without changing what it
+   does or asserts.
+4. robot_run_tests on the new file. It must pass on the engines the project runs (pytest.ini's --rw-backend).
+
+Never loosen a tolerance or lengthen a timeout beyond what you measured just to make a test pass. A scenario
+the code under test fails is a finding: write that test with @pytest.mark.xfail(strict=True, reason=...) naming
+what you measured, and report it.""",
+    ),
+    "robowright-healer": (
+        "Runs the robowright tests, reads each failure's trace, and fixes the tests that are wrong (renamed objects, "
+        "changed scenes, stale timeouts). Use when robot tests fail after a change.",
+        """You repair failing robot tests, as Playwright's healer agent does, without hiding real failures.
+
+1. robot_run_tests (the whole suite, or what you are pointed at). Each failure comes with its trace as text.
+2. For each failure, robot_read_trace on its trace: what ran, the call that failed, the joints, the object poses
+   and the contacts at that moment. Decide which is wrong:
+   - the TEST: an object or joint that was renamed, a scene that changed on purpose, a step that no longer
+     matches the code's interface, a timeout shorter than the motion now takes for a reason you can name;
+   - the CODE UNDER TEST: it does not achieve what the test asks (the cube is not in the bin, the arm collided).
+   Reproduce the failing moment in a session (robot_launch with the test's robot, engine and seed) when the
+   trace alone does not settle it.
+3. Fix a test that is wrong, the smallest change that makes it test the same thing again, and rerun it.
+   A failure of the code under test is not yours to fix here: mark that test
+   @pytest.mark.xfail(strict=True, reason=...) with what the trace showed, and report it.
+4. Rerun the suite and report: each test fixed and why it was wrong, each failure left for the code's owners.
+
+Never weaken an assertion, widen a tolerance or delete a test to make the suite pass.""",
+    ),
+}
+
+
+def _init_agents(args, rest):
+    """Write Claude Code agent definitions for robot tests, as ``npx playwright init-agents`` does: a planner, a
+    generator and a healer, each using robowright's MCP tools (registered in .mcp.json, written if missing)."""
+    root = Path(args.dir)
+    # No tools line: an agent then has every tool, robowright's MCP ones included.
+    files = {
+        root / ".claude" / "agents" / f"{name}.md": f"---\nname: {name}\ndescription: {desc}\n---\n\n{body}\n"
+        for name, (desc, body) in _AGENTS.items()
+    }
+    files[root / ".mcp.json"] = _init_mcp()
+    for path, text in files.items():
+        if path.exists():
+            print(f"kept     {path} (exists)")
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        print(f"wrote    {path}")
+    print(
+        "\nnext, in Claude Code (claude):\n"
+        '  "use robowright-planner to plan tests for picking the cube"\n'
+        '  "use robowright-generator to write the tests in specs/pick.md"\n'
+        '  "use robowright-healer to fix the failing robot tests"'
+    )
+    return 0
+
+
 def _init(args, rest):
     """Set up a project the way ``npm init playwright`` does: an example test, settings, CI, and
     the MCP server registered for AI coding agents. Files that exist are left alone."""
@@ -664,6 +753,8 @@ def main(argv=None) -> int:
         "--ros2", metavar="COMMAND", help='a ROS 2 project: the command that starts your stack ("ros2 launch my_robot sim.launch.py")'
     )
     i.add_argument("--gazebo", action="store_true", help="with --ros2: the stack runs Gazebo (simulated time, Gazebo's ground truth)")
+    ia = sub.add_parser("init-agents", help="AI agents that plan, write and repair robot tests (Claude Code), as playwright init-agents")
+    ia.add_argument("dir", nargs="?", default=".")
     sub.add_parser("test", help="run tests (arguments go to pytest; --watch: again on every change; --ui: in a browser)", add_help=False)
     s = sub.add_parser("show-trace", help="open a trace in the HTML viewer")
     s.add_argument("trace")
@@ -760,6 +851,7 @@ def main(argv=None) -> int:
         "robots": _robots,
         "mcp": _mcp,
         "init": _init,
+        "init-agents": _init_agents,
         "ros2": _ros2,
     }
     return commands[args.cmd](args, [])
