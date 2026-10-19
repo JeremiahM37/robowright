@@ -133,8 +133,14 @@ def ground(workdir: Path) -> None:
     cmd += ["-p", "shape:=box", "-p", "position:=[0.0, 0.0, -0.011]", "-p", "quat_xyzw:=[0.0, 0.0, 0.0, 1.0]"]
     cmd += ["-p", "dimensions:=[4.0, 4.0, 0.02]", "-p", "use_sim_time:=true"]
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(PYMOVEIT2), os.environ.get("PYTHONPATH")])))
-    with (workdir / "ground.log").open("w") as log:
-        done = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=120)
+    for attempt in range(2):
+        with (workdir / "ground.log").open("w") as log:
+            done = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=120)
+        # Under load, the example's one request for move_group's parameters can go unanswered though move_group has
+        # said it is ready (seen once in a gate run): its discovery is asked again, once.
+        if attempt == 0 and "Unable to read the robot description" in _read(workdir / "ground.log"):
+            continue
+        break
     if done.returncode != 0 or "Planning scene updated successfully" not in _read(workdir / "ground.log"):
         raise RuntimeError(f"could not add Gazebo's floor to MoveIt's scene:\n{_read(workdir / 'ground.log')[-2000:]}")
 
