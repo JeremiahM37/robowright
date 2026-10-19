@@ -140,3 +140,41 @@ def test_serial_tests_under_load_distribution_are_warned_about(pytester):
     pytester.makepyfile(test_serial=SERIAL)
     r = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-n", "2", "--dist", "load")
     assert "use --dist loadgroup" in r.stdout.str()
+
+
+def _outcomes(r):
+    return {k: v for k, v in r.parseoutcomes().items() if k not in ("warnings", "warning", "deselected")}
+
+
+def test_rw_slow_triples_the_time_limit(pytester):
+    pytester.makepyfile(
+        test_s="""
+import time
+import pytest
+
+@pytest.mark.rw_slow
+def test_slow_but_within_three_times():
+    time.sleep(1.2)  # past --rw-timeout 0.5, within 1.5
+
+def test_plain_past_its_limit():
+    time.sleep(1.2)
+"""
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "0.5")
+    assert _outcomes(r) == {"passed": 1, "failed": 1}
+    assert "FAILED test_s.py::test_plain_past_its_limit - robowright.errors.TimeLimitErro" in r.stdout.str()
+
+
+def test_rw_attempt_says_which_try_this_is(pytester):
+    pytester.makepyfile(
+        test_a="""
+from pathlib import Path
+
+def test_knows_its_attempt(rw_attempt):
+    Path(f"attempt-{rw_attempt}").write_text("")
+    assert rw_attempt == 1, "fails the first time"
+"""
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-retries", "1")
+    assert _outcomes(r) == {"rerun": 1, "flaky": 1}
+    assert (pytester.path / "attempt-0").exists() and (pytester.path / "attempt-1").exists()

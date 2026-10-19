@@ -257,6 +257,7 @@ def pytest_configure(config):
         "the rest are skipped (Playwright's serial mode)",
     )
     config.addinivalue_line("markers", "only: run only the tests marked so (Playwright's test.only); --rw-forbid-only refuses it")
+    config.addinivalue_line("markers", "rw_slow(factor=3): this test's time limit times factor (Playwright's test.slow)")
     config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
@@ -599,6 +600,13 @@ def rw_backend():  # parametrized by pytest_generate_tests
 
 
 @pytest.fixture
+def rw_attempt(request) -> int:
+    """Which attempt this is under --rw-retries: 0 the first, 1 the first retry (Playwright's testInfo.retry), for a
+    test that cleans up differently, or records more, when it runs again."""
+    return _attempt(request.node)
+
+
+@pytest.fixture
 def rw_repeat() -> int:  # which run of --rw-repeat-each this is (1-based); parametrized by pytest_generate_tests
     return 1
 
@@ -771,7 +779,9 @@ def _time_limit(item) -> float:
     if item.config.getoption("--rw-debug", False):  # a person is stepping through it
         return 0.0
     m = item.get_closest_marker("rw_timeout")
-    return float(m.args[0]) if m else float(item.config.getoption("--rw-timeout", 0.0) or 0.0)
+    limit = float(m.args[0]) if m else float(item.config.getoption("--rw-timeout", 0.0) or 0.0)
+    slow = item.get_closest_marker("rw_slow")
+    return limit * float(slow.args[0] if slow and slow.args else 3.0) if slow else limit
 
 
 HANG_GRACE = 60.0  # seconds past --rw-timeout after which a test stuck in a C call ends the process (see below);
