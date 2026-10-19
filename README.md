@@ -25,7 +25,9 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-<p align="center"><img src="docs/demo.gif" width="560" alt="SO-101 arm picking up a red cube and placing it in a blue bin"></p>
+<p align="center"><img src="docs/ui-demo.gif" width="900" alt="robowright test --ui: three robot tests run with the arm's camera live; one fails, its error shows, and its trace opens at the failed expectation with the camera, the action timeline and the joint plots"></p>
+<p align="center"><sub><code>robowright test --ui</code>: run the suite and watch the arm, then open a failure's trace at the moment it failed.
+Recorded by <a href="scripts/record_ui_demo.py"><code>scripts/record_ui_demo.py</code></a>.</sub></p>
 
 In Playwright, your web app is what is under test and the browser is real. robowright works the
 same way for robots: **your code drives the robot**, in a physics engine, in Gazebo or on the real

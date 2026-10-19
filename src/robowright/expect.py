@@ -187,7 +187,8 @@ class Expectation:
 
         def check():
             z = float(self.subject.position[2])
-            return z >= ref() + by, f"{self.subject.name} z={z:.3f}, must be {by:g} above {name}" + (
+            margin = f"{by:g} m above" if by else "above"  # "must be 0 above z=0.12" read as a typo
+            return z >= ref() + by, f"{self.subject.name} z={z:.3f}, must be {margin} {name}" + (
                 "" if isinstance(target, (int, float)) else f" (at {ref():.3f})"
             )
 
