@@ -16,7 +16,7 @@ Nothing here plans or steers: ``drive`` publishes velocities on the base's comma
 ``go_to`` sends a goal to the robot's navigation stack (Nav2's NavigateToPose), which does the rest.
 Without a command topic or a navigation stack the action says so; the robot is observed all the same.
 
-On robowright's own engines (MuJoCo, PyBullet) there is no navigation stack, so ``go_to`` is a turn-drive-turn
+On robowright's own engines (MuJoCo, PyBullet, Genesis) there is no navigation stack, so ``go_to`` is a turn-drive-turn
 controller on the ground-truth pose: it turns to face the goal, drives straight at it, and turns to
 the final heading. It has no path planning and no obstacle avoidance; a wall in the way makes it time
 out with ActionTimeoutError, as an unreachable goal does.
@@ -108,13 +108,18 @@ class MobileBase(Base):
         w, b = self.world, self.world.backend
         deadline = w.time + timeout
         k_turn, k_drive, max_w, max_v = 3.0, 1.0, 1.0, 0.3
+        there = False  # the position has been reached: only the heading is corrected now
         try:
             while True:
                 pos, quat = b.base_pose()
                 th = _heading(quat)
                 dx, dy = x - float(pos[0]), y - float(pos[1])
                 dist = float(np.hypot(dx, dy))
-                if dist > self.ARRIVE_XY:
+                # Turning in place drifts a base a little (1-2 cm over 2 rad on Bullet and Genesis). Re-entering the
+                # drive the moment that crossed the tolerance turned it back to face the goal, then to the heading,
+                # and round again until the timeout; once there, only twice the tolerance sends it back.
+                there = dist <= (2 * self.ARRIVE_XY if there else self.ARRIVE_XY)
+                if not there:
                     err = _wrap(float(np.arctan2(dy, dx)) - th)
                     if abs(err) > 0.1:  # too far off to drive yet: turn in place first
                         v = 0.0

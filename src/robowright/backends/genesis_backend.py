@@ -38,6 +38,7 @@ from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
+from .wheels import WheeledDrive, measure
 
 # Driven finger joints without an actuator gain of their own saturate this far off target.
 _DRIVE_SAT = 0.25
@@ -186,7 +187,7 @@ def _rotate(quat, v) -> np.ndarray:
 
 
 @register("genesis")
-class GenesisBackend(Backend):
+class GenesisBackend(WheeledDrive, Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, STATE, DETERMINISTIC, FORCES})
     reusable = True
 
@@ -343,6 +344,17 @@ class GenesisBackend(Backend):
         self._ctrl = np.zeros(len(self.joint_names))
         self._servoed = np.concatenate([self._arm, self._driven]) if self.has_gripper else self._arm
         self._ramp = TargetRamp()
+        if rm.family == "mobile":
+            # The drive as MuJoCo measures this model, and its wheel motors as the model's velocity servos: Genesis's own
+            # velocity control at the model's kv and torque limit (kp 0). Its gain is integrated with the step, as
+            # MuJoCo's is; the same law applied as an explicit torque each substep chattered between its torque limits
+            # on the light wheels after a stop (a wheel at -3.2 rad/s against a command of 0).
+            self.wheels, self._servo = measure(spec, seed)
+            self._wheel_u = np.zeros(self.n_arm)
+            force = np.where(np.isfinite(self._servo["force"]), self._servo["force"], 1e9)
+            robot.set_dofs_kp(np.zeros(self.n_arm), self._arm)
+            robot.set_dofs_kv(self._servo["kv"], self._arm)
+            robot.set_dofs_force_range(-force, force, self._arm)
         if rm.floating:
             yaw = rm.base_yaw
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)))
@@ -401,6 +413,9 @@ class GenesisBackend(Backend):
 
     def set_ctrl(self, target):
         target = np.asarray(target, float)
+        if hasattr(self, "_servo"):  # the wheels' speed targets (rad/s): what drive_base sets, or a trace recorded
+            self.set_wheel_speeds(target)
+            return
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
         self._ctrl = np.append(arm, float(np.clip(target[self.n_arm], 0.0, 1.0))) if self.has_gripper else arm
         self._ramp.set(self._ctrl)
@@ -413,7 +428,7 @@ class GenesisBackend(Backend):
         self.robot.control_dofs_position(x, self._servoed)
 
     def ctrl(self):
-        return self._ctrl.copy()
+        return self.wheel_command() if hasattr(self, "_servo") else self._ctrl.copy()
 
     def set_gain_scale(self, joint, scale):
         i = self.joint_names.index(joint)
@@ -432,6 +447,9 @@ class GenesisBackend(Backend):
             pos[d] = offset + ratio * q[i]
         self.robot.set_dofs_position(pos, zero_velocity=True)
         self._ramp.reset()  # placed, not moved: no ramp
+        if hasattr(self, "_servo"):  # wheels placed, and stopped: a wheel's angle is not a speed to hold
+            self.stop_base()
+            return
         self.set_ctrl(q)
 
     def base_pose(self):
@@ -456,12 +474,15 @@ class GenesisBackend(Backend):
         for k in range(n):
             if moving:
                 self._command(ramp.at((k + 1) / n))
+            if hasattr(self, "_servo"):
+                self.robot.control_dofs_velocity(self._wheel_u, self._arm)
             for name, f in self._pending.items():
                 link = (self.robot if name == "robot" else self._objects[name]).links[0]
                 solver.apply_links_external_wrench(force=np.asarray(f)[None], links_idx=[link.idx], ref=gs.link_ref_frame.link_COM)
             self.scene.step()
         self._pending = {}
-        ramp.arrive()
+        if not hasattr(self, "_servo"):  # (a wheeled base has no ramped targets)
+            ramp.arrive()
         self._t += self._substeps * self._dt
 
     @property
@@ -550,7 +571,8 @@ class GenesisBackend(Backend):
 
         s = self.scene.sim.rigid_solver
         ws = [qd_to_numpy(item.value, copy=True).astype(float).ravel() for item in self._warmstart()]
-        state = np.concatenate([[self._t], _np(s.get_qpos()), _np(s.get_dofs_velocity()), self._ctrl, *ws])
+        # ctrl(), not _ctrl: a wheeled base's command is its wheel speeds, which the restore below would otherwise zero
+        state = np.concatenate([[self._t], _np(s.get_qpos()), _np(s.get_dofs_velocity()), self.ctrl(), *ws])
         # A restore recomputes the kinematics from qpos, which can differ in the last bit from what the
         # steps accumulated (~1e-16). Restoring onto this simulation too makes the two runs start alike.
         self.set_state(state)

@@ -27,7 +27,7 @@ from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
-from .wheels import WheeledDrive, torques
+from .wheels import WheeledDrive
 
 POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error corrected per step
 GRAVITY = 9.81
@@ -229,8 +229,7 @@ class PybulletBackend(WheeledDrive, Backend):
         if rm.family == "mobile":
             from .wheels import measure
 
-            # The drive as MuJoCo measures this model, and its wheel motors as the model's velocity servos, applied
-            # as torque each step (step): the wheels' own Bullet motors are off, so only that torque turns them.
+            # The drive as MuJoCo measures this model, and its wheel motors at the model's torque limit (step).
             wheels, servo = measure(spec, seed)
             if "matrix" in wheels:
                 # An omni or mecanum wheel rolls on passive rollers. Bullet's default motors hold them still, so the
@@ -243,7 +242,7 @@ class PybulletBackend(WheeledDrive, Backend):
             else:
                 self.wheels, self._servo = wheels, servo
                 self._wheel_u = np.zeros(self.n_arm)
-                p.setJointMotorControlArray(self.robot, self._arm, p.VELOCITY_CONTROL, forces=[0.0] * self.n_arm, physicsClientId=c)
+                self._wheel_force = np.where(np.isfinite(servo["force"]), servo["force"], 1e9)
             # The file's own friction for a link on the ground (a TurtleBot 4 caster's Gazebo mu1, 0.1), as MuJoCo
             # gets it: Bullet multiplies the two bodies' coefficients, and the floor's is 1.
             for link, mu in rm.ground_friction().items():
@@ -547,9 +546,17 @@ class PybulletBackend(WheeledDrive, Backend):
                 )
                 p.applyExternalForce(self.robot, j, [0, 0, weight], com, p.WORLD_FRAME, physicsClientId=c)
             if hasattr(self, "_servo"):
-                speed = np.array([s[1] for s in p.getJointStates(self.robot, self._arm, physicsClientId=c)])
-                u = torques(self._servo, self._wheel_u, speed)
-                p.setJointMotorControlArray(self.robot, self._arm, p.TORQUE_CONTROL, forces=list(u), physicsClientId=c)
+                # Bullet's velocity motor, capped at the model's torque limit. It is a solver constraint, so it is stable;
+                # the servo law applied as explicit torque (kv * error) chattered on light wheels (a TurtleBot 3's at
+                # 15-25 rad/s against a command of 6). It holds the speed more stiffly than the model's kv.
+                p.setJointMotorControlArray(
+                    self.robot,
+                    self._arm,
+                    p.VELOCITY_CONTROL,
+                    targetVelocities=list(self._wheel_u),
+                    forces=list(self._wheel_force),
+                    physicsClientId=c,
+                )
             for name, f in self._pending.items():
                 body = self.robot if name == "robot" else self._bodies[name]
                 pos, _ = p.getBasePositionAndOrientation(body, physicsClientId=self.cid)

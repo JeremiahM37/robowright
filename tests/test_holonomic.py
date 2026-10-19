@@ -43,8 +43,8 @@ def path():
     return str(SOCCER)
 
 
-def _settled(path):
-    w = rw.launch(robot=path, backend="mujoco")
+def _settled(path, engine="mujoco"):
+    w = rw.launch(robot=path, backend=engine)
     w.wait(1.0)  # the base settles on its rollers before any command
     return w
 
@@ -133,9 +133,21 @@ _UNRESOLVED = (
 )
 
 
-@pytest.mark.xfail(strict=True, reason=_UNRESOLVED)
-def test_forward_drive_goes_forward_without_drift(path):
-    w = _settled(path)
+# On Genesis, from the same measured map and servos, forward and sideways land within 3 % (0.194 and 0.195 m of 0.2);
+# the pivot turns 81 % (1.62 of 2 rad), as on MuJoCo (80 %): two engines agreeing points at the map's turn term or the
+# model rather than at either engine's contacts, and it is not isolated.
+_PIVOT_BOTH = "the pivot turns 81 % of the command on Genesis, as on MuJoCo (80 %); the cause is not isolated"
+
+
+def _expect(request, engine, xfail_on):
+    if engine in xfail_on:
+        request.applymarker(pytest.mark.xfail(strict=True, reason=xfail_on[engine]))
+
+
+@pytest.mark.parametrize("engine", ["mujoco", "genesis"])
+def test_forward_drive_goes_forward_without_drift(path, engine, request):
+    _expect(request, engine, {"mujoco": _UNRESOLVED})
+    w = _settled(path, engine)
     b = w.robot.base
     p0 = b.position.copy()
     b.drive(0.1, 0.0, 2.0)
@@ -144,9 +156,10 @@ def test_forward_drive_goes_forward_without_drift(path):
     assert abs(side) < 0.02
 
 
-@pytest.mark.xfail(strict=True, reason=_UNRESOLVED)
-def test_sideways_drive_goes_sideways_without_drift(path):
-    w = _settled(path)
+@pytest.mark.parametrize("engine", ["mujoco", "genesis"])
+def test_sideways_drive_goes_sideways_without_drift(path, engine, request):
+    _expect(request, engine, {"mujoco": _UNRESOLVED})
+    w = _settled(path, engine)
     b = w.robot.base
     p0 = b.position.copy()
     b.drive(0.0, 0.0, 2.0, lateral=0.1)
@@ -155,9 +168,10 @@ def test_sideways_drive_goes_sideways_without_drift(path):
     assert abs(fwd) < 0.02
 
 
-@pytest.mark.xfail(strict=True, reason=_UNRESOLVED)
-def test_pivot_turns_on_the_spot_the_right_way(path):
-    w = _settled(path)
+@pytest.mark.parametrize("engine", ["mujoco", "genesis"])
+def test_pivot_turns_on_the_spot_the_right_way(path, engine, request):
+    _expect(request, engine, {"mujoco": _UNRESOLVED, "genesis": _PIVOT_BOTH})
+    w = _settled(path, engine)
     b = w.robot.base
     p0, y0 = b.position.copy(), b.yaw
     b.drive(0.0, 1.0, 2.0)
