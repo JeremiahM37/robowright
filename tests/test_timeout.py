@@ -9,9 +9,16 @@ import robowright as rw
 def test_quick(world):
     world.step(5)
 
+def _for_a_long_while():  # 30 s, not for ever: if the limit never fires, this fails instead of eating memory
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 30:
+        yield
+    raise AssertionError("the time limit never fired")
+
+
 def test_hangs(world):
     with rw.step("wait for a stack that never answers"):
-        while True:
+        for _ in _for_a_long_while():
             world.step(1)
 
 @pytest.fixture
@@ -37,7 +44,7 @@ def test_no_limit_here(world):
 
 @pytest.mark.trials(3)
 def test_trials_stop(world):
-    while True:
+    for _ in _for_a_long_while():
         world.step(1)
 """
 
@@ -123,3 +130,12 @@ def test_a_time_limit_says_where_the_other_threads_were(pytester):
     out = r.stdout.str()
     assert "time limit" in out and "other threads:" in out and "thread helper-thread" in out, out[-3000:]
     assert not list((pytester.path / "traces").glob("hung-*.txt"))  # stopped by the limit: no hang file left
+
+
+def test_the_time_limit_hooks_wrap_each_test():
+    """They start and stop the clock around setup and teardown; a hook that lost its wrapper marker never runs its
+    code (pytest calls it, gets an unstarted generator back), and every limit silently stops working."""
+    from robowright import pytest_plugin
+
+    for name in ("pytest_runtest_setup", "pytest_runtest_teardown"):
+        assert getattr(getattr(pytest_plugin, name), "pytest_impl", {}).get("wrapper"), name

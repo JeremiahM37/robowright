@@ -763,7 +763,6 @@ def _other_threads(limit: int = 6) -> str:
     return "other threads:\n" + "".join(out) if out else ""
 
 
-@pytest.hookimpl(wrapper=True, tryfirst=True)
 def _global_timeout(session) -> None:
     limit = session.config.getoption("--rw-global-timeout", 0.0) or 0.0
     started = session.config.stash.get(_STARTED, None)
@@ -771,6 +770,7 @@ def _global_timeout(session) -> None:
         session.shouldfail = f"--rw-global-timeout: the run passed {limit:g} s; the tests left did not run"
 
 
+@pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_setup(item):
     """Start the test's clock (``--rw-timeout``): from its fixtures, where a stack that never comes up
     waits, to the end of its body. Checked between Python operations, which a long C call delays.
