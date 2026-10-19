@@ -1,6 +1,8 @@
 import json
 import urllib.request
 
+import pytest
+
 import robowright as rw
 from robowright.live import LiveView
 
@@ -196,3 +198,51 @@ def test_pick(robot, scene):
     out = "".join(lines)
     assert 'paused before robot.pick(obj=cube) (test_d.py:4: robot.pick(scene["cube"]))' in out
     assert "1 passed" in out
+
+
+def test_clicking_an_object_in_the_view_gives_its_locator():
+    """The locator picker: click the cube in the camera image, get the code that finds it (Playwright's pick locator)."""
+    import threading
+
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from robowright.snapshots import box_of
+
+    box = {}
+
+    def person():
+        try:
+            while "url" not in box:
+                threading.Event().wait(0.02)
+            _wait_paused(box["url"], "robot.pick")
+            with sync_api.sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page(viewport={"width": 1200, "height": 800})
+                page.goto(box["url"])
+                page.wait_for_function("document.getElementById('cam').naturalWidth > 0", timeout=20000)
+                r = page.locator("#cam").bounding_box()
+                u0, v0, u1, v1 = box["cube"]
+                page.mouse.click(r["x"] + r["width"] * (u0 + u1) / 2 / 640, r["y"] + r["height"] * (v0 + v1) / 2 / 480)
+                page.wait_for_selector("#picked:not([hidden])")
+                box["picked"] = page.inner_text("#picked")
+                page.mouse.click(r["x"] + 5, r["y"] + 5)  # the sky: nothing there
+                box["empty"] = page.inner_text("#picked")
+                browser.close()
+        except BaseException as e:  # noqa: BLE001 - handed to the test
+            box["error"] = e
+        finally:
+            if "url" in box:
+                _post(box["url"] + "/control?cmd=resume")
+
+    helper = threading.Thread(target=person, daemon=True)
+    helper.start()
+    w = rw.launch(settings=rw.Settings(trace="off"))
+    with LiveView(w, port=0, quiet=True) as v:
+        box["cube"] = box_of(w, "cube", "front", 640, 480, margin=0.0)
+        box["url"] = v.url
+        v.stepping = True
+        w.robot.pick(w.scene["cube"])
+    w.close()
+    helper.join(60)
+    assert "error" not in box, box["error"]
+    assert 'scene["cube"]' in box["picked"] and 'scene.get(color="red")' in box["picked"]
+    assert "nothing there" in box["empty"]

@@ -66,6 +66,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `trace: 'on-first-retry'` | `--rw-trace on-first-retry` | same |
 | `--debug`, `page.pause()`, Inspector | `--rw-debug`, `world.pause()`: Step, Resume, Pause in the live view | same |
 | `--headed` | `--rw-live` (a browser page), `--rw-headed` (MuJoCo's window) | same |
+| pick locator | click an object in the live view's camera image: its locators, most robust first (`scene["cube"]`, `scene.get(color="red")`, `scene.get(inside="bin")`), each with a copy button | same |
 | UI mode | `robowright test --ui` | same |
 | watch mode | `robowright test --watch` | same |
 | codegen | `robowright codegen` (in a browser, or from a trace: the failure as a regression test) | same |

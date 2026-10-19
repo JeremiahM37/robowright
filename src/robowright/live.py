@@ -57,7 +57,9 @@ select{background:var(--card);color:var(--fg);border:1px solid var(--line);borde
 <button id="pause" title="Pause before the next action or expectation">&#10074;&#10074; Pause</button>
 <div id="dbgwhat"><b id="dbgstate">running</b> <span id="dbgnext"></span><div id="dbgcode"></div></div></section>
 <section class="card"><h1><span class="dot"></span><span id="title">robowright live</span></h1>
-<img id="cam" alt="the simulation, live"><div class="mut" id="time"></div>
+<div id="camwrap" style="position:relative"><img id="cam" alt="the simulation, live" title="click an object for its locator">
+<div id="pickbox" hidden style="position:absolute;border:2px solid #f0f;border-radius:3px;pointer-events:none"></div></div>
+<div id="picked" class="mut" hidden></div><div class="mut" id="time"></div>
 <label class="mut">camera <select id="camsel"></select></label></section>
 <section class="card"><h2>Last action</h2><div id="action" class="mut">-</div>
 <h2>Joints</h2><table id="joints"></table><h2>Objects</h2><table id="objects"></table>
@@ -74,8 +76,22 @@ async function poll(){try{const s=await (await fetch('/state')).json();
  $('action').textContent=s.action||'-';
  $('joints').innerHTML=s.joints.map(j=>'<tr><td>'+j[0]+'</td><td>'+j[1].toFixed(3)+'</td></tr>').join('');
  $('objects').innerHTML=s.objects.map(o=>'<tr><td>'+o[0]+'</td><td>('+o[1].map(v=>v.toFixed(3)).join(', ')+')</td></tr>').join('');
- $('contacts').textContent=s.contacts.length?s.contacts.join(', '):'none';showDebug(s)}catch(e){}
+ $('contacts').textContent=s.contacts.length?s.contacts.join(', '):'none';lastState=s;showDebug(s)}catch(e){}
  setTimeout(poll,250)}
+// Pick a locator, as Playwright's picker does: click an object in the camera view and get the code that finds it.
+let lastState=null;
+$('cam').addEventListener('click',ev=>{
+ const s=lastState;if(!s||!s.picks||!cam)return;const r=$('cam').getBoundingClientRect();
+ const u=(ev.clientX-r.left)/r.width,v=(ev.clientY-r.top)/r.height;
+ const hits=(s.picks[cam]||[]).filter(p=>u>=p[1][0]&&u<=p[1][2]&&v>=p[1][1]&&v<=p[1][3]).sort((a,b)=>a[2]-b[2]);
+ if(!hits.length){$('pickbox').hidden=true;$('picked').hidden=false;$('picked').textContent='nothing there: click an object';return}
+ const [name,b]=hits[0],bx=$('pickbox');bx.hidden=false;
+ bx.style.left=(b[0]*100)+'%';bx.style.top=(b[1]*100)+'%';bx.style.width=((b[2]-b[0])*100)+'%';bx.style.height=((b[3]-b[1])*100)+'%';
+ const el=$('picked');el.hidden=false;el.replaceChildren();
+ for(const loc of (s.locators[name]||[])){const row=document.createElement('div');const c=document.createElement('code');
+  c.textContent=loc;const btn=document.createElement('button');btn.textContent='copy';btn.style.marginLeft='6px';
+  btn.onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(loc);
+  row.append(c,btn);el.append(row)}});
 async function control(cmd){await fetch('/control?cmd='+cmd,{method:'POST',headers:{'X-RW-Control':'1'}});poll1()}
 $('resume').onclick=()=>control('resume');$('step').onclick=()=>control('step');$('pause').onclick=()=>control('pause');
 document.addEventListener('keydown',e=>{if(e.key==='F8'){e.preventDefault();control('resume')}if(e.key==='F10'){e.preventDefault();control('step')}});
@@ -86,7 +102,7 @@ function showDebug(s){const p=s.paused;$('dbg').classList.toggle('paused',!!p);
  $('dbgstate').textContent=p?'paused before':(s.pausing?'pausing at the next action':'running');
  $('dbgnext').textContent=p?p.what:'';$('dbgcode').textContent=p&&p.at?p.at:'';
  $('resume').disabled=$('step').disabled=!p;$('pause').disabled=!!p||!!s.pausing}
-async function poll1(){try{showDebug(await (await fetch('/state')).json())}catch(e){}}
+async function poll1(){try{const s=await (await fetch('/state')).json();lastState=s;showDebug(s)}catch(e){}}
 poll();
 </script></body></html>"""
 
@@ -204,6 +220,12 @@ class LiveView:
         world.__dict__["_live"] = self
         self._update(world, draw=True)
 
+    def _picks_for(self, w, draw: bool) -> dict:
+        """The locator picker's data, worked out when a frame is drawn (someone is watching) and kept until the next."""
+        if draw and w.has_ground_truth:
+            self._last_picks = _picks(w, self.size)
+        return getattr(self, "_last_picks", {})
+
     def _let_go(self):
         w = self._world
         if w is None:
@@ -268,6 +290,7 @@ class LiveView:
             "objects": [[n, [float(x) for x in w.backend.object_pose(n)[0]]] for n in w.object_names] if w.has_ground_truth else [],
             "contacts": [],
             "action": _last_action(w),
+            **self._picks_for(w, draw),
             "paused": self._paused,
             "pausing": self.stepping and self._paused is None,
         }
@@ -301,6 +324,42 @@ class LiveView:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def _picks(w, size) -> dict:
+    """For the page's locator picker: where each object is in each camera's image (fractions of its width and
+    height, and the box's area so the smallest under a click wins), and the locators that find it, most robust first:
+    its name, then its colour or kind when no other object shares them, then what holds it now."""
+    from .snapshots import box_of
+
+    width, height = size
+    picks = {}
+    for cam in w.spec.cameras:
+        found = []
+        for n in w.object_names:
+            box = box_of(w, n, cam.name, width, height, margin=0.0)
+            if box is not None:
+                u0, v0, u1, v1 = box[0] / width, box[1] / height, box[2] / width, box[3] / height
+                found.append([n, [u0, v0, u1, v1], (u1 - u0) * (v1 - v0)])
+        picks[cam.name] = found
+    specs = {o.name: o for o in w.spec.objects}
+    scene = w.scene
+    locators = {}
+    for n, o in specs.items():
+        out = [f'scene["{n}"]']
+        if sum(x.color == o.color for x in specs.values()) == 1:
+            out.append(f'scene.get(color="{o.color}")')
+        elif sum(x.color == o.color and x.kind == o.kind for x in specs.values()) == 1:
+            out.append(f'scene.get(kind="{o.kind}", color="{o.color}")')
+        for b in (x for x in specs.values() if x.kind == "bin" and x.name != n):
+            try:
+                inside = scene.all(inside=b.name)
+            except Exception:  # noqa: BLE001 - a picker suggestion is never worth failing the view for
+                continue
+            if len(inside) == 1 and inside[0].name == n:
+                out.append(f'scene.get(inside="{b.name}")')
+        locators[n] = out
+    return {"picks": picks, "locators": locators}
 
 
 def _last_action(w) -> str:

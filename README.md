@@ -1414,6 +1414,10 @@ It needs the video extra: `pip install "robowright[video]"`. The report copies i
 other attachments into its own folder (`report-traces/`), so the report and that folder can be
 shared or uploaded as one.
 
+In the live view, click an object in the camera image for the code that finds it, as
+Playwright's locator picker gives it: `scene["cube"]`, then `scene.get(color="red")` when no other
+object shares the colour, and `scene.get(inside="bin")` when it is the only thing in a bin.
+
 `pytest --rw-debug` is Playwright's `--debug`: the live view becomes a debugger, and each test
 stops before its first action. The page shows the world as it is, what runs next
 (`robot.pick(obj=cube)`) and the line of your test that runs it. **Step** runs that one action or
