@@ -162,6 +162,11 @@ with rw.http_stub(
     assert fleet.called("GET /missions/next") and not fleet.unmatched
 ```
 
+A real service can be recorded once and replayed after, as Playwright's `recordHar` and
+`routeFromHAR` do: `rw.http_stub.record("https://fleet.local", "fleet.json")` passes every call
+through and writes it down, and `rw.http_stub.replay("fleet.json")` answers from the file, with
+no service at all.
+
 The same routes work on a controller that is not behind ROS 2, on what it reads and what it sends:
 
 ```python

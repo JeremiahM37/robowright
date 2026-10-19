@@ -11,6 +11,10 @@ the code's base URL at ``stub.url``::
         run_my_controller(fleet_url=fleet.url)
         assert fleet.called("POST /missions/7/done")
 
+A real service can be recorded and replayed, as Playwright's ``recordHar`` and ``routeFromHAR`` do:
+``http_stub.record("https://fleet.local", "fleet.json")`` passes every call through to it and writes each request
+and answer to the file; ``http_stub.replay("fleet.json")`` answers from the file, with no service at all.
+
 A route is ``"METHOD /path"`` (a ``*`` at the end matches the rest of the path) and its answer is a JSON body, an
 ``http_stub.status(code, body)``, or a function of the request returning one of those or ``(status, body)``. A
 request no route matches gets 404 and is recorded, so a test can find it with ``stub.unmatched``.
@@ -155,9 +159,79 @@ class HttpStub:
         self.close()
 
 
+def _key_of(req: Request) -> str:
+    return f"{req.method} {req.path}" + (f"?{req.query}" if req.query else "")
+
+
+def record(upstream: str, path, host: str = "127.0.0.1", port: int = 0) -> HttpStub:
+    """A stand-in that passes every call through to ``upstream`` (a base URL) and writes each request and its answer
+    to ``path`` (JSON) when it is closed, for :func:`replay` (Playwright's ``recordHar``)."""
+    import urllib.error
+    import urllib.request
+    from pathlib import Path
+
+    upstream = upstream.rstrip("/")
+    log: list[dict] = []
+
+    def forward(req: Request):
+        url = upstream + req.path + (f"?{req.query}" if req.query else "")
+        headers = {k: v for k, v in req.headers.items() if k.lower() not in ("host", "content-length", "connection")}
+        out = urllib.request.Request(url, data=req.body or None, method=req.method, headers=headers)
+        try:
+            with urllib.request.urlopen(out, timeout=60) as r:
+                code, data = r.status, r.read()
+        except urllib.error.HTTPError as e:
+            code, data = e.code, e.read()
+        entry = {"request": _key_of(req), "body": req.body.decode(errors="replace"), "status": code}
+        try:
+            body = entry["json"] = json.loads(data) if data else None
+        except ValueError:  # not JSON: kept as text
+            body, entry["text"] = data, data.decode(errors="replace")
+        log.append(entry)
+        return Reply(code, body)
+
+    stub = HttpStub({f"{m} /*": forward for m in ("GET", "POST", "PUT", "PATCH", "DELETE")}, host, port)
+    close = stub.close
+
+    def save_and_close():
+        close()
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps({"upstream": upstream, "calls": log}, indent=2) + "\n")
+
+    stub.close = save_and_close
+    return stub
+
+
+def replay(path, host: str = "127.0.0.1", port: int = 0) -> HttpStub:
+    """A stand-in answering from a file :func:`record` wrote (Playwright's ``routeFromHAR``): each request gets the
+    answer recorded for the same method, path and query, the same request asked again gets the next answer recorded
+    for it (the last one once they run out), and a request never recorded gets 404 and is in ``unmatched``."""
+    from pathlib import Path
+
+    calls = json.loads(Path(path).read_text())["calls"]
+    answers: dict[str, list] = {}
+    for c in calls:
+        answers.setdefault(c["request"], []).append(Reply(c["status"], c["json"] if "json" in c else c.get("text", "").encode()))
+    served: dict[str, int] = {}
+
+    def answer(req: Request):
+        key = _key_of(req)
+        if key not in answers:
+            req.route = None
+            return Reply(404, {"error": f"{key} was not recorded in {path}"})
+        i = served.get(key, 0)
+        served[key] = i + 1
+        return answers[key][min(i, len(answers[key]) - 1)]
+
+    stub = HttpStub({f"{m} /*": answer for m in ("GET", "POST", "PUT", "PATCH", "DELETE")}, host, port)
+    return stub
+
+
 def http_stub(routes: dict, host: str = "127.0.0.1", port: int = 0) -> HttpStub:
     """Start a stand-in HTTP service answering from ``routes`` (see the module)."""
     return HttpStub(routes, host, port)
 
 
 http_stub.status = status
+http_stub.record = record
+http_stub.replay = replay

@@ -29,6 +29,8 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | annotations: `skip`, `fail`, `fixme`, `slow`, tags | pytest markers: `skip`, `xfail(strict=True)`, custom markers with `-m` | same (pytest's) |
 | `test.only` | `@pytest.mark.only` runs only the marked tests | same |
 | `test.fixme` | `@pytest.mark.fixme("why")`: skipped, saying why | same |
+| `test.slow` | `@pytest.mark.rw_slow` (or `rw_slow(5)`): the test's time limit three (five) times over | same |
+| `testInfo.retry` | the `rw_attempt` fixture: 0, then 1 on the first retry | same |
 | serial mode (`describe.configure({mode: 'serial'})`) | `pytestmark = pytest.mark.serial` on a module or class: in order, on one worker (`--dist loadgroup`), the rest skipped once one fails | same |
 | parameterize | `pytest.mark.parametrize`; `--rw-robot`, `--rw-backend` run every test on each | same |
 | page object model | plain Python classes and fixtures | same |
@@ -104,6 +106,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(...)})` for a ROS 2 stack's topics; `robot.run_policy(policy, route={"observation": ..., "action": ...})` for an in-process controller: drop, delay, cut, throttle, abort, edit. Not a controller's own serial or HTTP link to hardware | robot |
 | `route.fulfill` (mock an API) | `world.ros.serve("/detect", ..., answer)`: a stub ROS service or action; `rw.http_stub({"GET /missions/next": {...}})`: a stand-in HTTP service (fleet manager, map server, cloud API) any process can call, with every request recorded | robot |
 | `request` fixture (API testing) | `world.ros.call`, `send_goal`, `publish` | robot |
+| `recordHar`, `routeFromHAR` for HTTP | `rw.http_stub.record("https://fleet.local", "fleet.json")` passes calls through and records them; `rw.http_stub.replay("fleet.json")` answers from the file | same |
 | `recordHar`, `routeFromHAR` | `rw.route.record(bag)`, `rw.route.from_bag(bag)` (rosbags, including ones from the real robot) | robot |
 | fault injection | `world.faults`: pushes, delays, sensor noise, weak joints | robot (Playwright has none) |
 

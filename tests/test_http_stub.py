@@ -63,3 +63,28 @@ def test_another_process_reaches_it():
         out = subprocess.run([sys.executable, "-c", code, fleet.url], capture_output=True, text=True, timeout=30)
         assert out.stdout.strip() == "3"
         assert fleet.called("GET /missions/next")
+
+
+def test_a_real_service_is_recorded_and_replayed_without_it(tmp_path):
+    """record() passes calls through and writes them; replay() answers from the file (recordHar / routeFromHAR)."""
+    counter = {"n": 0}
+
+    def next_mission(req):
+        counter["n"] += 1
+        return {"id": counter["n"]}
+
+    real = rw.http_stub({"GET /missions/next": next_mission, "POST /missions/1/done": lambda req: (204, None)})
+    har = tmp_path / "fleet.json"
+    with rw.http_stub.record(real.url, har) as rec:
+        assert _get(rec.url + "/missions/next") == (200, {"id": 1})
+        assert _get(rec.url + "/missions/next") == (200, {"id": 2})
+        assert _get(rec.url + "/missions/1/done", "POST", {"ok": True}) == (204, None)
+        assert _get(rec.url + "/gone")[0] == 404  # the real service's own 404, recorded too
+    real.close()  # the real service is gone from here on
+    with rw.http_stub.replay(har) as fake:
+        assert _get(fake.url + "/missions/next") == (200, {"id": 1})  # the recorded answers, in order
+        assert _get(fake.url + "/missions/next") == (200, {"id": 2})
+        assert _get(fake.url + "/missions/next") == (200, {"id": 2})  # the last one once they run out
+        assert _get(fake.url + "/missions/1/done", "POST", {"ok": True}) == (204, None)
+        assert _get(fake.url + "/never-recorded")[0] == 404
+        assert [str(r) for r in fake.unmatched] == ["GET /never-recorded"]
