@@ -20,6 +20,8 @@ Options::
     --rw-update-snapshots            write the images expect(world).to_match_snapshot compares against
     --rw-shard K/N                   run the K-th of N parts of the suite, one part per CI machine
     --rw-github auto|on|off          failures as GitHub Actions annotations on the failing line (auto: on a GitHub runner)
+    --rw-forbid-only                 fail the run if any test is marked only (default on CI)
+    --rw-global-timeout SECONDS      stop the whole run after this long, wall clock
     --rw-only-changed [REF]          only the test files a change since REF (default HEAD) can affect, found from git
     --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
     --rw-report report.html          an HTML report of the run, each failure with its trace
@@ -37,12 +39,15 @@ Markers::
     @pytest.mark.backends("mujoco")              # restrict
     @pytest.mark.robots("panda", "ur5e")         # restrict
     @pytest.mark.trials(20, min_success=0.9)     # up to 20 seeds, each with the scene randomized; judge the rate
+    @pytest.mark.only                            # run only the tests marked so (Playwright's test.only)
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
+import time
 import warnings
 import zlib
 from pathlib import Path
@@ -65,6 +70,7 @@ _TRACES = pytest.StashKey[list]()
 _REPORTS = pytest.StashKey[dict]()
 _LIVE = pytest.StashKey[object]()
 _CHANGED = pytest.StashKey[object]()  # --rw-only-changed: the test files to run, or None for all
+_STARTED = pytest.StashKey[float]()  # when the run began (--rw-global-timeout)
 _STACK = pytest.StashKey[object]()  # this worker's ROS 2 stack ([ros2] stack), or None
 
 
@@ -164,6 +170,21 @@ def pytest_addoption(parser):
         "(Playwright's github reporter); auto: when GITHUB_ACTIONS=true",
     )
     g.addoption(
+        "--rw-forbid-only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="fail the run if any test is marked @pytest.mark.only, as Playwright's forbidOnly: a focus left in by mistake "
+        "would otherwise make CI run a few tests and pass (default: on when CI is set)",
+    )
+    g.addoption(
+        "--rw-global-timeout",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="stop the whole run once it has taken this long, wall clock, and fail it (Playwright's globalTimeout); "
+        "the test running then finishes, the rest do not start",
+    )
+    g.addoption(
         "--rw-only-changed",
         nargs="?",
         const="HEAD",
@@ -193,6 +214,7 @@ def pytest_configure(config):
         except (ValueError, KeyError) as e:
             raise pytest.UsageError(f"--rw-robot: {e}") from None
     _shard(config)  # a malformed --rw-shard is said before anything runs
+    config.stash[_STARTED] = time.monotonic()
     if config.getoption("--rw-debug", False) and config.getoption("--rw-live", None) is None:
         config.option.rw_live = 8765
     ref = config.getoption("--rw-only-changed", None)
@@ -223,6 +245,7 @@ def pytest_configure(config):
     )
     config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
     config.addinivalue_line("markers", "rw_timeout(seconds): this test's time limit, wall clock, setup included (0: none)")
+    config.addinivalue_line("markers", "only: run only the tests marked so (Playwright's test.only); --rw-forbid-only refuses it")
     config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
@@ -360,6 +383,16 @@ def pytest_collection_modifyitems(config, items):
     result. Ordered and grouped, the tests that share a scene run one after another in one
     process and reuse it, instead of every robot's scene being built for every test.
     """
+    focused = [i for i in items if i.get_closest_marker("only")]
+    if focused:
+        forbid = config.getoption("--rw-forbid-only", None)
+        if forbid is None:
+            forbid = bool(os.environ.get("CI"))
+        if forbid:
+            names = "\n  ".join(_plain(i.nodeid) for i in focused[:20])
+            raise pytest.UsageError(f"--rw-forbid-only: {len(focused)} test(s) marked only, left in by mistake?\n  {names}")
+        config.hook.pytest_deselected(items=[i for i in items if not i.get_closest_marker("only")])
+        items[:] = focused
     wanted = config.stash.get(_CHANGED, None)
     if wanted is not None:
         dropped = [i for i in items if Path(i.path).resolve() not in wanted]
@@ -731,6 +764,13 @@ def _other_threads(limit: int = 6) -> str:
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
+def _global_timeout(session) -> None:
+    limit = session.config.getoption("--rw-global-timeout", 0.0) or 0.0
+    started = session.config.stash.get(_STARTED, None)
+    if limit and started is not None and time.monotonic() - started > limit:
+        session.shouldfail = f"--rw-global-timeout: the run passed {limit:g} s; the tests left did not run"
+
+
 def pytest_runtest_setup(item):
     """Start the test's clock (``--rw-timeout``): from its fixtures, where a stack that never comes up
     waits, to the end of its body. Checked between Python operations, which a long C call delays.
@@ -781,6 +821,7 @@ def pytest_runtest_teardown(item, nextitem):
     try:
         return (yield)
     finally:
+        _global_timeout(item.session)
         if hasattr(item, "_rw_alarm"):
             import signal
 

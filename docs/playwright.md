@@ -1,8 +1,10 @@
 # Coming from Playwright
 
-Every part of Playwright Test, by the sections of its own documentation, and what robowright has in its place. A
+Playwright Test's features, by the sections of its own documentation, and what robowright has in its place. A
 robot is not a web page, so some features become something else (a browser becomes a physics engine, the network
-becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plainly as the matches.
+becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plainly as the matches. An independent
+audit against playwright.dev (by an agent that did not see this page) put robowright at about 70 % of the Playwright
+Test features that apply to robots, counting partial ones as half; its gaps are the partial and missing rows below.
 
 **Status**: **same** works the way Playwright's does; **robot** is the robot counterpart of a web feature;
 **partial** covers part of it; **missing** is not there yet; **n/a** has no meaning for robots.
@@ -19,10 +21,13 @@ becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plai
 | `expect.poll`, `toPass` | `expect.poll(fn).to_equal(...)`, `expect(block).to_pass()` | same |
 | `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`, retried, with `.not_`, `.always`, soft, poll | same |
 | `.not` | `.not_` | same |
+| `expect.configure` | `expect.configure(timeout=10, soft=True)` | same |
+| `test.use` (options per file) | `pytestmark = [pytest.mark.robots(...), pytest.mark.backends(...), pytest.mark.scene(...)]` per module or class; no per-file settings beyond what markers carry | partial |
 | invariants | `expect(robot).always.to_have_no_collisions()`: checked every step for the rest of the test | robot (Playwright has none) |
 | `test.step` | `with rw.step("put the cube in the bin"):` in the trace, the viewer and the report | same |
 | `testInfo.attach` | `rw_attach("stack.log", path=...)`, `rw_attach.camera(world)` | same |
 | annotations: `skip`, `fail`, `fixme`, `slow`, tags | pytest markers: `skip`, `xfail(strict=True)`, custom markers with `-m` | same (pytest's) |
+| `test.only` | `@pytest.mark.only` runs only the marked tests | same |
 | parameterize | `pytest.mark.parametrize`; `--rw-robot`, `--rw-backend` run every test on each | same |
 | page object model | plain Python classes and fixtures | same |
 | statistical tests | `@pytest.mark.trials(20, min_success=0.9)`: randomized scenes, a success rate with confidence intervals | robot (Playwright has none) |
@@ -41,6 +46,8 @@ becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plai
 | `--repeat-each` | `--rw-repeat-each 10` (same seed each time) | same |
 | `--only-changed` | `--rw-only-changed [REF]`, followed through imports | same |
 | `--last-failed` | pytest's `--lf` | same (pytest's) |
+| `forbidOnly` | `--rw-forbid-only` (on by itself when `CI` is set): a focus left in fails the run | same |
+| `globalTimeout` | `--rw-global-timeout 3600`: the run stops and fails once it has taken that long | same |
 | `--grep`, `--list` | pytest's `-k`, `--collect-only` | same (pytest's) |
 | test timeout | `--rw-timeout 120`, `@pytest.mark.rw_timeout(300)`; a hung test says where it hung | same |
 | `globalSetup` | session fixtures in `conftest.py`; the `[ros2]` stack | same (pytest's) |
@@ -82,7 +89,7 @@ becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plai
 
 | Playwright | robowright | Status |
 |---|---|---|
-| `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`, per engine and robot, with a diff | same |
+| `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`, per engine and robot, with a diff; a whole camera image, not one element's region | partial |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: positions and joints as editable text | robot |
 | `--update-snapshots` | `--rw-update-snapshots` | same |
 | `mask` in screenshots | `to_match_snapshot(..., mask=["cube"])`: where the object is, now and in the baseline, left out | same |
@@ -91,7 +98,7 @@ becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plai
 
 | Playwright | robowright | Status |
 |---|---|---|
-| `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(...)})`: drop, delay, cut, throttle, edit | robot |
+| `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(...)})`: drop, delay, cut, throttle, edit; ROS 2 topics only, not a controller's own serial or HTTP traffic | partial |
 | `route.fulfill` (mock an API) | `world.ros.serve("/detect", ..., answer)`: a stub ROS service or action | robot |
 | `request` fixture (API testing) | `world.ros.call`, `send_goal`, `publish` | robot |
 | `recordHar`, `routeFromHAR` | `rw.route.record(bag)`, `rw.route.from_bag(bag)` (rosbags, including ones from the real robot) | robot |

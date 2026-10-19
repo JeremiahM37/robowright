@@ -662,8 +662,8 @@ one slice of the problem:
 
 None of them gives you what web developers have had for years: a test that says what
 should happen, waits for it, fails with a clear explanation, and leaves behind enough
-evidence to debug it. robowright brings that workflow to robots (every part of Playwright Test, with what is
-still missing, is in [Coming from Playwright](docs/playwright.md)):
+evidence to debug it. robowright brings that workflow to robots (Playwright Test's features one by one, with
+what is partial or missing, are in [Coming from Playwright](docs/playwright.md)):
 
 | Playwright | robowright |
 |---|---|
@@ -692,6 +692,8 @@ still missing, is in [Coming from Playwright](docs/playwright.md)):
 | `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
 | blob reporter, `merge-reports` | `pytest --rw-shard 2/4 --rw-blob shard-2.zip` on each machine, then `robowright merge-reports shard-*.zip -o report.html`: one report of the whole run, each failure's trace carried inside its shard's zip |
 | retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |
+| `test.only`, `forbidOnly`, `globalTimeout` | `@pytest.mark.only`; `--rw-forbid-only` (on by itself when `CI` is set); `--rw-global-timeout 3600` |
+| `expect.configure` | `expect.configure(timeout=10, soft=True)`: an `expect` with its own defaults |
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
 | `github` reporter | on a GitHub Actions runner, each failed test is an error annotation at the line of your test that failed (the trace's `show-trace` command in it), each flaky one a warning, on the pull request's diff; `--rw-github off` to stop it, `on` to see them anywhere |
 | `--only-changed` | `pytest --rw-only-changed` (or `=main`): only the test files your uncommitted changes (or changes since `main`) can affect: changed tests, and tests importing a changed module, followed through the project's imports; a changed `conftest.py`, plugin, setting or robot model file runs everything |

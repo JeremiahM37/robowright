@@ -645,6 +645,28 @@ def _poll(fn, *, name: str | None = None, timeout=None, message=None, world=None
 
 expect.poll = _poll
 
+
+def _configure(*, timeout: float | None = None, soft: bool = False, message: str | None = None):
+    """An ``expect`` with its own defaults, as Playwright's ``expect.configure``::
+
+        slow_expect = expect.configure(timeout=10.0)   # a stack that takes its time
+        soft_expect = expect.configure(soft=True)       # every failure recorded, the test goes on
+
+    ``timeout`` (seconds of simulated time) is used where a matcher is not given one; ``soft`` makes every assertion
+    soft; ``message`` heads every failure. What it returns takes the same arguments as ``expect``."""
+
+    def configured(subject, *, timeout: float | None = timeout, message: str | None = message, world=None) -> Expectation:
+        return Expectation(subject, world, timeout, message=message, soft=soft)
+
+    configured.soft = lambda subject, **kw: _soft(subject, **{"timeout": timeout, "message": message, **kw})
+    configured.poll = lambda fn, **kw: _poll(fn, **{"timeout": timeout, "message": message, **kw})
+    configured.extend = _extend
+    configured.configure = lambda **kw: _configure(**{"timeout": timeout, "soft": soft, "message": message, **kw})
+    return configured
+
+
+expect.configure = _configure
+
 _CUSTOM: set[str] = set()  # matchers added with expect.extend
 
 
