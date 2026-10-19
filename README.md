@@ -1089,7 +1089,8 @@ def to_be_left_of(obj, other, by=0.0):
     gap = other.position[1] - obj.position[1]
     return gap >= by, f"{gap * 100:.1f} cm left of {other.name}"
 
-expect.extend(to_be_left_of=to_be_left_of)   # in conftest.py, once
+
+expect.extend(to_be_left_of=to_be_left_of)  # in conftest.py, once
 expect(cube).to_be_left_of(bin, by=0.05, timeout=1.0)
 ```
 
