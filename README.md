@@ -1339,7 +1339,9 @@ joints:
 Positions match within `tol` (1 cm) and joints within `joint_tol` (0.05 rad). Only what the
 file lists is checked, so delete a line to stop checking that object or joint. A failure names
 each entry that moved and by how much, and writes this run's state beside the traces. Unlike an
-image it reads the same on every engine, and needs no rendering.
+image it reads the same on every engine, and needs no rendering. As with images, the first run
+writes the file and fails, so that a baseline nobody has looked at never passes: read it, commit it,
+run again. Commit `__snapshots__/` with the tests (a masked image's `.mask.png` is part of its baseline).
 
 A real simulator or robot can fail a test once for a reason outside your code: a clock that
 stalled, a stack that started slowly. `pytest --rw-retries 2` runs a failed test again, up to
@@ -1376,6 +1378,9 @@ shows each test in MuJoCo's own window as it runs, at real-time pace.
 `pytest --rw-video retain-on-failure` saves each failed test's run as an MP4 beside its trace,
 as Playwright's `video` option does (`on` for every test). It is drawn from the trace once the
 test is over, so the run itself renders nothing, and the HTML report plays it in the test's entry.
+It needs the video extra: `pip install "robowright[video]"`. The report copies its videos and
+other attachments into its own folder (`report-traces/`), so the report and that folder can be
+shared or uploaded as one.
 
 `pytest --rw-debug` is Playwright's `--debug`: the live view becomes a debugger, and each test
 stops before its first action. The page shows the world as it is, what runs next

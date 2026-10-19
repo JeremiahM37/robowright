@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import html
 import json
-import os
 import re
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -94,7 +94,12 @@ class Run:
                 p = Path(a["path"])
                 if not p.exists():
                     continue
-                href = html.escape(Path(os.path.relpath(p.resolve(), out.parent.resolve())).as_posix())
+                # Copied beside the report, with the trace pages: the report and its folder are shared as one.
+                kept = pages / "attachments" / f"{_slug(nodeid)}-{p.name}"
+                if p.resolve() != kept.resolve():
+                    kept.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(p, kept)
+                href = html.escape(kept.relative_to(out.parent).as_posix())
                 label, kind = html.escape(a["name"]), html.escape(a["type"])
                 if a["type"].startswith("image/"):
                     details += f'<figure><img src="{href}" alt="{label}"><figcaption>{label}</figcaption></figure>'
@@ -242,3 +247,7 @@ for (const b of document.querySelectorAll("button")) b.onclick = () => {{
 }};
 </script></body></html>
 """
+
+
+def _slug(nodeid: str) -> str:
+    return re.sub(r"[^\w.-]+", "_", nodeid).strip("_")[:120]

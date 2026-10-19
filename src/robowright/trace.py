@@ -407,11 +407,12 @@ class Trace:
             changes = m.get("model_changes") or []
             kinds = sorted({c["kind"] for c in changes})
             lines.append(
-                f"  fidelity: {m['fidelity']}; the model "
+                f"  fidelity: {m['fidelity']}"
+                + (" (the model as its makers published it" if m["fidelity"] == "published" else " (with robowright's own tuning")
                 + (
-                    f"with {len(changes)} change(s) ({', '.join(kinds)}): " + "; ".join(c["what"] for c in changes)
+                    f", changed only by {len(changes)} {', '.join(kinds)} change(s): " + "; ".join(c["what"] for c in changes) + ")"
                     if changes
-                    else "as published"
+                    else ", unchanged)"
                 )
             )
         if m.get("faults"):

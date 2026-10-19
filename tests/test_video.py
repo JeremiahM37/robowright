@@ -41,3 +41,16 @@ def test_off_by_default(pytester):
     pytester.makepyfile(test_v=TEST)
     pytester.runpytest("-p", "no:cacheprovider").assert_outcomes(passed=1, failed=1)
     assert _files(pytester, ".mp4") == []
+
+
+def test_the_report_keeps_its_own_copy_of_the_video(pytester):
+    """Shared without robowright-traces/, the report still plays it (as a Playwright report folder does)."""
+    import shutil
+
+    pytester.makepyfile(test_v=TEST)
+    pytester.runpytest("-p", "no:cacheprovider", "--rw-video", "retain-on-failure", "--rw-report", "out/report.html")
+    page = (pytester.path / "out" / "report.html").read_text()
+    assert '<video src="report-traces/attachments/' in page
+    shutil.rmtree(pytester.path / "robowright-traces")
+    src = page.split('<video src="', 1)[1].split('"', 1)[0]
+    assert (pytester.path / "out" / src).stat().st_size > 1000
