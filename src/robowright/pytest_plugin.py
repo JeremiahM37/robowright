@@ -18,6 +18,7 @@ Options::
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
     --rw-update-snapshots            write the images expect(world).to_match_snapshot compares against
     --rw-shard K/N                   run the K-th of N parts of the suite, one part per CI machine
+    --rw-github auto|on|off          failures as GitHub Actions annotations on the failing line (auto: on a GitHub runner)
     --rw-only-changed [REF]          only the test files a change since REF (default HEAD) can affect, found from git
     --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
     --rw-report report.html          an HTML report of the run, each failure with its trace
@@ -141,6 +142,13 @@ def pytest_addoption(parser):
         help="run the K-th of N parts of the suite (1-based), for N CI machines; every test is in exactly one part",
     )
     g.addoption(
+        "--rw-github",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="each failed test as a GitHub Actions error annotation at the line that failed, each flaky one a warning "
+        "(Playwright's github reporter); auto: when GITHUB_ACTIONS=true",
+    )
+    g.addoption(
         "--rw-only-changed",
         nargs="?",
         const="HEAD",
@@ -201,7 +209,12 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
-    config.pluginmanager.register(_Summary(), "robowright-summary")
+    from . import github
+
+    summary = _Summary()
+    summary.config = config
+    summary.github = github.enabled(config.getoption("--rw-github", "auto"))  # decided once: a test may set the variable
+    config.pluginmanager.register(summary, "robowright-summary")
     if any(_robots.is_file(r.strip()) for r in config.getoption("--rw-robot").split(",")):
         _robot_names(config)  # a robot model file robowright cannot drive is a usage error, said once
     if getattr(config.option, "dist", None) == "loadgroup" and "--loadscope-reorder" not in config.invocation_params.args:
@@ -854,6 +867,10 @@ class _Summary:
         self.trials: list = []
         self.traces: list = []
         self.flaky: list = []
+        self.config = None
+        self.github = False
+        self.annotations: list[str] = []
+        self.failed_attempts: dict = {}  # nodeid -> the report of its last failed attempt (--rw-retries)
         self.run = Run()
 
     def pytest_runtest_logreport(self, report):
@@ -862,13 +879,28 @@ class _Summary:
         flaky = any(k == "robowright_flaky" for k, _ in report.user_properties)
         if flaky:
             self.flaky.append(_plain(report.nodeid))
+        if report.outcome == "rerun":
+            self.failed_attempts[report.nodeid] = report
+        elif report.failed or flaky:
+            self._annotate(report, self.failed_attempts.get(report.nodeid) if flaky else None)
         for k, v in report.user_properties:
             if k == "robowright_trace" and (report.failed or report.outcome == "rerun" or flaky):
                 self.traces.append((_plain(report.nodeid), v))
             if k == "robowright_trials":
                 self.trials.append((_plain(report.nodeid), v, report.outcome))
 
+    def _annotate(self, report, failed_attempt) -> None:
+        if self.config is None or not self.github:
+            return
+        from . import github
+
+        trace = next((v for k, v in report.user_properties if k == "robowright_trace"), None)
+        args = (str(self.config.rootpath), str(self.config.invocation_params.dir), trace, failed_attempt)
+        self.annotations.append(github.annotation(report, *args))
+
     def pytest_terminal_summary(self, terminalreporter):
+        for line in self.annotations:  # workflow commands: GitHub reads them from the log, so they go first and plain
+            terminalreporter.write_line(line)
         out = terminalreporter.config.getoption("--rw-report")
         if out and self.run.tests:
             terminalreporter.section("robowright report")
