@@ -102,6 +102,14 @@ class Expectation:
             rec["kwargs"]["hold"] = hold
         if isinstance(self.subject, _Polled) or name.startswith("to_satisfy"):
             rec["code"] = True  # it runs the test's own code, which a trace does not keep: codegen cannot write it again
+        if self.mode != "always" and not _ONCE.get():  # once per assertion: not each try of a to_pass block
+            hooks = list(getattr(w, "_action_hooks", ()))  # a debugger (--rw-debug) pausing before it
+            if hooks:
+                from .trace import _call
+
+                what = _call({"type": "expect", "name": f"expect({self.subject.name}).{name}", "args": rec})
+                for hook in hooks:
+                    hook(w, what)
         if _ONCE.get():  # inside to_pass's block: checked once, now; to_pass waits and tries the block again
             if self.mode == "always":
                 raise TypeError(f"{label}: an invariant (.always) is registered once, outside to_pass's block")

@@ -70,10 +70,18 @@ def action(fn):
             )
         tr = world.trace
         ev = None
-        if tr:
+        hooks = getattr(world, "_action_hooks", ())
+        if tr or hooks:
             names = fn.__code__.co_varnames[1 : fn.__code__.co_argcount]
             bound = dict(zip(names, args))
             bound.update(kwargs)
+        if hooks:  # a debugger (--rw-debug) pausing before it
+            from .trace import _call
+
+            what = _call({"type": "action", "name": f"{self._label}.{fn.__name__}", "args": {k: _jsonable(v) for k, v in bound.items()}})
+            for hook in list(hooks):
+                hook(world, what)
+        if tr:
             ev = tr.event("action", f"{self._label}.{fn.__name__}", {k: _jsonable(v) for k, v in bound.items()}, status="running")
         try:
             out = fn(self, *args, **kwargs)

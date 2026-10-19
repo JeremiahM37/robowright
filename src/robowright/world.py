@@ -8,6 +8,7 @@ expectations and policy rollouts.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -95,6 +96,7 @@ class World:
         self._perceived: dict = {}  # name -> (time, pos, quat, velocity), for perceived velocities
         self._invariants: list = []
         self._step_hooks: list[Callable] = []
+        self._action_hooks: list[Callable] = []  # called with (world, "robot.pick(...)") before each action and expect
         self._soft_failures: list[str] = []
         self.faults = Faults(self)
         with fidelity.using(self.fidelity):  # its kinematics and self-collision model, built as this world was
@@ -254,6 +256,25 @@ class World:
         if self.trace:
             self.trace.event("log", message)
 
+    def pause(self):
+        """Stop here until you press Resume or Step in the live view, as Playwright's ``page.pause()`` waits in its
+        Inspector. The live view opens if it is not (http://127.0.0.1:8765, or a free port), and shows the world as it
+        is, what the test does next and its line. Simulated time stands still meanwhile, so no timeout runs out. Step
+        runs the next action or expectation and pauses again. On CI (``CI`` set) it does nothing, so it cannot hang a run."""
+        if os.environ.get("CI"):
+            self.log("pause() skipped: CI is set")
+            return
+        view = self.__dict__.get("_live")
+        if view is None:
+            from .live import LiveView
+
+            try:
+                view = LiveView(self)
+            except OSError:  # 8765 is taken
+                view = LiveView(self, port=0)
+            self._own_live = view
+        view.hold(self, "world.pause()")
+
     def soft_fail(self, message: str):
         """Record a failure without stopping the test; ``close()`` raises them all together."""
         self._soft_failures.append(message)
@@ -273,6 +294,9 @@ class World:
             saved = self.trace_path = self.trace.save(path)
         if self.settings.headed:
             self.backend.close_viewer()
+        own = self.__dict__.pop("_own_live", None)
+        if own is not None:  # opened by pause()
+            own.close()
         backends.release(self.backend)
         if self._soft_failures:
             failures, self._soft_failures = self._soft_failures, []

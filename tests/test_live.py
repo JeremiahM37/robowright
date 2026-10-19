@@ -45,3 +45,154 @@ def test_watched(world, rw_live):
 """
     )
     pytester.runpytest("-p", "no:cacheprovider", "--rw-live", "0").assert_outcomes(passed=1)
+
+
+def _post(url, headers=None):
+    headers = {"X-RW-Control": "1"} if headers is None else headers
+    req = urllib.request.Request(url, data=b"", method="POST", headers=headers)
+    try:
+        return urllib.request.urlopen(req, timeout=10).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def _wait_paused(url, what, timeout=60.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        s = json.loads(_get(url + "/state"))
+        if s.get("paused") and s["paused"]["what"].startswith(what):
+            return s["paused"]
+        time.sleep(0.05)
+    raise AssertionError(f"never paused before {what}: {s.get('paused')}")
+
+
+def _person(steps):
+    """A person at the page, in a thread: each step is (what to wait to be paused before, the button to press then).
+    The world runs on the test's own thread, as in a real run (MuJoCo renders on the thread that made it)."""
+    import threading
+
+    box = {"seen": []}
+
+    def run():
+        try:
+            while "url" not in box:
+                threading.Event().wait(0.02)
+            for what, cmd in steps:
+                box["seen"].append(_wait_paused(box["url"], what))
+                box.setdefault("time_at_pause", []).append(json.loads(_get(box["url"] + "/state"))["t"])
+                if cmd == "csrf":  # a page on another site cannot send the header: refused
+                    box["csrf"] = _post(box["url"] + "/control?cmd=resume", headers={})
+                    cmd = "step"
+                assert _post(box["url"] + f"/control?cmd={cmd}") == 204
+        except BaseException as e:  # noqa: BLE001 - handed to the test
+            box["error"] = e
+            if "url" in box:
+                _post(box["url"] + "/control?cmd=resume")  # never leave the test held
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t, box
+
+
+def test_stepping_pauses_before_each_action_and_expectation():
+    from robowright import expect
+
+    person, box = _person([("robot.pick(obj=cube)", "csrf"), ("expect(cube).to_be_above(target=0.03", "resume")])
+    w = rw.launch(settings=rw.Settings(trace="off"))
+    with LiveView(w, port=0, quiet=True) as v:
+        box["url"] = v.url
+        v.stepping = True
+        w.robot.pick(w.scene["cube"])  # held here
+        expect(w.scene["cube"]).to_be_above(0.03)
+        w.robot.gripper.open()  # not held: resumed
+    w.close()
+    person.join(30)
+    assert "error" not in box, box["error"]
+    first, second = box["seen"]
+    assert first["at"].endswith(f'test_live.py:{_line("# held here")}: w.robot.pick(w.scene["cube"])  # held here')
+    assert box["time_at_pause"][0] == 0.0 and box["time_at_pause"][1] > 1.0  # held before the pick, then after it
+    assert box["csrf"] == 404  # only the page drives it
+
+
+def _line(text):
+    from pathlib import Path
+
+    return next(i for i, line in enumerate(Path(__file__).read_text().splitlines(), 1) if line.endswith(text))
+
+
+def test_pause_opens_the_live_view_and_waits(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    person, box = _person([("world.pause()", "resume")])
+    w = rw.launch(settings=rw.Settings(trace="off"))
+    real = LiveView.__init__
+
+    def opened(self, *a, **k):  # tell the person where the page is
+        real(self, *a, **k)
+        box["url"] = self.url
+
+    monkeypatch.setattr(LiveView, "__init__", opened)
+    w.pause()
+    w.robot.gripper.close()
+    w.close()
+    person.join(30)
+    assert "error" not in box, box["error"]
+    assert box["seen"][0]["what"] == "world.pause()"
+    assert "_own_live" not in w.__dict__  # closed with the world
+
+
+def test_pause_does_nothing_on_ci(monkeypatch):
+    monkeypatch.setenv("CI", "true")
+    w = rw.launch(settings=rw.Settings(trace="on"))
+    w.pause()  # returns at once
+    assert "_live" not in w.__dict__
+    assert any(e.name == "pause() skipped: CI is set" for e in w.trace.events)
+    w.close()
+
+
+def test_rw_debug_pauses_each_test_before_its_first_action(pytester):
+    """In a real pytest run: the page's address and each pause reach the terminal past pytest's capture."""
+    import subprocess
+    import sys
+    import threading
+    import time
+
+    pytester.makepyfile(
+        test_d="""
+from robowright import expect
+
+def test_pick(robot, scene):
+    robot.pick(scene["cube"])
+    expect(scene["cube"]).to_be_above(0.03)
+"""
+    )
+    env = {k: v for k, v in __import__("os").environ.items() if k != "CI"}
+    p = subprocess.Popen(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "--rw-debug", "--rw-live", "0", "test_d.py"],
+        cwd=pytester.path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    lines = []
+    threading.Thread(target=lambda: lines.extend(p.stdout), daemon=True).start()
+    try:
+        end = time.monotonic() + 120
+        url = None
+        while url is None and time.monotonic() < end:
+            url = next((ln.split("watch live at ")[1].strip() for ln in list(lines) if "watch live at " in ln), None)
+            time.sleep(0.1)
+        assert url, "".join(lines)
+        _wait_paused(url, "robot.pick(obj=cube)")
+        _post(url + "/control?cmd=step")
+        _wait_paused(url, "expect(cube).to_be_above")
+        _post(url + "/control?cmd=resume")
+        assert p.wait(120) == 0, "".join(lines)
+    finally:
+        if p.poll() is None:
+            p.kill()
+    out = "".join(lines)
+    assert 'paused before robot.pick(obj=cube) (test_d.py:4: robot.pick(scene["cube"]))' in out
+    assert "1 passed" in out

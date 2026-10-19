@@ -68,6 +68,7 @@ def test_my_controller_puts_the_cube_in_the_bin(robot, scene):
 ```bash
 pytest test_my_controller.py --rw-trace on       # the SO-101 in MuJoCo: about a second
 pytest test_my_controller.py --rw-live            # watch it live in a browser as it runs
+pytest test_my_controller.py --rw-debug           # step through it, one action at a time
 robowright test --watch test_my_controller.py     # run it again on every save
 robowright test --ui                              # or pick and run tests in a browser, each with its trace
 robowright show-trace robowright-traces/*.zip --no-open -o trace.html
@@ -688,6 +689,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
 | `github` reporter | on a GitHub Actions runner, each failed test is an error annotation at the line of your test that failed (the trace's `show-trace` command in it), each flaky one a warning, on the pull request's diff; `--rw-github off` to stop it, `on` to see them anywhere |
 | `--only-changed` | `pytest --rw-only-changed` (or `=main`): only the test files your uncommitted changes (or changes since `main`) can affect: changed tests, and tests importing a changed module, followed through the project's imports; a changed `conftest.py`, plugin, setting or robot model file runs everything |
+| `--debug`, `page.pause()`, Inspector | `pytest --rw-debug`: each test held before its first action in the live view, with what runs next and its line; Step, Resume, Pause. `world.pause()` stops a test there (not on CI) |
 | `--headed` | `pytest --rw-live`: watch each test live in a browser (camera, joints, contacts, the current action); `--rw-headed`: MuJoCo's own window |
 | UI mode (`--ui`) | `robowright test --ui` (any pytest arguments): the suite by file in a browser; run everything, a file or one test with a click and see each result as it comes; every test's trace opens in place, the camera can be watched live as a test runs, and Watch runs again on every save |
 | watch mode | `robowright test --watch` (any pytest arguments): runs again on every save, only the changed test files when only tests changed and everything when your code, a robot model or the settings did; Enter runs everything |
@@ -1348,6 +1350,14 @@ and a flaky test a warning at the line its failed attempt stopped on. Nothing to
 report: every test with its outcome and time, trials with their rates, and each failure
 with its message, its trace as text and a link to it in the viewer. `pytest --rw-headed`
 shows each test in MuJoCo's own window as it runs, at real-time pace.
+
+`pytest --rw-debug` is Playwright's `--debug`: the live view becomes a debugger, and each test
+stops before its first action. The page shows the world as it is, what runs next
+(`robot.pick(obj=cube)`) and the line of your test that runs it. **Step** runs that one action or
+expectation and stops before the next; **Resume** runs on; **Pause** stops before the next one
+again. `world.pause()` in a test stops there the same way, as Playwright's `page.pause()` does,
+and opens the live view if it is not open. Simulated time stands still while a test is held, so
+no expectation's timeout runs out while you look; on CI (`CI` set) `pause()` does nothing.
 
 The viewer is one self-contained HTML file, so you can attach it to a CI run or an issue.
 It has an action list, a scrubbable camera view, a timeline, joint plots (measured against

@@ -26,6 +26,7 @@ Options::
     --rw-fidelity published|adjusted robots as their model files have them (default), or with robowright's tuning
     --rw-live [PORT]                 watch each test live in a browser (http://127.0.0.1:8765)
     --rw-headed                      watch each test in MuJoCo's window as it runs, at real-time pace
+    --rw-debug                       the live view as a debugger: pause before each test's first action, then step
     -n auto                          (pytest-xdist) as many workers as the cores and memory allow
 
 Markers::
@@ -122,6 +123,12 @@ def pytest_addoption(parser):
         metavar="PORT",
         help="watch each test live in a browser at http://127.0.0.1:PORT (8765; xdist workers count up), at real-time pace",
     )
+    g.addoption(
+        "--rw-debug",
+        action="store_true",
+        help="debug in the live view (Playwright's --debug): each test pauses before its first action or expectation; "
+        "Step runs one and pauses again, Resume runs on. Implies --rw-live and no --rw-timeout",
+    )
     g.addoption("--rw-headed", action="store_true", help="watch each test in the engine's window, at real-time pace (MuJoCo)")
     g.addoption("--rw-report", metavar="PATH", help="write an HTML report of the run: every test, and each failure with its trace")
     g.addoption(
@@ -178,6 +185,8 @@ def pytest_configure(config):
         except (ValueError, KeyError) as e:
             raise pytest.UsageError(f"--rw-robot: {e}") from None
     _shard(config)  # a malformed --rw-shard is said before anything runs
+    if config.getoption("--rw-debug", False) and config.getoption("--rw-live", None) is None:
+        config.option.rw_live = 8765
     ref = config.getoption("--rw-only-changed", None)
     if ref:
         from . import changed
@@ -456,6 +465,8 @@ def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> Wor
     view = _live(item.config)
     if view is not None:
         view.watch(w)
+        if item.config.getoption("--rw-debug", False):
+            view.stepping = True  # held before the test's first action
     return w
 
 
@@ -499,8 +510,10 @@ def _live(config):
         from .live import LiveView
 
         worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0").removeprefix("gw")
-        config.stash[_LIVE] = LiveView(port=port + int(worker) if port else 0)
-        config.add_cleanup(config.stash[_LIVE].close)
+        view = config.stash[_LIVE] = LiveView(port=port + int(worker) if port else 0, quiet=True)
+        view.announce = lambda msg: _say(config, msg)
+        view.announce(f"robowright: watch live at {view.url}")
+        config.add_cleanup(view.close)
     return config.stash[_LIVE]
 
 
@@ -636,7 +649,21 @@ def pytest_runtest_makereport(item, call):
             rep.user_properties.append(("robowright_trials", item._rw_trials.summary()))
 
 
+def _say(config, msg: str) -> None:
+    """``msg`` on the terminal now, past pytest's output capture (the live view's address, the debugger's pauses)."""
+    capman = config.pluginmanager.getplugin("capturemanager")
+    tr = config.pluginmanager.getplugin("terminalreporter")
+    if capman is None or tr is None:
+        print(msg, flush=True)
+        return
+    with capman.global_and_fixture_disabled():
+        tr.write_line(msg)
+        tr._tw.flush()  # a pipe (an IDE, CI) would otherwise get it only at the end
+
+
 def _time_limit(item) -> float:
+    if item.config.getoption("--rw-debug", False):  # a person is stepping through it
+        return 0.0
     m = item.get_closest_marker("rw_timeout")
     return float(m.args[0]) if m else float(item.config.getoption("--rw-timeout", 0.0) or 0.0)
 
