@@ -89,7 +89,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 
 | Playwright | robowright | Status |
 |---|---|---|
-| `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`, per engine and robot, with a diff; a whole camera image, not one element's region | partial |
+| `toHaveScreenshot`, element screenshots | `expect(world).to_match_snapshot("tidy.png")` (the whole view) or `expect(cube).to_match_snapshot("cube.png")` (the window around one object, following it), per engine and robot, with a diff | same |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: positions and joints as editable text | robot |
 | `--update-snapshots` | `--rw-update-snapshots` | same |
 | `mask` in screenshots | `to_match_snapshot(..., mask=["cube"])`: where the object is, now and in the baseline, left out | same |

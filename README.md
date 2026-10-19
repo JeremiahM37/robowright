@@ -1321,6 +1321,9 @@ and fails, so a missing baseline is never a pass: look at it, then run again. A 
 fails with the number of pixels that moved, and writes the actual image and a diff (changed
 pixels in red) next to the traces. `threshold` (per pixel, 0..1) and `max_diff_pixel_ratio`
 set what counts as the same view; `pytest --rw-update-snapshots` writes every baseline again.
+`expect(cube).to_match_snapshot("cube.png")` compares only the window around one object, as
+Playwright's element screenshot does: the window follows the object, so it checks how the object
+looks wherever it is, and a change elsewhere in the view does not fail it.
 `mask=["cube"]` leaves an object out, as Playwright's `mask` does: its box (and a centimetre around it,
 for its shadow) projected into the image, where it is now and where it was in the baseline.
 

@@ -65,10 +65,10 @@ def compare(actual: np.ndarray, expected: np.ndarray, threshold: float, mask: np
     return int(changed.sum()), diff
 
 
-def mask_of(world, subjects, camera: str, width: int, height: int, margin: float = 0.01, pad: int = 2) -> np.ndarray:
-    """Where ``subjects`` (scene objects, or their names) are in ``camera``'s image, as a boolean image: each one's
-    bounding box, ``margin`` metres wider for the shadow and shading it casts around itself, projected through the
-    camera robowright placed, so it is the same region on every engine."""
+def box_of(world, subject, camera: str, width: int, height: int, margin: float = 0.01, pad: int = 2):
+    """Where ``subject`` (a scene object or its name) is in ``camera``'s image: its bounding box, ``margin`` metres
+    wider, projected through the camera robowright placed (the same on every engine), as pixel bounds
+    ``(u0, v0, u1, v1)``; None when it is behind the camera."""
     from .locators import as_subject
 
     cam = next(c for c in world.spec.cameras if c.name == camera)
@@ -78,23 +78,44 @@ def mask_of(world, subjects, camera: str, width: int, height: int, margin: float
     right /= np.linalg.norm(right)
     up = np.cross(right, fwd)
     f = (height / 2) / np.tan(np.radians(cam.fovy) / 2)  # fovy is vertical
+    h = as_subject(world, subject)
+    if not hasattr(h, "bounds"):
+        raise TypeError(f"a snapshot region or mask takes scene objects or their names, not {h!r}")
+    lo, hi = h.bounds()
+    lo, hi = lo - margin, hi + margin
+    corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]) - pos
+    depth = corners @ fwd
+    if np.any(depth <= 1e-6):
+        return None
+    u = width / 2 + f * (corners @ right) / depth
+    v = height / 2 - f * (corners @ up) / depth
+    return int(np.floor(u.min()) - pad), int(np.floor(v.min()) - pad), int(np.ceil(u.max()) + pad), int(np.ceil(v.max()) + pad)
+
+
+def mask_of(world, subjects, camera: str, width: int, height: int, margin: float = 0.01, pad: int = 2) -> np.ndarray:
+    """Where ``subjects`` (scene objects, or their names) are in ``camera``'s image, as a boolean image: each one's
+    :func:`box_of`, ``margin`` metres wider for the shadow and shading it casts around itself."""
     out = np.zeros((height, width), bool)
     for s in subjects:
-        h = as_subject(world, s)
-        if not hasattr(h, "bounds"):
-            raise TypeError(f"mask takes scene objects or their names, not {h!r}")
-        lo, hi = h.bounds()
-        lo, hi = lo - margin, hi + margin
-        corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]) - pos
-        depth = corners @ fwd
-        if np.any(depth <= 1e-6):
+        box = box_of(world, s, camera, width, height, margin, pad)
+        if box is None:
             continue  # behind the camera
-        u = width / 2 + f * (corners @ right) / depth
-        v = height / 2 - f * (corners @ up) / depth
-        u0, u1 = int(max(0, np.floor(u.min()) - pad)), int(min(width, np.ceil(u.max()) + pad))
-        v0, v1 = int(max(0, np.floor(v.min()) - pad)), int(min(height, np.ceil(v.max()) + pad))
+        u0, v0, u1, v1 = max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3])
         if u0 < u1 and v0 < v1:
             out[v0:v1, u0:u1] = True
+    return out
+
+
+def crop(image: np.ndarray, center: tuple[float, float], size: tuple[int, int]) -> np.ndarray:
+    """A ``size`` (width, height) window of ``image`` centred on ``center`` (u, v); outside the image it is black,
+    so the window is always that size."""
+    w, h = size
+    u0, v0 = int(round(center[0] - w / 2)), int(round(center[1] - h / 2))
+    out = np.zeros((h, w, *image.shape[2:]), image.dtype)
+    su0, sv0 = max(0, u0), max(0, v0)
+    su1, sv1 = min(image.shape[1], u0 + w), min(image.shape[0], v0 + h)
+    if su0 < su1 and sv0 < sv1:
+        out[sv0 - v0 : sv1 - v0, su0 - u0 : su1 - u0] = image[sv0:sv1, su0:su1]
     return out
 
 

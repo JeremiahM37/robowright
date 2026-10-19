@@ -173,3 +173,43 @@ def test_the_mask_covers_the_object_in_the_image(engine):
     assert (red & ~m).sum() <= 0.02 * red.sum()  # inside the mask
     assert m.sum() < 0.05 * m.size  # and the mask is not most of the image
     w.close()
+
+
+REGION = """
+import os
+from robowright import expect
+
+def test_cube_looks_right(world, robot, scene):
+    if os.environ.get("GRIP"):
+        robot.gripper.close()  # the robot changes, away from the cube
+    if os.environ.get("MOVE"):
+        x, y = os.environ["MOVE"].split(",")
+        world.move_object("cube", (float(x), float(y), 0.0125))
+    world.step(5)
+    expect(scene["cube"]).to_match_snapshot("cube.png", max_diff_pixel_ratio=0.1)
+    expect(world).to_match_snapshot("whole.png")
+"""
+
+
+def test_a_region_snapshot_checks_the_object_wherever_it_is(pytester, monkeypatch):
+    """expect(cube).to_match_snapshot: the window around the cube, as Playwright's element screenshot."""
+    import numpy as np
+    from PIL import Image
+
+    pytester.makepyfile(test_region=REGION)
+    _run(pytester).assert_outcomes(failed=1)  # both baselines written
+    _run(pytester, "--rw-update-snapshots").assert_outcomes(passed=1)
+    crop = np.asarray(Image.open(pytester.path / "__snapshots__/test_region/cube-mujoco-so101.png"))
+    assert crop.shape[0] < 80 and crop.shape[1] < 80  # a window around the cube, not the whole 320x240 view
+    r, g, b = (crop[..., k].astype(int) for k in range(3))
+    red = (r > 90) & (r > 2 * g) & (r > 2 * b)  # its lit and its shaded faces
+    assert red.mean() > 0.4  # mostly the red cube
+    monkeypatch.setenv("GRIP", "1")  # something else changes: the cube's region still matches
+    r = _run(pytester)
+    r.assert_outcomes(failed=1)
+    # The cube's region is checked first; the whole view failing means the cube's check passed.
+    assert "to_match_snapshot('whole.png') failed" in r.stdout.str()
+    monkeypatch.delenv("GRIP")
+    monkeypatch.setenv("MOVE", "0.23,-0.05")  # the cube itself moves a little: the window follows it
+    r = _run(pytester)
+    assert "to_match_snapshot('cube.png')" not in r.stdout.str()  # only the whole view differs

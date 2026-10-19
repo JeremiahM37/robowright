@@ -254,11 +254,18 @@ class Expectation:
         ``mask_margin`` metres around each for the shadow it casts. The baseline is
         ``__snapshots__/<test file>/<name>-<engine>-<robot>.png``; the first run writes it and fails
         (check it, then run again), and ``pytest --rw-update-snapshots`` writes it again. See
-        robowright.snapshots."""
+        robowright.snapshots.
+
+        On a scene object, ``expect(cube).to_match_snapshot("cube.png")`` compares only the part of the image around it,
+        as Playwright's element screenshot does: a window the size of the baseline, centred where the object is now,
+        so it checks how the object looks wherever it has moved to."""
         from . import snapshots
 
         if self.negate:
             raise ValueError("to_match_snapshot cannot be negated: say what the view should look like")
+        region = None if isinstance(self.subject, _WorldView) else self.subject
+        if region is not None and not hasattr(region, "bounds"):
+            raise TypeError(f"to_match_snapshot takes the world or a scene object, not {self.subject.name}")
         w = self.world
         w.require("render", "to_match_snapshot")
         names = [c.name for c in w.spec.cameras]
@@ -271,11 +278,26 @@ class Expectation:
             args["mask"] = [getattr(m, "name", m) for m in mask]
         label = f"to_match_snapshot({name!r})"
         mask_path = path.with_name(path.stem + ".mask.png")  # where the masked objects were in the baseline
+
+        def view(window=None):
+            """What is compared: the whole image, or the window around ``region`` (the baseline's size, or the object's
+            own box for a new baseline), with the masked area cut the same way."""
+            img = w.backend.render(camera, width, height)[..., :3]
+            masked = snapshots.mask_of(w, mask, camera, width, height, mask_margin) if mask else None
+            if region is None:
+                return img, masked
+            box = snapshots.box_of(w, region, camera, width, height, margin=0.0)
+            if box is None:
+                raise ExpectationError(f"expect({region.name}).to_match_snapshot: {region.name} is behind the {camera} camera")
+            center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            size = window or (box[2] - box[0], box[3] - box[1])
+            return snapshots.crop(img, center, size), (None if masked is None else snapshots.crop(masked, center, size))
+
         if snapshots.updating() or not path.exists():
-            snapshots.write(path, w.backend.render(camera, width, height))
+            img, masked = view()
+            snapshots.write(path, img)
             if mask:
-                region = snapshots.mask_of(w, mask, camera, width, height, mask_margin)
-                snapshots.write(mask_path, np.repeat(region[..., None], 3, -1).astype(np.uint8) * 255)
+                snapshots.write(mask_path, np.repeat(masked[..., None], 3, -1).astype(np.uint8) * 255)
             else:
                 mask_path.unlink(missing_ok=True)
             if snapshots.updating():
@@ -287,8 +309,7 @@ class Expectation:
         out = Path(w.settings.trace_dir) / "snapshots" / snapshots._slug(f"{w.name}-{Path(name).stem}")
 
         def check():
-            actual = w.backend.render(camera, width, height)[..., :3]
-            masked = snapshots.mask_of(w, mask, camera, width, height, mask_margin) if mask else None
+            actual, masked = view((expected.shape[1], expected.shape[0]) if region is not None else None)
             if masked is not None and was_masked is not None and was_masked.shape == masked.shape:
                 masked |= was_masked  # a masked object that moved: where it is now and where it was
             n, diff = snapshots.compare(actual, expected, threshold, masked)
