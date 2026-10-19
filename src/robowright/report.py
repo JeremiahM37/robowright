@@ -98,6 +98,8 @@ class Run:
                 label, kind = html.escape(a["name"]), html.escape(a["type"])
                 if a["type"].startswith("image/"):
                     details += f'<figure><img src="{href}" alt="{label}"><figcaption>{label}</figcaption></figure>'
+                elif a["type"].startswith("video/"):
+                    details += f'<figure><video src="{href}" controls preload="metadata"></video><figcaption>{label}</figcaption></figure>'
                 else:
                     details += f'<div class="att"><a href="{href}">{label}</a> <span class="trials">{kind}</span></div>'
             trials = f'<span class="trials">{html.escape(t["trials"])}</span>' if t["trials"] else ""

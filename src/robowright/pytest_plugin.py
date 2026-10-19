@@ -13,6 +13,7 @@ Options::
     --rw-fail-on-flaky               a flaky test fails the run
     --rw-repeat-each N               run every test N times (the same seed each time), to find the ones that only fail sometimes
     --rw-trace-dir DIR
+    --rw-video on|off|retain-on-failure   each test's run as an MP4 beside its trace (needs robowright[video])
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
@@ -99,6 +100,13 @@ def pytest_addoption(parser):
         metavar="N",
         help="run every test N times, each with the same seed and a fresh world, as Playwright's --repeat-each: a "
         "test whose repeats disagree depends on something besides its seed (wall-clock timing, a simulator's threads)",
+    )
+    g.addoption(
+        "--rw-video",
+        choices=["off", "on", "retain-on-failure"],
+        default="off",
+        help="each test's run as an MP4 beside its trace, drawn from it after the test (Playwright's video option): "
+        "every test, or only those that failed; it records the trace it is drawn from. Needs robowright[video]",
     )
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
@@ -426,6 +434,9 @@ def _settings(config, attempt: int = 0) -> Settings:
     trace = config.getoption("--rw-trace")
     if trace == "on-first-retry":  # the first run of a test is not recorded; its first retry is, whatever its outcome
         trace = "on" if attempt == 1 else "off"
+    video = config.getoption("--rw-video", "off")
+    if video == "on" or (video == "retain-on-failure" and trace == "off"):  # a video is drawn from the trace
+        trace = "on" if video == "on" else "retain-on-failure"
     if config.getoption("--rw-live", None) is not None:  # watchable: at real-time pace
         return Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed, realtime=True)
     return Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed)
@@ -549,6 +560,12 @@ def world(request, rw_backend, rw_robot):
     path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid, _attempt(item)))
     if path and failed:
         item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))
+    video = item.config.getoption("--rw-video", "off")
+    if path and (video == "on" or (video == "retain-on-failure" and failed)):
+        _video(item, path)
+        mode = item.config.getoption("--rw-trace")
+        if not failed and mode != "on" and not (mode == "on-first-retry" and _attempt(item) == 1):
+            Path(path).unlink(missing_ok=True)  # recorded only to draw the video from
 
 
 @pytest.fixture
@@ -647,6 +664,26 @@ def pytest_runtest_makereport(item, call):
             rep.user_properties.append(("robowright_trace", str(_trace_path(item.config, item.nodeid, _attempt(item)))))
         if hasattr(item, "_rw_trials"):
             rep.user_properties.append(("robowright_trials", item._rw_trials.summary()))
+
+
+def _video(item, trace_path) -> None:
+    """``--rw-video``: the test's run, drawn from its trace, as an MP4 beside it and in its report entry."""
+    import json
+    import warnings
+
+    from .render import render_video
+
+    out = Path(trace_path).with_suffix(".mp4")
+    try:
+        render_video(trace_path, out, size=(640, 480))
+    except ImportError:
+        warnings.warn(pytest.PytestWarning('--rw-video needs robowright[video] (pip install "robowright[video]")'), stacklevel=1)
+        return
+    except Exception as e:  # noqa: BLE001 - no GL, or a trace without a camera: the test's own result stands
+        warnings.warn(pytest.PytestWarning(f"--rw-video: {item.nodeid}: no video ({type(e).__name__}: {e})"), stacklevel=1)
+        return
+    record = {"name": out.name, "path": str(out), "type": "video/mp4"}
+    item.user_properties.append(("robowright_attachment", json.dumps(record)))
 
 
 def _say(config, msg: str) -> None:

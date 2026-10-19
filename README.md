@@ -694,6 +694,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
 | `github` reporter | on a GitHub Actions runner, each failed test is an error annotation at the line of your test that failed (the trace's `show-trace` command in it), each flaky one a warning, on the pull request's diff; `--rw-github off` to stop it, `on` to see them anywhere |
 | `--only-changed` | `pytest --rw-only-changed` (or `=main`): only the test files your uncommitted changes (or changes since `main`) can affect: changed tests, and tests importing a changed module, followed through the project's imports; a changed `conftest.py`, plugin, setting or robot model file runs everything |
+| `video: 'on' / 'retain-on-failure'` | `pytest --rw-video retain-on-failure` (or `on`): each failed test's run as an MP4 beside its trace, drawn from the trace after the test, and played in the HTML report (needs `robowright[video]`) |
 | `--debug`, `page.pause()`, Inspector | `pytest --rw-debug`: each test held before its first action in the live view, with what runs next and its line; Step, Resume, Pause. `world.pause()` stops a test there (not on CI) |
 | `--headed` | `pytest --rw-live`: watch each test live in a browser (camera, joints, contacts, the current action); `--rw-headed`: MuJoCo's own window |
 | UI mode (`--ui`) | `robowright test --ui` (any pytest arguments): the suite by file in a browser; run everything, a file or one test with a click and see each result as it comes; every test's trace opens in place, the camera can be watched live as a test runs, and Watch runs again on every save |
@@ -1367,6 +1368,10 @@ and a flaky test a warning at the line its failed attempt stopped on. Nothing to
 report: every test with its outcome and time, trials with their rates, and each failure
 with its message, its trace as text and a link to it in the viewer. `pytest --rw-headed`
 shows each test in MuJoCo's own window as it runs, at real-time pace.
+
+`pytest --rw-video retain-on-failure` saves each failed test's run as an MP4 beside its trace,
+as Playwright's `video` option does (`on` for every test). It is drawn from the trace once the
+test is over, so the run itself renders nothing, and the HTML report plays it in the test's entry.
 
 `pytest --rw-debug` is Playwright's `--debug`: the live view becomes a debugger, and each test
 stops before its first action. The page shows the world as it is, what runs next
