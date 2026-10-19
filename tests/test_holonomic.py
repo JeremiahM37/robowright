@@ -86,6 +86,19 @@ def test_a_differential_base_refuses_sideways_motion():
         w.robot.base.drive(0.0, 0.0, 0.5, lateral=0.1)
 
 
+def _floor_roller(m, d, wheel):
+    """Where the lowest roller of ``wheel`` (a joint id) is: the wheel's contact with the floor."""
+    body = int(m.jnt_bodyid[wheel])
+
+    def on_wheel(b):
+        while b > 0 and b != body:
+            b = int(m.body_parentid[b])
+        return b == body
+
+    rollers = [k for k in range(m.njnt) if k != wheel and int(m.jnt_bodyid[k]) != body and on_wheel(int(m.jnt_bodyid[k]))]
+    return d.xanchor[min(rollers, key=lambda k: d.xanchor[k][2])]
+
+
 def _implied_twist(w):
     """The base twist that the wheels' measured spins imply under no slip along each wheel's rolling
     direction (A x z, at the roller contact radius), solved in the base frame from the model's own geometry."""
@@ -96,7 +109,7 @@ def _implied_twist(w):
     for j, spin in zip(b._dadr, b.qvel()):
         jid = int(m.dof_jntid[j])
         A = d.xmat[m.jnt_bodyid[jid]].reshape(3, 3) @ m.jnt_axis[jid]
-        p = R.T @ (d.xanchor[jid] - d.xpos[b._base])
+        p = R.T @ (_floor_roller(m, d, jid) - d.xpos[b._base])  # where the wheel meets the floor
         p[2] = 0.0
         dvec = R.T @ np.cross(A, z)
         dvec[2] = 0.0
@@ -119,23 +132,22 @@ def test_the_wheels_imply_the_commanded_twist(path, cmd):
     w.backend.stop_base()
 
 
-# The three drive accuracy tests below are EXPECTED TO FAIL (strict xfail). The wheels do what the map says:
+# On MuJoCo the forward and sideways tests below are EXPECTED TO FAIL (strict xfail). The wheels do what the map says:
 # the test above shows the spins imply the commanded twist. The base does not move with them, because the
 # rollers slip against the floor. Measured per wheel (wheel 1, 2, 3; slip along each rolling direction, m/s):
 #   forward 0.1 m/s: spins imply vx 0.099; base moves vx 0.060 and yaws -0.10 rad/s; slip -0.025, -0.023, +0.034
 #   sideways 0.1 m/s: spins imply vy 0.099; base moves vy 0.043 and yaws -0.11 rad/s; slip -0.053, +0.044, -0.006
-#   pivot 1.0 rad/s: spins imply wz 0.985; base yaws 0.80 rad/s; slip -0.008, -0.010, -0.008
 # A slip of this size in the published model is what limits it; the cause within MuJoCo's contacts is not isolated
 # (noslip iterations, integrator, floor friction x3 and roller frictionloss 0 did not close it).
 _UNRESOLVED = (
-    "the rollers slip against the floor: forward 60 %, sideways 43 %, pivot 80 % of the commanded motion, "
+    "the rollers slip against the floor: forward 60 %, sideways 43 % of the commanded motion, "
     "with per-wheel slip of 0.02-0.05 m/s (see the comment above)"
 )
 
 
-# On Genesis, from the same measured map and servos, forward and sideways land within 3 % (0.194 and 0.195 m of 0.2);
-# the pivot turns 81 % (1.62 of 2 rad), as on MuJoCo (80 %): two engines agreeing points at the map's turn term or the
-# model rather than at either engine's contacts, and it is not isolated.
+# The pivot turned 80-82 % on every engine until the map's turn term took each wheel's lever from where its floor roller
+# is (57.2 mm from the centre) rather than its joint's anchor (47.2 mm); it now turns 97 % (MuJoCo), 99 % (Genesis) and
+# 100 % (Drake). On Genesis and Drake forward and sideways land within 3 %.
 def _installed(*engines):
     """Each engine as a parameter, skipped where it is not installed (CI's unit jobs have MuJoCo and PyBullet)."""
     from robowright.backends.base import available
@@ -145,7 +157,6 @@ def _installed(*engines):
 
 
 ENGINES = _installed("mujoco", "genesis", "drake")
-_PIVOT_BOTH = "the pivot turns 81 % of the command on Genesis, as on MuJoCo (80 %); the cause is not isolated"
 
 
 def _expect(request, engine, xfail_on):
@@ -178,8 +189,7 @@ def test_sideways_drive_goes_sideways_without_drift(path, engine, request):
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-def test_pivot_turns_on_the_spot_the_right_way(path, engine, request):
-    _expect(request, engine, {"mujoco": _UNRESOLVED, "genesis": _PIVOT_BOTH, "drake": _PIVOT_BOTH})
+def test_pivot_turns_on_the_spot_the_right_way(path, engine):
     w = _settled(path, engine)
     b = w.robot.base
     p0, y0 = b.position.copy(), b.yaw

@@ -279,8 +279,10 @@ class MujocoBackend(Backend):
             if np.linalg.norm(n) < 1e-6:
                 raise CapabilityError(f"{rm.title}: roller {m.joint(low).name} stands on its end, so its drive direction is not measurable")
             n = n / np.linalg.norm(n)
-            # No slip along n: n.(v_hub + w_base z x p) + radius * w_wheel * ((z x axle).n) = 0, all in the base's frame.
-            nb, pb, ab = R.T @ n, R.T @ (hub - d.xpos[base]), R.T @ axis_w
+            # No slip along n at the contact p: n.(v + w_base z x p) + radius * w_wheel * ((z x axle).n) = 0, in the base's
+            # frame. The contact is under the roller on the floor, not under the axle's anchor: a wheel's rollers can sit
+            # outboard of where its joint is placed (1 cm on the Robot Soccer Kit, whose turns then came out 18 % short).
+            nb, pb, ab = R.T @ n, R.T @ (d.xanchor[low] - d.xpos[base]), R.T @ axis_w
             e = float(np.cross(z, ab) @ nb)  # how the wheel's spin turns its contact along n
             if abs(e) < 0.5:
                 raise CapabilityError(f"{rm.title}: wheel {name}'s rollers do not drive it (its axle is along its drive direction)")

@@ -444,9 +444,10 @@ a pivot; the TurtleBot 4 drives 97 and 98%. (It drove 76 to 89% until its caster
 its own file: the URDF gives the caster 0.1 in its Gazebo block, the converter dropped that, and
 the caster dragged at the floor's 1.0.) A base with omni wheels whose rollers are modelled takes a
 sideways speed, `drive(linear, angular, duration, lateral=...)`, with the wheel map measured from
-the rollers. On Menagerie's Robot Soccer Kit the wheels turn at the commanded speeds and the map
-is right (the spins imply the commanded motion to 2%), but the rollers slip on MuJoCo's floor: the
-base moves 60% of a forward command, 43% sideways and 80% of a pivot, which is not explained. `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
+the rollers, each wheel's lever for turning taken at the roller on the floor. On Menagerie's Robot
+Soccer Kit it pivots 97% of the command on MuJoCo, 99% on Genesis and 100% on Drake, and drives
+forward and sideways within 3% on Genesis and Drake; on MuJoCo the rollers slip on the floor in a
+straight line (60% forward, 43% sideways), which is not explained. `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
 for tests that need no particular robot: `rw.launch(robot=str(robowright.assets.diffdrive_mjcf()))`.
 
 ### Test in a simulation someone else built
@@ -1918,7 +1919,7 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   own friction against the floor (it takes the larger of two, with no per-pair override), so a TurtleBot
   4's 0.1 caster drags at the floor's 1.0 there: straight drives cover 77-82 % of the command. Omni bases
   are driven on MuJoCo, Genesis and Drake, not PyBullet (released, the rollers blow the simulation apart);
-  they slip on MuJoCo (see above), and pivot about 80 % of the command on all three; mecanum bases are untested (no published model with modelled rollers was
+  they slip in a straight line on MuJoCo (see above); mecanum bases are untested (no published model with modelled rollers was
   at hand), and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
