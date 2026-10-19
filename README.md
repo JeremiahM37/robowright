@@ -662,7 +662,8 @@ one slice of the problem:
 
 None of them gives you what web developers have had for years: a test that says what
 should happen, waits for it, fails with a clear explanation, and leaves behind enough
-evidence to debug it. robowright brings that workflow to robots:
+evidence to debug it. robowright brings that workflow to robots (every part of Playwright Test, with what is
+still missing, is in [Coming from Playwright](docs/playwright.md)):
 
 | Playwright | robowright |
 |---|---|

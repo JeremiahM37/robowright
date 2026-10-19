@@ -76,6 +76,7 @@ nav:
   - Get started:
       - Quickstart: quickstart.md
       - Install: install.md
+      - Coming from Playwright: playwright.md
   - Guides:
       - A tour: tour.md
       - Robots: robots.md
