@@ -135,10 +135,28 @@ class SceneLocator:
         return iter(self.all())
 
     def all(self, **filters) -> list[ObjectHandle]:
-        return [ObjectHandle(self.world, o.name) for o in self.world.spec.objects if _match(o, filters)]
+        """Every object matching ``filters``, checked against the world as it is now (see :meth:`get`)."""
+        unknown = set(filters) - _FILTERS
+        if unknown:
+            raise TypeError(f"unknown scene filter(s) {sorted(unknown)}; the filters are {sorted(_FILTERS)}")
+        out = []
+        for o in self.world.spec.objects:
+            if _match(o, filters):
+                h = ObjectHandle(self.world, o.name)
+                if _match_state(self.world, h, filters):
+                    out.append(h)
+        return out
+
+    def count(self, **filters) -> int:
+        """How many objects match ``filters`` now: ``scene.count(inside="bin")``."""
+        return len(self.all(**filters))
 
     def get(self, **filters) -> ObjectHandle:
-        """Exactly one object matching ``color=``, ``kind=``, ``tag=`` filters (strict, like Playwright)."""
+        """Exactly one object matching ``filters`` (strict, like Playwright's locators). What it is: ``name=``,
+        ``color=``, ``kind=``, ``tag=``. Where it is now, as Playwright filters a locator by what it has: ``inside="bin"``
+        (its centre within the bin), ``on="tray"`` (resting on top of it), ``touching="floor"``, ``near=(point or
+        object, radius)``, ``held=True`` (between the gripper's fingers), and ``where=fn`` for anything else
+        (``fn(handle) -> bool``). ``scene.get(color="red", inside="bin")`` is the red object in the bin."""
         found = self.all(**filters)
         if len(found) != 1:
             raise LookupError(f"expected exactly one object matching {filters}, found {[h.name for h in found]}")
@@ -150,6 +168,45 @@ class SceneLocator:
         if not cands:
             raise LookupError(f"no movable object matches {filters}")
         return min(cands, key=lambda h: float(np.linalg.norm(h.position - p)))
+
+
+_FILTERS = {"color", "kind", "tag", "name", "inside", "on", "touching", "near", "held", "where"}
+_ON_GAP = 0.01  # m between an object's bottom and the top it rests on
+
+
+def _match_state(world, h, f) -> bool:
+    """The filters on where an object is now; the others are checked by :func:`_match`."""
+    if "inside" in f:
+        c = as_subject(world, f["inside"])
+        if c.name == h.name:
+            return False
+        lo, hi = c.bounds()
+        if not (np.all(h.position >= lo) and np.all(h.position <= hi)):
+            return False
+    if "on" in f:
+        base = as_subject(world, f["on"])
+        if base.name == h.name:
+            return False
+        lo, hi = base.bounds()
+        p, bottom = h.position, h.bounds()[0][2]
+        if not (lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1] and abs(bottom - base.top) <= _ON_GAP):
+            return False
+    if "touching" in f:
+        if f["touching"] not in h.contacts():
+            return False
+    if "near" in f:
+        target, radius = f["near"]
+        q = target.position if isinstance(target, Subject) else as_subject(world, target).position
+        if float(np.linalg.norm(h.position - np.asarray(q, float))) > radius:
+            return False
+    if "held" in f:
+        gripper = getattr(world.robot, "gripper", None)
+        held = gripper is not None and gripper.holding() == h.name
+        if held != bool(f["held"]):
+            return False
+    if "where" in f and not f["where"](h):
+        return False
+    return True
 
 
 def _match(o, f) -> bool:

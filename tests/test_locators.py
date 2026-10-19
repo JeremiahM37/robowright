@@ -49,3 +49,51 @@ def test_perception_hook_when_no_ground_truth(quiet_world):
     assert w.scene["cube"].position.tolist() == [0.1, 0.2, 0.3]
     with pytest.raises(rw.CapabilityError, match="perception"):
         _ = w.scene["bin"].position
+
+
+def _stacked(quiet_world):
+    """A red cube in the bin, a green cube on the floor and a blue one resting on the green."""
+    w = quiet_world(
+        scene=tabletop(
+            ObjectSpec("in_bin", color="red", pos=(0.2, 0.12, 0.03)),
+            ObjectSpec("floor_cube", color="green", pos=(0.22, -0.06, None)),
+            ObjectSpec("stacked", color="blue", pos=(0.22, -0.06, 0.0375)),
+            ObjectSpec("bin", kind="bin", size=(0.05, 0.05, 0.02), pos=(0.2, 0.12, 0.0), color="blue"),
+        )
+    )
+    w.wait(1.0)  # everything settles where it rests
+    return w
+
+
+def test_relational_filters_find_objects_by_where_they_are(quiet_world):
+    w = _stacked(quiet_world)
+    s = w.scene
+    assert s.get(inside="bin").name == "in_bin"
+    assert s.count(inside="bin") == 1
+    assert s.get(on="floor_cube").name == "stacked"
+    assert {h.name for h in s.all(touching="floor")} >= {"floor_cube"} and "stacked" not in {h.name for h in s.all(touching="floor")}
+    assert [h.name for h in s.all(kind="box", near=((0.22, -0.06, 0.0), 0.05))] == ["floor_cube", "stacked"]
+    assert s.get(color="blue", kind="box").name == "stacked"
+    assert s.get(kind="box", where=lambda h: h.top > 0.045).name == "stacked"  # anything else, as a function
+
+
+def test_filters_are_checked_now_not_when_the_scene_was_built(quiet_world):
+    w = _stacked(quiet_world)
+    assert w.scene.count(inside="bin") == 1
+    w.move_object("in_bin", (0.3, -0.12, 0.0125))
+    w.wait(0.3)
+    assert w.scene.count(inside="bin") == 0
+
+
+def test_held_is_the_object_between_the_fingers(quiet_world):
+    w = quiet_world(scene=tabletop(ObjectSpec("cube", pos=(0.22, -0.06, None)), ObjectSpec("other", pos=(0.25, 0.06, None), color="green")))
+    assert w.scene.count(held=True) == 0
+    w.robot.pick(w.scene["cube"])
+    assert w.scene.get(held=True).name == "cube"
+    assert w.scene.get(held=False).name == "other"
+
+
+def test_a_misspelt_filter_is_an_error_not_a_match_for_everything(quiet_world):
+    w = quiet_world(scene=tabletop(ObjectSpec("cube")))
+    with pytest.raises(TypeError, match="unknown scene filter.*'colour'"):
+        w.scene.all(colour="red")

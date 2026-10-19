@@ -16,7 +16,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `test()`, fixtures, `test.describe`, hooks | pytest tests and fixtures; `world`, `robot`, `scene`, `seed`, `ros2`, `rw_attach`, `rw_live` fixtures | same |
 | auto-waiting actions | `robot.pick(cube)`, `arm.move_to(...)`, `gripper.close()` return once the motion has settled, or raise `ActionTimeoutError` | same |
 | web-first assertions (auto-retry) | `expect(cube).to_be_inside(bin)` re-checks every control step, in simulated time | same |
-| locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)`: live handles | robot |
+| locators, `filter({has})` | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)`, and by where things are now: `scene.get(inside="bin")`, `on="tray"`, `touching="floor"`, `near=(p, r)`, `held=True`, `where=fn`; `scene.count(...)` | robot |
 | `expect.soft` | `expect.soft(cube)...`: recorded, the test carries on and fails at the end | same |
 | `expect.poll`, `toPass` | `expect.poll(fn).to_equal(...)`, `expect(block).to_pass()` | same |
 | `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`, retried, with `.not_`, `.always`, soft, poll | same |

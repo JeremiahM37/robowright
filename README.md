@@ -683,7 +683,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | your app is under test, in a real browser | your controller, policy (`robot.run_policy`) or ROS 2 stack (the `ros2` fixture) drives the robot, in an engine, in Gazebo or on the arm (`--rw-backend ros2`) |
 | auto-waiting actions | `robot.arm.move_to(...)` returns only once the arm has settled; `gripper.close()` returns once the jaws have stalled |
 | web-first assertions | `expect(cube).to_be_inside(bin)` re-checks every control step until it holds or times out, in *simulated* time |
-| locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots |
+| locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots; filters on where things are now, as Playwright filters by what an element has: `scene.get(color="red", inside="bin")`, `on="tray"`, `touching="floor"`, `near=(point, radius)`, `held=True`, `where=fn`, and `scene.count(inside="bin")` |
 | trace viewer | every failure leaves a `.zip` trace with joints, object poses, contacts and the action timeline, viewable as HTML with camera views drawn from it, and a Source tab at the line of your test each action came from |
 | codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test; `robowright codegen --robot panda` writes one from what you do in a browser page |
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
