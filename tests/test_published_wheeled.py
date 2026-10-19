@@ -4,7 +4,9 @@ URDF with that environment's xacro). Nothing in their files is edited.
 
 Measured when this file was written, from settled rest, on the MuJoCo backend (deterministic: the same
 numbers each run). Drive: straight 0.1 and 0.2 m/s for 2 s; pivot 0.5 and 1.0 rad/s for 2 s; go_to three
-points. The tests assert wide bands around those measurements, not the accuracy a robot would need.
+points. The tests assert wide bands around those measurements, not the accuracy a robot would need. The drive
+tests run on PyBullet too, from the same measured drive (backends/wheels.py); where a TurtleBot 3 cannot turn
+there, the cause is measured below (TB3_CASTER).
 
 TurtleBot 4 straight line, measured (2 s, 0.2 m/s): it covered 76 % of the distance at 0.2 m/s and 89 % at
 0.1 m/s, with the wheels' rim speed equal to the commanded speed and no wheel torque near its limit (0.13 of
@@ -61,8 +63,20 @@ def _path(name):
     return str(path)
 
 
-def _settled(path):
-    w = rw.launch(robot=path, backend="mujoco")
+ENGINES = ["mujoco", "pybullet"]
+
+# Measured on PyBullet (deterministic): a TurtleBot 3 does not pivot or steer to a goal as its file has it. Its URDF's
+# caster is a fixed box (ROBOTIS's own Gazebo SDF model has a 5 mm sphere on a ball joint instead) at the default
+# friction, 1, and its wheels' torque limit is 0.162 N m. In Bullet's stiff contact the box scrapes the floor at full
+# friction and stalls the wheels in a turn: from rest, a 2 rad pivot at 1 rad/s turned the burger 1.24 rad and drifted
+# 45 mm; the waffle at 0.5 rad/s barely turned. MuJoCo's softer contact lets the box slide (1.84 and 1.98 rad). Straight
+# drives are unaffected (0.397 and 0.404 m of 0.4).
+TB3_CASTER = pytest.mark.xfail(strict=True, reason="TurtleBot 3's fixed box caster stalls its 0.162 N m wheels in a turn on Bullet")
+TB3_PYBULLET_TURNS = {("burger", 1.0), ("waffle", 0.5)}
+
+
+def _settled(path, engine="mujoco"):
+    w = rw.launch(robot=path, backend=engine)
     w.wait(1.0)  # the base settles on its wheels and caster before any command
     return w
 
@@ -86,8 +100,9 @@ def test_wheel_radius_and_track_match_the_published_figures(name):
 
 @pytest.mark.parametrize("name", list(MODELS))
 @pytest.mark.parametrize("speed", [0.1, 0.2])
-def test_straight_drive_goes_forward_without_drift(name, speed):
-    w = _settled(_path(name))
+@pytest.mark.parametrize("engine", ENGINES)
+def test_straight_drive_goes_forward_without_drift(name, speed, engine):
+    w = _settled(_path(name), engine)
     b = w.robot.base
     p0 = b.position.copy()
     b.drive(speed, 0.0, 2.0)
@@ -98,8 +113,11 @@ def test_straight_drive_goes_forward_without_drift(name, speed):
 
 @pytest.mark.parametrize("name", list(MODELS))
 @pytest.mark.parametrize("rate", [0.5, 1.0])
-def test_pivot_turns_on_the_spot_the_right_way(name, rate):
-    w = _settled(_path(name))
+@pytest.mark.parametrize("engine", ENGINES)
+def test_pivot_turns_on_the_spot_the_right_way(name, rate, engine, request):
+    if engine == "pybullet" and (name, rate) in TB3_PYBULLET_TURNS:
+        request.applymarker(TB3_CASTER)
+    w = _settled(_path(name), engine)
     b = w.robot.base
     p0, y0 = b.position.copy(), b.yaw
     b.drive(0.0, rate, 2.0)
@@ -109,18 +127,22 @@ def test_pivot_turns_on_the_spot_the_right_way(name, rate):
 
 
 @pytest.mark.parametrize("name", list(MODELS))
-def test_go_to_three_points_arrives(name):
+@pytest.mark.parametrize("engine", ENGINES)
+def test_go_to_three_points_arrives(name, engine, request):
+    if engine == "pybullet" and name in ("burger", "waffle"):
+        request.applymarker(TB3_CASTER)
     for goal in [(1.0, 0.0), (0.0, 1.0), (-0.5, -0.5)]:
-        w = _settled(_path(name))
+        w = _settled(_path(name), engine)
         w.robot.base.go_to(goal, yaw=0.0, timeout=60)  # ActionTimeoutError here would be a failure
         w.wait(1.0)
         assert float(np.linalg.norm(w.robot.base.position[:2] - np.array(goal))) < 0.05
 
 
 @pytest.mark.parametrize("name", list(MODELS))
-def test_a_goal_out_of_reach_in_the_time_given_times_out(name):
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_goal_out_of_reach_in_the_time_given_times_out(name, engine):
     """go_to does not hurry: a goal further than the time allows is ActionTimeoutError, not a hang."""
-    w = _settled(_path(name))
+    w = _settled(_path(name), engine)
     with pytest.raises(ActionTimeoutError):
         w.robot.base.go_to((3.0, 0.0), timeout=3.0)
 

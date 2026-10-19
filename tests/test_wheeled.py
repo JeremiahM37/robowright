@@ -54,8 +54,18 @@ def mjcf():
     return str(diffdrive_mjcf())
 
 
+_ENGINE = {"name": "mujoco"}
+
+
+@pytest.fixture(autouse=True, params=["mujoco", "pybullet"])
+def engine(request):
+    """Every test here on each engine that drives a wheeled base: the drive is measured once, from the model."""
+    _ENGINE["name"] = request.param
+    return request.param
+
+
 def _launch(path, **kw):
-    return rw.launch(robot=path, backend="mujoco", **kw)
+    return rw.launch(robot=path, backend=_ENGINE["name"], **kw)
 
 
 def test_the_diff_drive_is_a_mobile_robot_on_a_free_base(mjcf):
@@ -99,14 +109,15 @@ def test_a_mirrored_axle_is_measured_and_still_drives_forward(tmp_path, mjcf):
 
 
 def test_drive_covers_the_commanded_distance(mjcf):
-    """A straight drive is a little short of its command (the servos lag the setpoint when they start),
-    and it stays on its line."""
+    """A straight drive covers about its command and stays on its line. Measured over 0.4 m: the wheels' rims
+    rolled 0.399 m on both engines (the same servo); MuJoCo's soft contact carried the base 2.2 % less than its
+    rims rolled (0.390 m) and Bullet's 0.46 % more (0.401 m)."""
     w = _launch(mjcf)
     b = w.robot.base
     p0 = b.position.copy()
     b.drive(0.2, 0.0, 2.0)
     travelled = np.linalg.norm((b.position - p0)[:2])
-    assert 0.93 * 0.4 <= travelled <= 1.0 * 0.4
+    assert 0.93 * 0.4 <= travelled <= 1.02 * 0.4
     assert abs(b.yaw) < 0.01 and abs(b.position[1] - p0[1]) < 0.01
 
 
@@ -169,7 +180,7 @@ def test_go_to_has_no_avoidance_so_a_wall_in_the_way_times_out(mjcf):
 def test_traces_record_base_motions_and_codegen_emits_them(tmp_path, mjcf):
     from robowright.codegen import generate
 
-    w = rw.launch(robot=mjcf, backend="mujoco", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    w = _launch(mjcf, settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
     w.robot.base.drive(0.2, 0.0, 1.0)
     w.robot.base.go_to((0.5, 0.0), yaw=0.0, timeout=30)
     path = w.close(trace_path=tmp_path / "wheeled.zip")

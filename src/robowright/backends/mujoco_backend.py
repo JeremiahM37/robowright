@@ -367,17 +367,9 @@ class MujocoBackend(Backend):
         """Wheel speeds for a base moving at ``linear`` m/s forward, ``lateral`` m/s sideways and turning
         at ``angular`` rad/s (about +z, counter-clockwise). A differential base has two wheels and no
         sideways motion; an omni or mecanum base takes its wheel speeds from its measured rollers."""
-        w = self.wheels
-        if "matrix" in w:
-            self.set_ctrl(w["matrix"] @ np.array([linear, lateral, angular]))
-            return
-        if lateral:
-            raise CapabilityError(f"{self.robot_model.title}: a differential-drive base cannot move sideways (lateral {lateral} m/s)")
-        u = []
-        for wh in w["wheels"]:
-            forward = linear - angular * wh["y"]
-            u.append(wh["sign"] * forward / w["radius"])
-        self.set_ctrl(np.array(u))
+        from .wheels import speeds
+
+        self.set_ctrl(speeds(self.wheels, self.robot_model.title, linear, angular, lateral))
 
     def stop_base(self) -> None:
         self.set_ctrl(np.zeros(self.n_arm))

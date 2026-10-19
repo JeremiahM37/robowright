@@ -1852,8 +1852,10 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   otherwise, as two idealised joints (no wheel slip).
 - **Mobile robots:** behind ROS 2, robowright watches and drives a wheeled robot through its
   own stack (velocity commands, Nav2 goals). In its own simulation it drives differential-drive
-  bases on MuJoCo only, with no path planning and no obstacle avoidance. Omni bases are driven
-  but slip (see above); mecanum bases are untested (no published model with modelled rollers was
+  bases on MuJoCo and PyBullet (the same drive, measured once from the model, and the model's own wheel
+  servos), with no path planning and no obstacle avoidance. On PyBullet a TurtleBot 3 does not turn as
+  it should: its URDF's fixed box caster scrapes at full friction and stalls its weak wheels (measured,
+  `tests/test_published_wheeled.py`). Omni bases are driven on MuJoCo only, and slip (see above); mecanum bases are untested (no published model with modelled rollers was
   at hand), and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.

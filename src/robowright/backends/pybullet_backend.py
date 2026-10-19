@@ -27,6 +27,7 @@ from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
+from .wheels import WheeledDrive, torques
 
 POSITION_GAIN = 0.3  # PyBullet motor ERP: fraction of the position error corrected per step
 GRAVITY = 9.81
@@ -37,7 +38,7 @@ GEAR_ERP = 0.8  # fraction of a gear constraint's position drift corrected per s
 
 
 @register("pybullet")
-class PybulletBackend(Backend):
+class PybulletBackend(WheeledDrive, Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, RENDER, DETERMINISTIC, FORCES})
     # Not reusable: after p.restoreState the physics replays bit for bit, but the EGL renderer
     # keeps stale link poses (a restored YAM's camera image differs from a new build's), and
@@ -225,6 +226,30 @@ class PybulletBackend(Backend):
         self._label = {self.floor: "floor", self.robot: None, **{b: n for n, b in self._bodies.items()}}
         self._pending: dict[str, np.ndarray] = {}
         self._cams = {cs.name: cs for cs in spec.cameras}
+        if rm.family == "mobile":
+            from .wheels import measure
+
+            # The drive as MuJoCo measures this model, and its wheel motors as the model's velocity servos, applied
+            # as torque each step (step): the wheels' own Bullet motors are off, so only that torque turns them.
+            wheels, servo = measure(spec, seed)
+            if "matrix" in wheels:
+                # An omni or mecanum wheel rolls on passive rollers. Bullet's default motors hold them still, so the
+                # base cannot roll sideways; released, Robot Soccer Kit's rollers (millimetre links) blew the
+                # simulation apart at rest (the base 170 m away after 2 s). Observed, not driven, here.
+                self._drive_refused = (
+                    f"{rm.title}: an omni or mecanum base is not driven on PyBullet: its passive rollers are either held "
+                    "(no sideways rolling) or unstable at this scale. Drive it on MuJoCo"
+                )
+            else:
+                self.wheels, self._servo = wheels, servo
+                self._wheel_u = np.zeros(self.n_arm)
+                p.setJointMotorControlArray(self.robot, self._arm, p.VELOCITY_CONTROL, forces=[0.0] * self.n_arm, physicsClientId=c)
+            # The file's own friction for a link on the ground (a TurtleBot 4 caster's Gazebo mu1, 0.1), as MuJoCo
+            # gets it: Bullet multiplies the two bodies' coefficients, and the floor's is 1.
+            for link, mu in rm.ground_friction().items():
+                j = links.get(link, links.get(urdf._safe(link)))
+                if j is not None:
+                    p.changeDynamics(self.robot, j, lateralFriction=float(mu), physicsClientId=c)
         if rm.floating:
             yaw = rm.base_yaw
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)))
@@ -370,6 +395,10 @@ class PybulletBackend(Backend):
 
     def set_ctrl(self, target):
         target = np.asarray(target, float)
+        if self.robot_model.family == "mobile":  # the wheels' speed targets (rad/s): what drive_base sets, or a trace recorded
+            if hasattr(self, "_servo"):
+                self.set_wheel_speeds(target)
+            return
         arm = np.clip(target[: self.n_arm], self._lo, self._hi)
         self._ctrl = np.append(arm, np.clip(target[self.n_arm], 0, 1)) if self.has_gripper else arm
         self._ramp.set(self._ctrl)
@@ -434,7 +463,7 @@ class PybulletBackend(Backend):
             )
 
     def ctrl(self):
-        return self._ctrl.copy()
+        return self.wheel_command() if self.robot_model.family == "mobile" else self._ctrl.copy()
 
     def set_gain_scale(self, joint, scale):
         self._gain[self.joint_names.index(joint)] = POSITION_GAIN * scale
@@ -442,6 +471,11 @@ class PybulletBackend(Backend):
 
     def set_joint_positions(self, q):
         q = np.asarray(q, float)
+        if self.robot_model.family == "mobile":  # wheels placed, and stopped: a wheel's angle is not a speed to hold
+            for j, v in zip(self._arm, q[: self.n_arm]):
+                p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
+            self.stop_base()
+            return
         self._ramp.reset()  # placed, not moved: no ramp
         for j, v in zip(self._arm, q[: self.n_arm]):
             p.resetJointState(self.robot, j, float(v), 0.0, physicsClientId=self.cid)
@@ -512,6 +546,10 @@ class PybulletBackend(Backend):
                     else p.getLinkState(self.robot, j, physicsClientId=c)[0]
                 )
                 p.applyExternalForce(self.robot, j, [0, 0, weight], com, p.WORLD_FRAME, physicsClientId=c)
+            if hasattr(self, "_servo"):
+                speed = np.array([s[1] for s in p.getJointStates(self.robot, self._arm, physicsClientId=c)])
+                u = torques(self._servo, self._wheel_u, speed)
+                p.setJointMotorControlArray(self.robot, self._arm, p.TORQUE_CONTROL, forces=list(u), physicsClientId=c)
             for name, f in self._pending.items():
                 body = self.robot if name == "robot" else self._bodies[name]
                 pos, _ = p.getBasePositionAndOrientation(body, physicsClientId=self.cid)

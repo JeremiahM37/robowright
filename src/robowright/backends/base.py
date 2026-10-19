@@ -164,6 +164,15 @@ class Backend(ABC):
         """The wheels' velocity setpoints (rad/s) a mobile robot's control applies each step."""
         return np.zeros(self.robot_model.n_arm)
 
+    def drive_base(self, linear: float, angular: float, lateral: float = 0.0) -> None:
+        """Wheel speeds for the base moving at ``linear`` m/s, ``lateral`` m/s sideways, turning at ``angular`` rad/s."""
+        from ..errors import CapabilityError
+
+        raise CapabilityError(f"the {self.name} backend does not drive wheeled bases (MuJoCo, PyBullet and ROS 2 do)")
+
+    def stop_base(self) -> None:
+        """Stop the wheels (nothing to stop where the base is not driven)."""
+
     def set_base_pose(self, pos, quat) -> None:
         """Teleport the floating base (setup only), at rest."""
         raise NotImplementedError(f"{self.name} does not support floating-base robots")
