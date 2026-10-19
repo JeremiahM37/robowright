@@ -132,16 +132,17 @@ def test_the_wheels_imply_the_commanded_twist(path, cmd):
     w.backend.stop_base()
 
 
-# On MuJoCo the forward and sideways tests below are EXPECTED TO FAIL (strict xfail). The wheels do what the map says:
+# As published, on MuJoCo the forward and sideways tests below are EXPECTED TO FAIL (strict xfail). The wheels do what the map says:
 # the test above shows the spins imply the commanded twist. The base does not move with them, because the
 # rollers slip against the floor. Measured per wheel (wheel 1, 2, 3; slip along each rolling direction, m/s):
 #   forward 0.1 m/s: spins imply vx 0.099; base moves vx 0.060 and yaws -0.10 rad/s; slip -0.025, -0.023, +0.034
 #   sideways 0.1 m/s: spins imply vy 0.099; base moves vy 0.043 and yaws -0.11 rad/s; slip -0.053, +0.044, -0.006
-# A slip of this size in the published model is what limits it; the cause within MuJoCo's contacts is not isolated
-# (noslip iterations, integrator, floor friction x3 and roller frictionloss 0 did not close it).
+# The cause is the model's roller armature: each 3 g roller carries 0.005 of motor inertia (10^5 times its own), so it
+# cannot spin up as it rolls onto the floor. Genesis and Drake do not apply armature to it the same way and drive within
+# 3 %; adjusted fidelity takes it off ("free rollers") and MuJoCo then drives 98 % forward, 96 % sideways (tested below).
 _UNRESOLVED = (
-    "the rollers slip against the floor: forward 60 %, sideways 43 % of the commanded motion, "
-    "with per-wheel slip of 0.02-0.05 m/s (see the comment above)"
+    "as published, each roller carries the wheel motors' armature (10^5 times its own inertia), cannot spin up and slips: "
+    "forward 58 %, sideways 42 % of the commanded motion (adjusted fidelity frees them; see the comment above)"
 )
 
 
@@ -197,3 +198,25 @@ def test_pivot_turns_on_the_spot_the_right_way(path, engine):
     turned = (b.yaw - y0 + np.pi) % (2 * np.pi) - np.pi
     assert 0.90 * 2.0 <= turned <= 1.05 * 2.0
     assert float(np.linalg.norm((b.position - p0)[:2])) < 0.02
+
+
+@pytest.mark.parametrize("cmd", [(0.1, 0.0, 0.0), (0.0, 0.1, 0.0)], ids=["forward", "sideways"])
+def test_adjusted_fidelity_frees_the_rollers_and_mujoco_drives_as_commanded(path, cmd):
+    w = rw.launch(robot=path, backend="mujoco", settings=rw.Settings(fidelity="adjusted"))
+    assert any(c.what == "free rollers" and c.kind == "adjusted" for c in w.model_changes)
+    w.wait(1.0)
+    b = w.robot.base
+    p0 = b.position.copy()
+    b.drive(cmd[0], 0.0, 2.0, lateral=cmd[1])
+    fwd, side = _in_base_frame(b, b.position - p0)
+    want, other = (fwd, side) if cmd[0] else (side, fwd)
+    assert 0.90 * 0.2 <= want <= 1.05 * 0.2
+    assert abs(other) < 0.02
+
+
+def test_published_fidelity_keeps_the_rollers_as_modelled(path):
+    w = rw.launch(robot=path, backend="mujoco", settings=rw.Settings(fidelity="published"))
+    assert all(c.what != "free rollers" for c in w.model_changes)
+    m = w.backend.model
+    arm = [float(m.dof_armature[m.jnt_dofadr[k]]) for k in range(m.njnt) if "passive" in m.joint(k).name]
+    assert arm and min(arm) == pytest.approx(0.005)  # as the file has it

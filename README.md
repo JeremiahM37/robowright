@@ -446,8 +446,11 @@ the caster dragged at the floor's 1.0.) A base with omni wheels whose rollers ar
 sideways speed, `drive(linear, angular, duration, lateral=...)`, with the wheel map measured from
 the rollers, each wheel's lever for turning taken at the roller on the floor. On Menagerie's Robot
 Soccer Kit it pivots 97% of the command on MuJoCo, 99% on Genesis and 100% on Drake, and drives
-forward and sideways within 3% on Genesis and Drake; on MuJoCo the rollers slip on the floor in a
-straight line (60% forward, 43% sideways), which is not explained. `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
+forward and sideways within 3% on Genesis and Drake. On MuJoCo, as published, it slips in a straight
+line (58% forward, 42% sideways): the model gives each 3 g roller the wheel motors' armature, 10^5
+times its own inertia, so a roller cannot spin up as it rolls onto the floor. `--rw-fidelity
+adjusted` takes that off (recorded as the change "free rollers") and it drives 98% forward and 96%
+sideways. `robowright.assets.diffdrive_mjcf()` is a minimal differential-drive base of our own,
 for tests that need no particular robot: `rw.launch(robot=str(robowright.assets.diffdrive_mjcf()))`.
 
 ### Test in a simulation someone else built
@@ -1919,7 +1922,8 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   own friction against the floor (it takes the larger of two, with no per-pair override), so a TurtleBot
   4's 0.1 caster drags at the floor's 1.0 there: straight drives cover 77-82 % of the command. Omni bases
   are driven on MuJoCo, Genesis and Drake, not PyBullet (released, the rollers blow the simulation apart);
-  they slip in a straight line on MuJoCo (see above); mecanum bases are untested (no published model with modelled rollers was
+  as published they slip in a straight line on MuJoCo, from their rollers' armature (`--rw-fidelity adjusted`
+  frees them; see above); mecanum bases are untested (no published model with modelled rollers was
   at hand), and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.

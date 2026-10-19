@@ -199,6 +199,8 @@ class RobotModel:
                     a.biasprm[1] *= k
                     if a.biasprm[2] < 0:  # damping for the same damping ratio
                         a.biasprm[2] *= np.sqrt(k)
+        if self.family == "mobile":
+            _free_rollers(s, self.arm_joints, adjusted)
         _exclude_resting_contacts(s)
         if calibrated and self.grip_force is not None and self.has_gripper:
             fidelity.record(
@@ -319,6 +321,46 @@ class Derived:
 
 
 _OPTIONS = ("timestep", "iterations", "ls_iterations", "impratio", "integrator", "cone", "noslip_iterations")
+
+
+def _free_rollers(s: mujoco.MjSpec, wheels, adjusted: bool) -> None:
+    """Omni and mecanum rollers (unactuated hinges under a wheel) that carry motor inertia: a default class shared with
+    the wheel motors can give each 3 g roller the motors' armature, 10^5 times its own inertia, and then a roller cannot
+    spin up as it rolls onto the floor and the wheel slips (the Robot Soccer Kit moves 58 % of a forward command, 42 %
+    sideways; with its rollers free, 97 %). Adjusted mode takes that armature off; published mode leaves it."""
+    m = s.compile()
+    actuated = {int(m.actuator_trnid[a][0]) for a in range(m.nu) if m.actuator_trntype[a] == mujoco.mjtTrn.mjTRN_JOINT}
+    wheel_bodies = {int(m.jnt_bodyid[m.joint(w).id]) for w in wheels if _has_joint(m, w)}
+    heavy = []
+    for k in range(m.njnt):
+        b = int(m.jnt_bodyid[k])
+        if m.jnt_type[k] != mujoco.mjtJoint.mjJNT_HINGE or k in actuated or b in wheel_bodies:
+            continue
+        a = b
+        while a > 0 and a not in wheel_bodies:
+            a = int(m.body_parentid[a])
+        arm = float(m.dof_armature[m.jnt_dofadr[k]])
+        if a in wheel_bodies and arm > 100 * float(m.body_inertia[b].max()):
+            heavy.append((m.joint(k).name, arm, float(m.body_inertia[b].max())))
+    if not heavy:
+        return
+    fidelity.record(
+        "adjusted",
+        "free rollers",
+        f"{len(heavy)} passive wheel rollers' motor inertia (armature {heavy[0][1]:g}, the roller's own {heavy[0][2]:.2g}) taken off: "
+        "as modelled they cannot spin up and the wheels slip",
+    )
+    if adjusted:
+        for name, _, _ in heavy:
+            s.joint(name).armature = 0.0
+
+
+def _has_joint(m, name) -> bool:
+    try:
+        m.joint(name)
+        return True
+    except KeyError:
+        return False
 
 
 def _copy_options(src: mujoco.MjSpec, dst: mujoco.MjSpec) -> None:
