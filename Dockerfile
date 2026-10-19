@@ -17,7 +17,10 @@ ENV MUJOCO_GL=egl \
 
 COPY pyproject.toml README.md LICENSE NOTICE /opt/robowright/
 COPY src /opt/robowright/src
-RUN pip install --no-cache-dir "/opt/robowright[pybullet,video]" pytest-xdist
+# PyBullet has no wheel for this Python: it is compiled, and the compiler removed again in the same layer.
+RUN apt-get update && apt-get install -y --no-install-recommends g++ \
+    && pip install --no-cache-dir "/opt/robowright[pybullet,video]" pytest-xdist \
+    && apt-get purge -y g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
 CMD ["pytest"]
