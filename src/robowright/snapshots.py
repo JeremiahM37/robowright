@@ -44,17 +44,58 @@ def baseline_path(name: str, engine: str, robot: str, test_file: Path | None = N
     return f.parent / "__snapshots__" / f.stem / f"{_slug(stem)}-{_slug(engine)}-{_slug(robot)}{suffix}"
 
 
-def compare(actual: np.ndarray, expected: np.ndarray, threshold: float) -> tuple[int, np.ndarray | None]:
+MASK_COLOR = (255, 0, 255)
+
+
+def compare(actual: np.ndarray, expected: np.ndarray, threshold: float, mask: np.ndarray | None = None) -> tuple[int, np.ndarray | None]:
     """The number of pixels that differ by more than ``threshold`` (0..1 of full scale) in any channel,
-    and a diff image (the expected image greyed, changed pixels in red); None if the sizes differ."""
+    and a diff image (the expected image greyed, changed pixels in red, masked ones magenta); None if the sizes
+    differ. Pixels where ``mask`` is true are not compared."""
     if actual.shape != expected.shape:
         return -1, None
     delta = np.abs(actual.astype(np.int16) - expected.astype(np.int16)).max(axis=-1)
     changed = delta > threshold * 255
+    if mask is not None:
+        changed &= ~mask
     grey = expected[..., :3].mean(axis=-1, keepdims=True).astype(np.uint8)
     diff = np.repeat(grey // 3 + 170, 3, axis=-1)  # faded, so the red stands out
     diff[changed] = (220, 30, 30)
+    if mask is not None:
+        diff[mask] = MASK_COLOR
     return int(changed.sum()), diff
+
+
+def mask_of(world, subjects, camera: str, width: int, height: int, margin: float = 0.01, pad: int = 2) -> np.ndarray:
+    """Where ``subjects`` (scene objects, or their names) are in ``camera``'s image, as a boolean image: each one's
+    bounding box, ``margin`` metres wider for the shadow and shading it casts around itself, projected through the
+    camera robowright placed, so it is the same region on every engine."""
+    from .locators import as_subject
+
+    cam = next(c for c in world.spec.cameras if c.name == camera)
+    pos, look = np.asarray(cam.pos, float), np.asarray(cam.lookat, float)
+    fwd = (look - pos) / np.linalg.norm(look - pos)
+    right = np.cross(fwd, [0.0, 0.0, 1.0])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, fwd)
+    f = (height / 2) / np.tan(np.radians(cam.fovy) / 2)  # fovy is vertical
+    out = np.zeros((height, width), bool)
+    for s in subjects:
+        h = as_subject(world, s)
+        if not hasattr(h, "bounds"):
+            raise TypeError(f"mask takes scene objects or their names, not {h!r}")
+        lo, hi = h.bounds()
+        lo, hi = lo - margin, hi + margin
+        corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]) - pos
+        depth = corners @ fwd
+        if np.any(depth <= 1e-6):
+            continue  # behind the camera
+        u = width / 2 + f * (corners @ right) / depth
+        v = height / 2 - f * (corners @ up) / depth
+        u0, u1 = int(max(0, np.floor(u.min()) - pad)), int(min(width, np.ceil(u.max()) + pad))
+        v0, v1 = int(max(0, np.floor(v.min()) - pad)), int(min(height, np.ceil(v.max()) + pad))
+        if u0 < u1 and v0 < v1:
+            out[v0:v1, u0:u1] = True
+    return out
 
 
 def read(path: Path) -> np.ndarray:

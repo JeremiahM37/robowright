@@ -85,7 +85,7 @@ becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plai
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`, per engine and robot, with a diff | same |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: positions and joints as editable text | robot |
 | `--update-snapshots` | `--rw-update-snapshots` | same |
-| `mask` in screenshots | none | missing |
+| `mask` in screenshots | `to_match_snapshot(..., mask=["cube"])`: where the object is, now and in the baseline, left out | same |
 
 ## Network and services
 

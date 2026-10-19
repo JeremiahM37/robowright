@@ -1318,6 +1318,8 @@ and fails, so a missing baseline is never a pass: look at it, then run again. A 
 fails with the number of pixels that moved, and writes the actual image and a diff (changed
 pixels in red) next to the traces. `threshold` (per pixel, 0..1) and `max_diff_pixel_ratio`
 set what counts as the same view; `pytest --rw-update-snapshots` writes every baseline again.
+`mask=["cube"]` leaves an object out, as Playwright's `mask` does: its box (and a centimetre around it,
+for its shadow) projected into the image, where it is now and where it was in the baseline.
 
 `expect(world).to_match_state_snapshot("tidy")` does the same for the world's state, as
 Playwright's `toMatchAriaSnapshot` does for a page's structure: where every object is, the

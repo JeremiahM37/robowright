@@ -244,10 +244,14 @@ class Expectation:
         threshold: float = 0.2,
         max_diff_pixel_ratio: float = 0.0,
         timeout: float = 0.0,
+        mask=(),
+        mask_margin: float = 0.01,
     ):
         """What ``camera`` sees matches the image kept for this test: Playwright's ``toHaveScreenshot``.
         ``expect(world).to_match_snapshot("tidy.png")``. A pixel differs when a channel changes by more
-        than ``threshold`` of full scale; at most ``max_diff_pixel_ratio`` of them may. The baseline is
+        than ``threshold`` of full scale; at most ``max_diff_pixel_ratio`` of them may. ``mask`` (scene objects or
+        their names) leaves out where those objects are, now and in the baseline, as Playwright's ``mask`` does, with
+        ``mask_margin`` metres around each for the shadow it casts. The baseline is
         ``__snapshots__/<test file>/<name>-<engine>-<robot>.png``; the first run writes it and fails
         (check it, then run again), and ``pytest --rw-update-snapshots`` writes it again. See
         robowright.snapshots."""
@@ -263,23 +267,35 @@ class Expectation:
         path = snapshots.baseline_path(name, w.backend.name, w.spec.robot or "robot")
         width, height = size
         args = {"name": name, "camera": camera, "threshold": threshold, "max_diff_pixel_ratio": max_diff_pixel_ratio}
+        if mask:
+            args["mask"] = [getattr(m, "name", m) for m in mask]
         label = f"to_match_snapshot({name!r})"
+        mask_path = path.with_name(path.stem + ".mask.png")  # where the masked objects were in the baseline
         if snapshots.updating() or not path.exists():
             snapshots.write(path, w.backend.render(camera, width, height))
+            if mask:
+                region = snapshots.mask_of(w, mask, camera, width, height, mask_margin)
+                snapshots.write(mask_path, np.repeat(region[..., None], 3, -1).astype(np.uint8) * 255)
+            else:
+                mask_path.unlink(missing_ok=True)
             if snapshots.updating():
                 return self._run(label, lambda: (True, f"wrote {path}"), timeout, 0.0, args)
             missing = f"no snapshot {path} yet: wrote it from this run; look at it, then run again"
             return self._run(label, lambda: (False, missing), 0.0, 0.0, args)
         expected = snapshots.read(path)
+        was_masked = snapshots.read(mask_path)[..., 0] > 127 if mask and mask_path.exists() else None
         out = Path(w.settings.trace_dir) / "snapshots" / snapshots._slug(f"{w.name}-{Path(name).stem}")
 
         def check():
             actual = w.backend.render(camera, width, height)[..., :3]
-            n, diff = snapshots.compare(actual, expected, threshold)
+            masked = snapshots.mask_of(w, mask, camera, width, height, mask_margin) if mask else None
+            if masked is not None and was_masked is not None and was_masked.shape == masked.shape:
+                masked |= was_masked  # a masked object that moved: where it is now and where it was
+            n, diff = snapshots.compare(actual, expected, threshold, masked)
             if n < 0:
                 got, want = f"{actual.shape[1]}x{actual.shape[0]}", f"{expected.shape[1]}x{expected.shape[0]}"
                 return False, f"{camera} renders {got}, the snapshot is {want} ({path})"
-            ratio = n / (expected.shape[0] * expected.shape[1])
+            ratio = n / max(1, expected.shape[0] * expected.shape[1] - (int(masked.sum()) if masked is not None else 0))
             if ratio <= max_diff_pixel_ratio:
                 return True, f"{n} pixels differ ({ratio:.2%}) from {path}"
             a = snapshots.write(Path(f"{out}-actual.png"), actual)

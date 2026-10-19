@@ -136,3 +136,40 @@ def test_an_unreadable_state_snapshot_says_where():
 
     with pytest.raises(ValueError, match=r"x.state.txt:2: .*'cube: near'"):
         parse_state("objects:\n  cube: near\n", "x.state.txt")
+
+
+MASKED = """
+from pathlib import Path
+from robowright import expect
+
+def test_view(world):
+    if Path("move_cube").exists():
+        world.move_object("cube", (0.25, 0.10, 0.012))
+    world.step(5)
+    expect(world).to_match_snapshot("tidy.png", mask=["cube"])
+"""
+
+
+def test_a_masked_object_can_move_and_the_view_still_matches(pytester):
+    pytester.makepyfile(test_view=MASKED)
+    _run(pytester).assert_outcomes(failed=1)  # writes the baseline, and its mask
+    assert (pytester.path / "__snapshots__/test_view/tidy-mujoco-so101.mask.png").exists()
+    (pytester.path / "move_cube").write_text("")
+    _run(pytester).assert_outcomes(passed=1)  # where it was and where it is are both left out
+
+
+@pytest.mark.parametrize("engine", ["mujoco", "pybullet"])
+def test_the_mask_covers_the_object_in_the_image(engine):
+    """The mask is the object's box projected through the camera robowright placed: the red cube's pixels are inside."""
+
+    import robowright as rw
+    from robowright.snapshots import mask_of
+
+    w = rw.launch(backend=engine)
+    img = w.backend.render("front", 320, 240)[..., :3].astype(int)
+    red = (img[..., 0] > 150) & (img[..., 1] < 80) & (img[..., 2] < 80)
+    m = mask_of(w, ["cube"], "front", 320, 240)
+    assert red.sum() > 20  # the cube is in view
+    assert (red & ~m).sum() <= 0.02 * red.sum()  # inside the mask
+    assert m.sum() < 0.05 * m.size  # and the mask is not most of the image
+    w.close()
