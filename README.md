@@ -148,6 +148,20 @@ with ros2.run("ros2 launch my_robot nav.launch.py", route={"/scan": rw.route.fro
 `from_bag(path, topic=..., at=..., loop=True)` picks one of several topics, starts later, or
 starts over at the end.
 
+A controller that calls an HTTP service (a fleet manager, a map server, a cloud API) can be given a
+stand-in, as Playwright's `route.fulfill` answers a page's requests. Point its base URL at the stub:
+
+```python
+with rw.http_stub(
+    {
+        "GET /missions/next": {"id": 7, "pick": "cube", "place": "bin"},
+        "GET /map": rw.http_stub.status(503),  # the map server is down
+    }
+) as fleet:
+    run_my_controller(fleet_url=fleet.url)
+    assert fleet.called("GET /missions/next") and not fleet.unmatched
+```
+
 The same routes work on a controller that is not behind ROS 2, on what it reads and what it sends:
 
 ```python

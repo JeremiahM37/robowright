@@ -62,6 +62,7 @@ from .errors import (  # noqa: E402
     UnreachableError,
 )
 from .expect import condition, expect  # noqa: E402
+from .http_stub import http_stub  # noqa: E402
 from .locators import ObjectHandle, Point  # noqa: E402
 from .routes import route  # noqa: E402
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene, open_floor, tabletop  # noqa: E402
@@ -108,6 +109,7 @@ __all__ = [
     "condition",
     "expect",
     "route",
+    "http_stub",
     "ros2_stack",
     "Ros2Stack",
     "step",

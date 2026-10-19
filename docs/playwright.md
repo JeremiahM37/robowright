@@ -102,7 +102,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | Playwright | robowright | Status |
 |---|---|---|
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(...)})` for a ROS 2 stack's topics; `robot.run_policy(policy, route={"observation": ..., "action": ...})` for an in-process controller: drop, delay, cut, throttle, abort, edit. Not a controller's own serial or HTTP link to hardware | robot |
-| `route.fulfill` (mock an API) | `world.ros.serve("/detect", ..., answer)`: a stub ROS service or action | robot |
+| `route.fulfill` (mock an API) | `world.ros.serve("/detect", ..., answer)`: a stub ROS service or action; `rw.http_stub({"GET /missions/next": {...}})`: a stand-in HTTP service (fleet manager, map server, cloud API) any process can call, with every request recorded | robot |
 | `request` fixture (API testing) | `world.ros.call`, `send_goal`, `publish` | robot |
 | `recordHar`, `routeFromHAR` | `rw.route.record(bag)`, `rw.route.from_bag(bag)` (rosbags, including ones from the real robot) | robot |
 | fault injection | `world.faults`: pushes, delays, sensor noise, weak joints | robot (Playwright has none) |
