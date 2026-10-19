@@ -57,7 +57,8 @@ def test_paths_are_from_the_repository_root(pytester, monkeypatch):
     assert a.startswith("::error file=robot_tests/test_lip.py,line=11,")
 
 
-def test_a_flaky_test_is_a_warning(pytester):
+def test_a_flaky_test_is_a_warning(pytester, monkeypatch):
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(pytester.path))  # as on a runner: paths from the checkout
     pytester.makepyfile(
         test_once="""
 from pathlib import Path
