@@ -1,0 +1,56 @@
+{
+  "name": "robowright",
+  "displayName": "robowright",
+  "description": "Run robot tests from the editor: robowright's tests in the Test Explorer, each failure on its line with its trace, live view, and the UI mode.",
+  "version": "0.1.0",
+  "publisher": "jeremiahm37",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JeremiahM37/robowright"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Testing"],
+  "keywords": ["robotics", "pytest", "simulation", "testing", "ros2"],
+  "activationEvents": [
+    "workspaceContains:**/test_*.py",
+    "workspaceContains:**/robowright.toml"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "robowright.openUI", "title": "Open the UI (robowright test --ui)", "category": "robowright" },
+      { "command": "robowright.showTrace", "title": "Show trace", "category": "robowright" },
+      { "command": "robowright.refresh", "title": "Find the tests again", "category": "robowright" }
+    ],
+    "menus": {
+      "explorer/context": [
+        { "command": "robowright.showTrace", "when": "resourceExtname == .zip", "group": "navigation" }
+      ]
+    },
+    "configuration": {
+      "title": "robowright",
+      "properties": {
+        "robowright.python": {
+          "type": "string",
+          "default": "",
+          "description": "The Python with robowright installed. Empty: the Python extension's selected interpreter, else python3."
+        },
+        "robowright.pytestArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Arguments every run gets, as on the command line: test paths, --rw-robot panda,ur5e, --rw-backend mujoco,drake, ..."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "2.4.1"
+  }
+}

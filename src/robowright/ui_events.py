@@ -25,7 +25,9 @@ def _emit(record: dict) -> None:
 
 
 def pytest_collection_finish(session):
-    _emit({"event": "collected", "tests": [i.nodeid for i in session.items], "rootdir": str(session.config.rootpath)})
+    # where each test is (file relative to the rootdir, 0-based line), for an editor to put its result on
+    locations = {i.nodeid: [i.location[0], i.location[1]] for i in session.items}
+    _emit({"event": "collected", "tests": list(locations), "locations": locations, "rootdir": str(session.config.rootpath)})
 
 
 def pytest_runtest_logstart(nodeid, location):

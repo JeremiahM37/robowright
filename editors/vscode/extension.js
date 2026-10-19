@@ -1,0 +1,255 @@
+// robowright for VS Code: the project's robot tests in the Test Explorer, run with pytest and robowright's own
+// events plugin (robowright.ui_events, the one `robowright test --ui` uses), each failure on its line with a link to
+// its trace, which opens in an editor tab.
+"use strict";
+
+const vscode = require("vscode");
+const cp = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const net = require("net");
+const path = require("path");
+
+let controller, output, storage;
+const traces = new Map(); // test id -> the trace its last run wrote
+const results = new Map(); // test id -> its last outcome
+
+async function python() {
+  const set = vscode.workspace.getConfiguration("robowright").get("python");
+  if (set) return set;
+  try {
+    const ext = vscode.extensions.getExtension("ms-python.python");
+    if (ext) {
+      const api = ext.isActive ? ext.exports : await ext.activate();
+      const env = api.environments && api.environments.getActiveEnvironmentPath();
+      if (env && env.path) return env.path;
+    }
+  } catch (e) {
+    output.appendLine(`robowright: could not ask the Python extension for its interpreter (${e.message})`);
+  }
+  return "python3";
+}
+
+function root() {
+  const f = vscode.workspace.workspaceFolders;
+  return f && f.length ? f[0].uri.fsPath : undefined;
+}
+
+function args() {
+  return vscode.workspace.getConfiguration("robowright").get("pytestArgs") || [];
+}
+
+function events(file) {
+  try {
+    return fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map(l => {
+      try { return JSON.parse(l); } catch { return null; } // a line still being written
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function eventsFile(name) {
+  const f = path.join(storage, `${name}-${process.pid}-${Date.now()}.jsonl`);
+  try { fs.unlinkSync(f); } catch {}
+  return f;
+}
+
+function pytest(py, argv, eventsPath, cwd) {
+  const env = { ...process.env, ROBOWRIGHT_UI_EVENTS: eventsPath, PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" };
+  return cp.spawn(py, ["-m", "pytest", ...argv, "-p", "robowright.ui_events"], { cwd, env });
+}
+
+// --- finding the tests ---------------------------------------------------------------------------------------------
+let rootdir;
+
+async function discover() {
+  const cwd = root();
+  if (!cwd) return;
+  const py = await python();
+  const file = eventsFile("collect");
+  const xdist = a => /^-n/.test(a) || /^--(numprocesses|dist|maxprocesses)=/.test(a);
+  const argv = ["--collect-only", "-q", ...args().filter(a => !xdist(a))];
+  const text = await new Promise(resolve => {
+    const p = pytest(py, argv, file, cwd);
+    let out = "";
+    p.stdout.on("data", d => (out += d));
+    p.stderr.on("data", d => (out += d));
+    p.on("error", e => resolve(`could not start ${py}: ${e.message}`));
+    p.on("close", code => resolve(code === 0 || code === 5 ? "" : out));
+  });
+  const got = events(file).find(e => e.event === "collected");
+  try { fs.unlinkSync(file); } catch {}
+  if (!got) {
+    output.appendLine("robowright: the tests could not be listed:\n" + text);
+    return;
+  }
+  rootdir = got.rootdir;
+  const files = new Map();
+  for (const id of got.tests) {
+    const [rel, line] = (got.locations && got.locations[id]) || [id.split("::")[0], 0];
+    const fid = id.split("::")[0];
+    if (!files.has(fid)) {
+      const uri = vscode.Uri.file(path.join(rootdir, fid));
+      files.set(fid, controller.createTestItem(fid, fid, uri));
+    }
+    const name = id.split("::").slice(1).join("::") || id;
+    const item = controller.createTestItem(id, name, vscode.Uri.file(path.join(rootdir, rel)));
+    item.range = new vscode.Range(line, 0, line, 0);
+    files.get(fid).children.add(item);
+  }
+  controller.items.replace([...files.values()]);
+}
+
+// --- running them ------------------------------------------------------------------------------------------------
+function leaves(items) {
+  const out = [];
+  const walk = it => (it.children.size ? it.children.forEach(walk) : out.push(it));
+  items.forEach(walk);
+  return out;
+}
+
+function failureMessage(item, result) {
+  const md = new vscode.MarkdownString();
+  md.isTrusted = { enabledCommands: ["robowright.showTrace"] };
+  md.appendCodeblock(result.message || "failed", "text");
+  if (result.traces && result.traces.length) {
+    const a = encodeURIComponent(JSON.stringify([result.traces[0]]));
+    md.appendMarkdown(`\n[Show trace](command:robowright.showTrace?${a})`);
+  }
+  const m = new vscode.TestMessage(md);
+  if (item.uri && item.range) {
+    const line = lineOf(result.message, item.uri.fsPath);
+    m.location = new vscode.Location(item.uri, line !== undefined ? new vscode.Position(line, 0) : item.range);
+  }
+  return m;
+}
+
+// pytest's failure text ends with "path/to/test_x.py:13: Error": that line, in this test's file
+function lineOf(message, file) {
+  const base = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const found = [...String(message || "").matchAll(new RegExp(`${base}:(\\d+):`, "g"))];
+  return found.length ? Number(found[found.length - 1][1]) - 1 : undefined;
+}
+
+async function run(request, token, live) {
+  const cwd = root();
+  const run = controller.createTestRun(request);
+  const chosen = request.include ? leaves(request.include) : leaves(controller.items);
+  const skipped = new Set((request.exclude || []).flatMap(x => leaves([x]).map(i => i.id)));
+  const items = chosen.filter(i => !skipped.has(i.id));
+  const byId = new Map(items.map(i => [i.id, i]));
+  items.forEach(i => run.enqueued(i));
+  const ids = request.include ? items.map(i => i.id) : [];
+  const traceDir = path.join(storage, "traces");
+  const argv = [...args().filter(a => !(request.include && !a.startsWith("-") && fs.existsSync(path.join(cwd, a.split("::")[0])))), ...ids];
+  argv.push("--rw-trace", "on", "--rw-trace-dir", traceDir);
+  if (rootdir && !args().some(a => a.startsWith("--rootdir"))) argv.push("--rootdir", rootdir);
+  const livePort = live ? await freePort() : 0;
+  if (live) argv.push("--rw-live", String(livePort));
+  const file = eventsFile("run");
+  const py = await python();
+  const p = pytest(py, argv, file, cwd);
+  token.onCancellationRequested(() => p.kill("SIGTERM"));
+  p.stdout.on("data", d => run.appendOutput(String(d).replace(/\r?\n/g, "\r\n")));
+  // the live view starts with the first test that builds a world: open it once it answers
+  let opened = false;
+  const watchLive = live && setInterval(() => {
+    if (opened) return;
+    const s = net.connect(livePort, "127.0.0.1", () => {
+      s.end();
+      if (!opened) { opened = true; vscode.env.openExternal(vscode.Uri.parse(`http://127.0.0.1:${livePort}/`)); }
+    });
+    s.on("error", () => {});
+  }, 500);
+  p.stderr.on("data", d => run.appendOutput(String(d).replace(/\r?\n/g, "\r\n")));
+  let seen = 0;
+  const take = () => {
+    const all = events(file);
+    for (const e of all.slice(seen)) {
+      const item = byId.get(e.nodeid);
+      if (!item) continue;
+      if (e.event === "start") run.started(item);
+      if (e.event !== "result") continue;
+      if (e.traces && e.traces.length) traces.set(item.id, e.traces[0]);
+      results.set(item.id, e.outcome);
+      const ms = (e.duration || 0) * 1000;
+      if (e.outcome === "passed" || e.outcome === "xfailed") run.passed(item, ms);
+      else if (e.outcome === "skipped") run.skipped(item);
+      else run.failed(item, failureMessage(item, e), ms); // failed, flaky, xpassed
+    }
+    seen = all.length;
+  };
+  const timer = setInterval(take, 250);
+  const code = await new Promise(resolve => {
+    p.on("error", e => { run.appendOutput(`could not start ${py}: ${e.message}\r\n`); resolve(-1); });
+    p.on("close", resolve);
+  });
+  clearInterval(timer);
+  if (watchLive) clearInterval(watchLive);
+  take();
+  try { fs.unlinkSync(file); } catch {}
+  run.end();
+  return code;
+}
+
+function freePort() {
+  return new Promise(resolve => {
+    const srv = net.createServer();
+    srv.listen(0, "127.0.0.1", () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+}
+
+// --- traces ------------------------------------------------------------------------------------------------------
+async function showTrace(target) {
+  let zip = target instanceof vscode.Uri ? target.fsPath : target;
+  if (!zip) {
+    const picked = await vscode.window.showOpenDialog({ filters: { "robowright trace": ["zip"] }, defaultUri: vscode.Uri.file(path.join(root() || os.homedir(), "robowright-traces")) });
+    if (!picked || !picked.length) return;
+    zip = picked[0].fsPath;
+  }
+  const out = path.join(storage, `trace-${Date.now()}.html`);
+  const py = await python();
+  const res = cp.spawnSync(py, ["-m", "robowright.cli", "show-trace", zip, "-o", out, "--no-open"], { cwd: root(), encoding: "utf8" });
+  if (res.status !== 0 || !fs.existsSync(out)) {
+    vscode.window.showErrorMessage(`robowright: could not open the trace: ${(res.stderr || res.stdout || res.error || "").toString().slice(-500)}`);
+    return;
+  }
+  const panel = vscode.window.createWebviewPanel("robowrightTrace", path.basename(zip), vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
+  panel.webview.html = fs.readFileSync(out, "utf8");
+  try { fs.unlinkSync(out); } catch {}
+  return panel;
+}
+
+async function openUI() {
+  const py = await python();
+  const term = vscode.window.createTerminal({ name: "robowright UI", cwd: root() });
+  term.sendText([py, "-m", "robowright.cli", "test", "--ui", ...args()].map(a => (/[\s"'$]/.test(a) ? JSON.stringify(a) : a)).join(" "));
+  term.show();
+  return term;
+}
+
+function activate(context) {
+  storage = context.storageUri ? context.storageUri.fsPath : path.join(os.tmpdir(), "robowright-vscode");
+  fs.mkdirSync(storage, { recursive: true });
+  output = vscode.window.createOutputChannel("robowright");
+  controller = vscode.tests.createTestController("robowright", "robowright");
+  controller.resolveHandler = async item => { if (!item) await discover(); };
+  controller.refreshHandler = () => discover();
+  controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, (r, t) => run(r, t, false), true);
+  controller.createRunProfile("Run with live view", vscode.TestRunProfileKind.Run, (r, t) => run(r, t, true), false);
+  const watcher = vscode.workspace.createFileSystemWatcher("**/{test_*.py,*_test.py,conftest.py,pytest.ini,pyproject.toml,robowright.toml}");
+  watcher.onDidCreate(discover); watcher.onDidDelete(discover); watcher.onDidChange(discover);
+  context.subscriptions.push(
+    controller, output, watcher,
+    vscode.commands.registerCommand("robowright.showTrace", showTrace),
+    vscode.commands.registerCommand("robowright.openUI", openUI),
+    vscode.commands.registerCommand("robowright.refresh", discover),
+  );
+  // what the extension's own tests drive it through
+  return { controller, discover, run: (include, live = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live), traces, results, showTrace };
+}
+
+function deactivate() {}
+
+module.exports = { activate, deactivate, lineOf };

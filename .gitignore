@@ -14,3 +14,6 @@ bench/results/traces/
 MUJOCO_LOG.TXT
 demo.mp4
 site/
+editors/vscode/node_modules/
+editors/vscode/.vscode-test/
+editors/vscode/*.vsix
