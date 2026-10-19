@@ -290,6 +290,7 @@ class World:
         self.status = "failed" if failed else "passed"
         saved = None
         if self.trace and (self.settings.trace == "on" or (self.settings.trace == "retain-on-failure" and failed)):
+            self._begin()  # a test that failed before its first step: the trace still holds the world as it was
             path = trace_path or Path(self.settings.trace_dir) / f"{_safe(self.name)}.zip"
             saved = self.trace_path = self.trace.save(path)
         if self.settings.headed:

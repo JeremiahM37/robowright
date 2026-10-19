@@ -182,6 +182,8 @@ def generate(
         elif t == "edit" and e["name"] == "ros2_goal" and str(a.get("goal", "")).startswith("started: "):
             cmd = a["goal"].removeprefix("started: ").split(" (log ")[0]
             body.append(f"# the run started the code under test here, which a regenerated test cannot: with ros2.run({cmd!r}): ...")
+        elif t == "error":  # the original test's own code raised: not robowright's to write again
+            body.append(f"# the original test's own code raised here: {e['name']}")
         elif t == "fault":
             f = {k: v for k, v in a.items() if k != "type"}
             fn = {

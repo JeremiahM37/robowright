@@ -557,6 +557,11 @@ def world(request, rw_backend, rw_robot):
     yield w
     rep = getattr(item, "_rw_call_report", None)
     failed = rep is None or rep.failed
+    if failed and w.trace and not any(e.status == "failed" for e in w.trace.events):
+        # The test's own code raised (a name that is not in the scene, an assert of its own): the trace says what.
+        crash = getattr(getattr(rep, "longrepr", None), "reprcrash", None)
+        message = crash.message if crash is not None else "the test failed before it ran (in a fixture)"
+        w.trace.event("error", message.splitlines()[0][:300], status="failed", detail=message)
     path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid, _attempt(item)))
     if path and failed:
         item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))

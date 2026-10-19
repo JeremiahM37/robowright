@@ -428,3 +428,21 @@ def test_the_viewer_shows_the_source_at_the_selected_action(tmp_path):
         assert "w.robot.pick(" in page.inner_text(".src .at")
         browser.close()
     assert not errors
+
+
+def test_a_test_that_fails_before_its_first_step_leaves_a_readable_trace(pytester):
+    """A name the scene does not have: the trace holds the world as it was and the test's own error."""
+    pytester.makepyfile(
+        test_t="""
+def test_typo(robot, scene):
+    robot.pick(scene["cueb"])
+"""
+    )
+    pytester.runpytest("-p", "no:cacheprovider").assert_outcomes(failed=1)
+    tr = Trace(pytester.path / "robowright-traces" / "test_t.py__test_typo[mujoco].zip")
+    assert len(tr) == 1  # the world before anything ran
+    text = tr.summary()
+    assert "✗" in text and "KeyError" in text and "cueb" in text
+    assert "cube: at (" in text
+    code = generate(tr)
+    assert "# the original test's own code raised here: KeyError" in code

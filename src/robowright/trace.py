@@ -53,7 +53,7 @@ def _caller() -> tuple[str, int] | None:
 
 @dataclass
 class Event:
-    type: str  # action | expect | invariant | fault | log | edit | step
+    type: str  # action | expect | invariant | fault | log | edit | step | error (the test's own code raised)
     name: str
     step: int
     t: float
@@ -297,6 +297,8 @@ def _call(e: dict) -> str:
     args = dict(e.get("args") or {})
     if e["type"] == "step":
         return f"step {e['name']!r}"
+    if e["type"] in ("error", "log"):  # a message, not a call
+        return e["name"]
     if e["type"] == "expect":
         kw = {k: v for k, v in (args.get("kwargs") or {}).items() if v is not None}
         inner = ", ".join(f"{k}={val(v)}" for k, v in kw.items())
@@ -386,6 +388,15 @@ class Trace:
         and the state of the robot and the objects at the moment it failed (or at the end)."""
         m, a = self.meta, self.arrays
         failed = [e for e in self.events if e["status"] == "failed"]
+        if not len(self):  # saved before anything was recorded: what ran is still worth reading
+            return "\n".join(
+                [
+                    f"{m.get('name') or self.path.name}: {'FAILED' if self.failed else m.get('status', 'passed').upper()}",
+                    "  no simulation steps were recorded (it ended before the first)",
+                    "timeline:",
+                ]
+                + [f"  {'✗ ' if e['status'] == 'failed' else '  '}{_call(e)}" for e in self.events]
+            )
         at = min(failed[0]["step"], len(self) - 1) if failed else len(self) - 1
         lines = [
             f"{m.get('name') or self.path.name}: {'FAILED' if self.failed else m.get('status', 'passed').upper()}",
