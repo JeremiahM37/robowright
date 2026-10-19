@@ -54,10 +54,18 @@ def mjcf():
     return str(diffdrive_mjcf())
 
 
+def _installed(*engines):
+    """Each engine as a parameter, skipped where it is not installed (CI's unit jobs have MuJoCo and PyBullet)."""
+    from robowright.backends.base import available
+
+    have = available()
+    return [pytest.param(e, marks=pytest.mark.skipif(e not in have, reason=f"{e} is not installed")) for e in engines]
+
+
 _ENGINE = {"name": "mujoco"}
 
 
-@pytest.fixture(autouse=True, params=["mujoco", "pybullet", "genesis"])
+@pytest.fixture(autouse=True, params=_installed("mujoco", "pybullet", "genesis"))
 def engine(request):
     """Every test here on each engine that drives a wheeled base: the drive is measured once, from the model."""
     _ENGINE["name"] = request.param

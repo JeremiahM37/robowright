@@ -136,6 +136,15 @@ _UNRESOLVED = (
 # On Genesis, from the same measured map and servos, forward and sideways land within 3 % (0.194 and 0.195 m of 0.2);
 # the pivot turns 81 % (1.62 of 2 rad), as on MuJoCo (80 %): two engines agreeing points at the map's turn term or the
 # model rather than at either engine's contacts, and it is not isolated.
+def _installed(*engines):
+    """Each engine as a parameter, skipped where it is not installed (CI's unit jobs have MuJoCo and PyBullet)."""
+    from robowright.backends.base import available
+
+    have = available()
+    return [pytest.param(e, marks=pytest.mark.skipif(e not in have, reason=f"{e} is not installed")) for e in engines]
+
+
+ENGINES = _installed("mujoco", "genesis")
 _PIVOT_BOTH = "the pivot turns 81 % of the command on Genesis, as on MuJoCo (80 %); the cause is not isolated"
 
 
@@ -144,7 +153,7 @@ def _expect(request, engine, xfail_on):
         request.applymarker(pytest.mark.xfail(strict=True, reason=xfail_on[engine]))
 
 
-@pytest.mark.parametrize("engine", ["mujoco", "genesis"])
+@pytest.mark.parametrize("engine", ENGINES)
 def test_forward_drive_goes_forward_without_drift(path, engine, request):
     _expect(request, engine, {"mujoco": _UNRESOLVED})
     w = _settled(path, engine)
@@ -156,7 +165,7 @@ def test_forward_drive_goes_forward_without_drift(path, engine, request):
     assert abs(side) < 0.02
 
 
-@pytest.mark.parametrize("engine", ["mujoco", "genesis"])
+@pytest.mark.parametrize("engine", ENGINES)
 def test_sideways_drive_goes_sideways_without_drift(path, engine, request):
     _expect(request, engine, {"mujoco": _UNRESOLVED})
     w = _settled(path, engine)
@@ -168,7 +177,7 @@ def test_sideways_drive_goes_sideways_without_drift(path, engine, request):
     assert abs(fwd) < 0.02
 
 
-@pytest.mark.parametrize("engine", ["mujoco", "genesis"])
+@pytest.mark.parametrize("engine", ENGINES)
 def test_pivot_turns_on_the_spot_the_right_way(path, engine, request):
     _expect(request, engine, {"mujoco": _UNRESOLVED, "genesis": _PIVOT_BOTH})
     w = _settled(path, engine)
