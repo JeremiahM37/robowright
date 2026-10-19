@@ -58,6 +58,7 @@ from ..robots import urdf
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 from .mujoco_backend import bin_walls
+from .wheels import WheeledDrive, measure
 
 _DRAKE_NS = "http://drake.mit.edu"
 _DUMMY = re.compile(r"__j\d+$")  # intermediate links the exporter adds for multi-joint bodies
@@ -152,13 +153,18 @@ _RENDER_OK: bool | None = None
 
 
 @register("drake")
-class DrakeBackend(Backend):
+class DrakeBackend(WheeledDrive, Backend):
     capabilities = frozenset({GROUND_TRUTH, CONTACTS, STATE, DETERMINISTIC, FORCES})
     reusable = True
 
     def __init__(self, spec: SceneSpec, seed: int = 0):
         super().__init__(spec, seed)
         rm = self.robot_model
+        if rm.family == "mobile":
+            # The drive as MuJoCo measures this model, and each wheel as the model's velocity servo: a PD actuator with no
+            # position gain, kv as its damping gain and the torque limit as its effort, driven toward a speed (step).
+            self.wheels, self._servo = measure(spec, seed)
+            self._wheel_u = np.zeros(rm.n_arm)
         path, meta = urdf.load(rm)
         path = _drake_urdf(path)
         self.meta = meta
@@ -206,7 +212,10 @@ class DrakeBackend(Backend):
         if rm.floating:
             self.set_base_pose((*rm.base_pos[:2], rm.stand_height), (np.cos(rm.base_yaw / 2), 0, 0, np.sin(rm.base_yaw / 2)))
             self.set_joint_positions(rm.stand_q())
-        self.set_ctrl(self.qpos())
+        if hasattr(self, "_servo"):
+            self.stop_base()
+        else:
+            self.set_ctrl(self.qpos())
 
     # --- construction ---------------------------------------------------------
     def _build_world(self, spec: SceneSpec) -> None:
@@ -265,9 +274,10 @@ class DrakeBackend(Backend):
         driven = list(grip["driven"]) or ([grip["main"]] if "main" in grip else [])
         self._driven = driven
         gains: dict[str, tuple[float, float]] = {}
-        for n in rm.arm_joints:
+        wheels = getattr(self, "_servo", None)
+        for i, n in enumerate(rm.arm_joints):
             j = joints[n]
-            gains[n] = (j.get("kp", 100.0), j.get("kv", 0.0))
+            gains[n] = (0.0, float(wheels["kv"][i])) if wheels else (j.get("kp", 100.0), j.get("kv", 0.0))
         coupled = grip.get("coupled_effort", grip["effort"])  # the linkage follows the drivers here
         for n in driven:
             j = joints[n]
@@ -287,6 +297,9 @@ class DrakeBackend(Backend):
         for n, (kp, kv) in gains.items():
             j = joints[n]
             effort = coupled[n] if n in coupled else grip["effort"][n] if n in grip["joints"] else j["effort"]
+            if wheels and n in rm.arm_joints:
+                f = float(wheels["force"][rm.arm_joints.index(n)])
+                effort = f if np.isfinite(f) else 1e9
             a = plant.AddJointActuator(f"act:{urdf._safe(n)}", js(n), effort)
             a.set_default_rotor_inertia(j["armature"])
             a.set_default_gear_ratio(1.0)
@@ -380,10 +393,16 @@ class DrakeBackend(Backend):
         o = max((ob.friction for ob in self.spec.objects if not ob.static), default=1.0)
         plant, sg = self.plant, self.sg
         inspector = sg.model_inspector()
+        # A wheeled robot's link with its own friction on the ground in its file (a TurtleBot 4 caster's Gazebo mu1, 0.1):
+        # against the floor's 1, Drake's 2ab/(a+b) gives exactly that pair for a = mu / (2 - mu).
+        ground = {urdf._safe(k): v for k, v in self.robot_model.ground_friction().items()} if self.robot_model.family == "mobile" else {}
         for bi in plant.GetBodyIndices(self.robot):
+            body_mu = ground.get(plant.get_body(bi).name())
             for g in plant.GetCollisionGeometriesForBody(plant.get_body(bi)):
                 name = inspector.GetName(g).split("::")[-1]
                 mu = _matched_friction(meta["geoms"].get(name, {}).get("friction", 1.0), o)
+                if body_mu is not None:
+                    mu = body_mu / (2.0 - body_mu)
                 props = ProximityProperties(inspector.GetProximityProperties(g))
                 props.UpdateProperty("material", "coulomb_friction", CoulombFriction(mu, mu))
                 if fidelity.adjusted():
@@ -463,6 +482,9 @@ class DrakeBackend(Backend):
 
     def set_ctrl(self, target):
         target = np.asarray(target, float)
+        if hasattr(self, "_servo"):  # the wheels' speed targets (rad/s): what drive_base sets, or a trace recorded
+            self.set_wheel_speeds(target)
+            return
         arm = np.clip(target[: self.n_arm], self._arm_lo, self._arm_hi)
         g = float(np.clip(target[self.n_arm], 0.0, 1.0)) if self.has_gripper else 0.0
         self._ctrl = np.append(arm, g) if self.has_gripper else arm
@@ -476,7 +498,14 @@ class DrakeBackend(Backend):
         self._xd.GetMutableData().set_value(xd)  # ramped from the last step's in step()
 
     def ctrl(self):
-        return self._ctrl.copy()
+        return self.wheel_command() if hasattr(self, "_servo") else self._ctrl.copy()
+
+    def set_wheel_speeds(self, target) -> None:
+        super().set_wheel_speeds(target)
+        xd = np.zeros(2 * self._nact)  # desired positions (no gain on them) then desired velocities
+        for n, u in zip(self.robot_model.arm_joints, self._wheel_u):
+            xd[self._nact + self._act_index[urdf._safe(n)]] = u
+        self._xd.GetMutableData().set_value(xd)
 
     def set_gain_scale(self, joint, scale):
         i = self.joint_names.index(joint)
@@ -502,6 +531,9 @@ class DrakeBackend(Backend):
                 vv[self._finger_v[n]] = 0
         plant.SetPositions(self.pc, qq)
         plant.SetVelocities(self.pc, vv)
+        if hasattr(self, "_servo"):  # wheels placed, and stopped: a wheel's angle is not a speed to hold
+            self.stop_base()
+            return
         self.set_ctrl(q)
 
     def hand_pose(self):
@@ -549,7 +581,8 @@ class DrakeBackend(Backend):
             # Count steps rather than add up times, so every period has exactly the same substeps.
             self._k += 1
             sim.AdvanceTo(self._k * dt)
-        ramp.arrive()
+        if not hasattr(self, "_servo"):  # (a wheeled base has no ramped targets)
+            ramp.arrive()
         if self._pending:
             self._pending = {}
             plant.get_applied_spatial_force_input_port().FixValue(pc, [])
@@ -625,7 +658,8 @@ class DrakeBackend(Backend):
     def get_state(self):
         # The servo targets are part of the state, as in MuJoCo's integration state.
         x = self.context.get_discrete_state_vector().CopyToVector()
-        return np.concatenate([[self.context.get_time()], self._ctrl, self._gscale, x])
+        # ctrl(): a wheeled base's command is its wheel speeds
+        return np.concatenate([[self.context.get_time()], self.ctrl(), self._gscale, x])
 
     def set_state(self, state):
         state = np.asarray(state, float)

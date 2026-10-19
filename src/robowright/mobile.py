@@ -16,7 +16,7 @@ Nothing here plans or steers: ``drive`` publishes velocities on the base's comma
 ``go_to`` sends a goal to the robot's navigation stack (Nav2's NavigateToPose), which does the rest.
 Without a command topic or a navigation stack the action says so; the robot is observed all the same.
 
-On robowright's own engines (MuJoCo, PyBullet, Genesis) there is no navigation stack, so ``go_to`` is a turn-drive-turn
+On robowright's own engines (MuJoCo, PyBullet, Genesis, Drake) there is no navigation stack, so ``go_to`` is a turn-drive-turn
 controller on the ground-truth pose: it turns to face the goal, drives straight at it, and turns to
 the final heading. It has no path planning and no obstacle avoidance; a wall in the way makes it time
 out with ActionTimeoutError, as an unreachable goal does.

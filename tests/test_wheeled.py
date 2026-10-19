@@ -65,7 +65,7 @@ def _installed(*engines):
 _ENGINE = {"name": "mujoco"}
 
 
-@pytest.fixture(autouse=True, params=_installed("mujoco", "pybullet", "genesis"))
+@pytest.fixture(autouse=True, params=_installed("mujoco", "pybullet", "genesis", "drake"))
 def engine(request):
     """Every test here on each engine that drives a wheeled base: the drive is measured once, from the model."""
     _ENGINE["name"] = request.param
@@ -198,8 +198,12 @@ def test_traces_record_base_motions_and_codegen_emits_them(tmp_path, mjcf):
     assert re.search(r"robot\.base\.go_to\(xy=\[0\.5, 0\.0\], yaw=0\.0, timeout=30\)", code), code
 
 
-def test_a_wheeled_urdf_on_a_fixed_base_is_given_a_free_base_and_rolls(tmp_path):
+def test_a_wheeled_urdf_on_a_fixed_base_is_given_a_free_base_and_rolls(tmp_path, engine, request):
     """A URDF's wheeled base is fixed in the file, but a wheeled robot rolls: the converter gives it the free joint."""
+    if engine == "drake":
+        # Measured: 5.8 mm in 2 s. The fixture's box chassis rests on the floor with its wheels and Drake's contact
+        # holds it there against the wheels' 1 N m; the fixture, not the drive (the other wheeled robots drive on Drake).
+        request.applymarker(pytest.mark.xfail(strict=True, reason="the fixture's box chassis drags on the floor and stalls on Drake"))
     from robowright.robots.from_urdf import to_mjcf
     from robowright.robots.urdf import cache_root
 
@@ -212,5 +216,6 @@ def test_a_wheeled_urdf_on_a_fixed_base_is_given_a_free_base_and_rolls(tmp_path)
     p0 = w.robot.base.position.copy()
     w.robot.base.drive(0.2, 0.0, 2.0)
     # Only forward motion is asserted: this fixture's box chassis reaches the floor level with its wheels,
-    # so it drags, and covers 40 % of the command on MuJoCo (measured 0.16 of 0.4 m) and 18 % on Genesis (0.071 m).
+    # so it drags, and covers 40 % of the command on MuJoCo (measured 0.16 of 0.4 m) and 18 % on Genesis (0.071 m);
+    # on Drake it stalls (above).
     assert w.robot.base.position[0] - p0[0] > 0.05

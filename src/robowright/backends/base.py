@@ -168,7 +168,7 @@ class Backend(ABC):
         """Wheel speeds for the base moving at ``linear`` m/s, ``lateral`` m/s sideways, turning at ``angular`` rad/s."""
         from ..errors import CapabilityError
 
-        raise CapabilityError(f"the {self.name} backend does not drive wheeled bases (MuJoCo, PyBullet, Genesis and ROS 2 do)")
+        raise CapabilityError(f"the {self.name} backend does not drive wheeled bases (MuJoCo, PyBullet, Genesis, Drake and ROS 2 do)")
 
     def stop_base(self) -> None:
         """Stop the wheels (nothing to stop where the base is not driven)."""

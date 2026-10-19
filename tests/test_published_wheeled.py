@@ -70,7 +70,7 @@ def _installed(*engines):
     return [pytest.param(e, marks=pytest.mark.skipif(e not in have, reason=f"{e} is not installed")) for e in engines]
 
 
-ENGINES = _installed("mujoco", "pybullet", "genesis")
+ENGINES = _installed("mujoco", "pybullet", "genesis", "drake")
 
 
 def _settled(path, engine="mujoco"):

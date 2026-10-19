@@ -144,7 +144,7 @@ def _installed(*engines):
     return [pytest.param(e, marks=pytest.mark.skipif(e not in have, reason=f"{e} is not installed")) for e in engines]
 
 
-ENGINES = _installed("mujoco", "genesis")
+ENGINES = _installed("mujoco", "genesis", "drake")
 _PIVOT_BOTH = "the pivot turns 81 % of the command on Genesis, as on MuJoCo (80 %); the cause is not isolated"
 
 
@@ -179,7 +179,7 @@ def test_sideways_drive_goes_sideways_without_drift(path, engine, request):
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_pivot_turns_on_the_spot_the_right_way(path, engine, request):
-    _expect(request, engine, {"mujoco": _UNRESOLVED, "genesis": _PIVOT_BOTH})
+    _expect(request, engine, {"mujoco": _UNRESOLVED, "genesis": _PIVOT_BOTH, "drake": _PIVOT_BOTH})
     w = _settled(path, engine)
     b = w.robot.base
     p0, y0 = b.position.copy(), b.yaw

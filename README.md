@@ -1854,12 +1854,12 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   otherwise, as two idealised joints (no wheel slip).
 - **Mobile robots:** behind ROS 2, robowright watches and drives a wheeled robot through its
   own stack (velocity commands, Nav2 goals). In its own simulation it drives differential-drive
-  bases on MuJoCo, PyBullet and Genesis (the same drive, measured once from the model, and the model's
-  wheel servos), with no path planning and no obstacle avoidance. Genesis cannot give one link its own
-  friction against the floor (it takes the larger of two, with no per-pair override), so a TurtleBot 4's
-  0.1 caster drags at the floor's 1.0 there: straight drives cover 77-82 % of the command. Omni bases are
-  driven on MuJoCo and Genesis, not PyBullet (released, the rollers blow the simulation apart), and slip
-  on MuJoCo (see above); mecanum bases are untested (no published model with modelled rollers was
+  bases on MuJoCo, PyBullet, Genesis and Drake (the same drive, measured once from the model, and the
+  model's wheel servos), with no path planning and no obstacle avoidance. Genesis cannot give one link its
+  own friction against the floor (it takes the larger of two, with no per-pair override), so a TurtleBot
+  4's 0.1 caster drags at the floor's 1.0 there: straight drives cover 77-82 % of the command. Omni bases
+  are driven on MuJoCo, Genesis and Drake, not PyBullet (released, the rollers blow the simulation apart);
+  they slip on MuJoCo (see above), and pivot about 80 % of the command on all three; mecanum bases are untested (no published model with modelled rollers was
   at hand), and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.
