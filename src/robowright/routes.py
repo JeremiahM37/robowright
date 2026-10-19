@@ -299,6 +299,29 @@ class _FromBag(Route):
         return f"from_bag({self.path}, {self.bag_topic})"
 
 
+class ValueRelay:
+    """A route applied to values that are not ROS messages: a policy's observations and actions
+    (``robot.run_policy(policy, route={"observation": ..., "action": ...})``). ``send`` hands a value to the route at
+    a simulated time; ``receive`` gives the latest value due by then, or the last one delivered when nothing new has
+    arrived (a sensor that went quiet leaves its reader with a stale reading; a dropped command leaves the last one)."""
+
+    def __init__(self, route, rng):
+        self.route = as_route(route)
+        self.rng = rng
+        self._pending: list = []
+        self._order = itertools.count()
+        self.last = None
+
+    def send(self, value, now: float) -> None:
+        for delay, v in self.route._count(self.route.handle(value, now, self.rng), value):
+            heapq.heappush(self._pending, (now + delay, next(self._order), v))
+
+    def receive(self, now: float):
+        while self._pending and self._pending[0][0] <= now + 1e-9:
+            self.last = heapq.heappop(self._pending)[2]
+        return self.last
+
+
 def as_route(r) -> Route:
     if isinstance(r, Route):
         return r

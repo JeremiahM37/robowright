@@ -201,6 +201,8 @@ def generate(
                 body.extend(_policy_lines(a, imports))
                 kw = dict(a)
                 kw.pop("policy", None)
+                if kw.pop("route", None):  # a route can be the test's own function: not written again
+                    body.append("# the original run_policy had route=...: its routes are not written again")
                 until = kw.pop("until", None)
                 u = ""
                 if isinstance(until, dict) and "$condition" in until:

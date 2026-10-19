@@ -138,7 +138,20 @@ with ros2.run("ros2 launch my_robot nav.launch.py", route={"/scan": rw.route.fro
 ```
 
 `from_bag(path, topic=..., at=..., loop=True)` picks one of several topics, starts later, or
-starts over at the end. `ros2.routes` counts what was played and what live messages it held back.
+starts over at the end.
+
+The same routes work on a controller that is not behind ROS 2, on what it reads and what it sends:
+
+```python
+rollout = robot.run_policy(
+    my_policy,
+    until=done,
+    route={
+        "observation": rw.route.cut(at=2.0, duration=0.5),  # its sensors go quiet: it reads the last reading
+        "action": rw.route.delay(0.05) | rw.route.drop(0.1),  # late, lossy commands: the last one stands
+    },
+)
+``` `ros2.routes` counts what was played and what live messages it held back.
 
 ### Then the same tests against Gazebo or the real arm
 

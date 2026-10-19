@@ -1109,6 +1109,7 @@ class Robot:
         cameras=None,
         privileged: bool | None = None,
         hold: float = 0.0,
+        route: dict | None = None,
     ):
         """Run a policy (``obs -> joint targets`` or an action chunk) until ``until`` or ``timeout``.
 
@@ -1121,8 +1122,24 @@ class Robot:
         ``cameras`` and ``privileged`` default to what the policy says it needs (its
         ``cameras`` and ``privileged`` attributes, as a :class:`~robowright.learned.LearnedPolicy`
         has), else none.
+
+        ``route`` changes what the policy reads or sends on the way, as ``page.route`` does for a page and
+        ``ros2.run(route=...)`` for a ROS 2 stack: ``{"observation": r, "action": r}``, each ``r`` one of
+        ``rw.route.cut(at, duration)``, ``drop(p)``, ``delay(s)``, ``throttle(hz)``, ``abort()`` or a function
+        ``value -> value | None``, chained with ``|``. When nothing new gets through, the policy reads its last
+        observation again (a sensor gone quiet) and the robot keeps its last command (a lost command). What each
+        route passed, dropped and delayed is in the trace.
         """
         w = self.world
+        relays = {}
+        if route:
+            from .routes import ValueRelay
+
+            unknown = set(route) - {"observation", "action"}
+            if unknown:
+                raise ValueError(f"run_policy route keys are 'observation' and 'action', not {sorted(unknown)}")
+            relays = {k: ValueRelay(r, np.random.default_rng([w.seed, i])) for i, (k, r) in enumerate(sorted(route.items()))}
+        last_act = None
         cameras = tuple(getattr(policy, "cameras", ()) if cameras is None else cameras)
         privileged = bool(getattr(policy, "privileged", False) if privileged is None else privileged)
         image_size = getattr(policy, "image_size", None)
@@ -1144,18 +1161,30 @@ class Robot:
                     since = None
                 if not queue:
                     obs = self.observe(cameras, privileged, task, image_size)
-                    ti = _time.perf_counter()
-                    act = np.asarray(policy(obs), float)
-                    infer_ms.append((_time.perf_counter() - ti) * 1000)
-                    queue = list(act) if act.ndim == 2 else [act]
-                a = queue.pop(0)
-                self._target[: len(a)] = a
+                    if "observation" in relays:
+                        relays["observation"].send(obs, w.time)
+                        obs = relays["observation"].receive(w.time)
+                    if obs is not None:  # None: nothing has reached the policy yet; the robot holds
+                        ti = _time.perf_counter()
+                        act = np.asarray(policy(obs), float)
+                        infer_ms.append((_time.perf_counter() - ti) * 1000)
+                        if "action" in relays:
+                            relays["action"].send(act, w.time)
+                            got = relays["action"].receive(w.time)
+                            act, last_act = (None if got is last_act else got), got  # nothing new: the last command stands
+                        if act is not None:
+                            queue = list(act) if act.ndim == 2 else [act]
+                if queue:
+                    a = queue.pop(0)
+                    self._target[: len(a)] = a
                 w.step()
                 steps += 1
             else:
                 met = bool(until()) if until is not None else True
         finally:
             self._policy = False
+            for k, relay in relays.items():
+                w.log(f"route {k}: {relay.route.describe()}: {relay.route.stats}")
         return Rollout(met, steps, w.time - t0, _time.perf_counter() - wall0, infer_ms)
 
 
