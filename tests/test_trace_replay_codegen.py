@@ -446,3 +446,18 @@ def test_typo(robot, scene):
     assert "cube: at (" in text
     code = generate(tr)
     assert "# the original test's own code raised here: KeyError" in code
+
+
+def test_a_trace_exports_for_perfetto(tmp_path):
+    """robowright show-trace --perfetto: Chrome's trace event format (ui.perfetto.dev, chrome://tracing)."""
+    path, _ = _run(tmp_path, faults=False)
+    out = tmp_path / "t.json"
+    cli = [sys.executable, "-m", "robowright.cli", "show-trace", str(path), "--perfetto", str(out)]
+    r = subprocess.run(cli, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    events = json.loads(out.read_text())["traceEvents"]
+    spans = [e for e in events if e["ph"] == "X"]
+    assert any(e["name"].startswith("robot.pick(") and e["dur"] > 0 for e in spans)
+    assert all({"ts", "pid", "tid"} <= set(e) for e in spans)
+    counters = [e for e in events if e["ph"] == "C" and e["name"] == "joints (rad)"]
+    assert len(counters) == len(Trace(path)) and "shoulder_pan" in counters[0]["args"]

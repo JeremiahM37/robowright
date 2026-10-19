@@ -1310,6 +1310,11 @@ ros 2 log: 8 INFO, 1 WARN, 1 ERROR
      2.500s ERROR [route_node] failed to configure the controller
 ```
 
+`robowright show-trace trace.zip --perfetto run.json` writes it in Chrome's trace format, for
+[ui.perfetto.dev](https://ui.perfetto.dev) or `chrome://tracing`: every step, action and
+expectation as a span on the simulated clock, faults and logs as instants, and the joints and the
+contact count as counter tracks beside them.
+
 `pytest --rw-trace-text` (or `robowright show-trace --text trace.zip`) prints a trace as
 text, for a CI log or an AI agent:
 

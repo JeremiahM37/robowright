@@ -383,6 +383,34 @@ class Trace:
             pass
         return f"{file}:{line}" + (f": {code}" if code else "")
 
+    def chrome_trace(self) -> dict:
+        """The trace in Chrome's trace event format, for ui.perfetto.dev or chrome://tracing: every action, expectation
+        and step as a span on the simulated clock (1 s simulated = 1 s there), faults and logs as instants, and each
+        joint and the robot's contact count as counter tracks."""
+        us = 1e6
+        m, a = self.meta, self.arrays
+        tracks = {"step": 1, "action": 2, "expect": 3, "invariant": 3, "violation": 3, "error": 3}
+        names = {1: "steps", 2: "actions", 3: "expectations", 4: "faults and logs"}
+        out = [{"name": "process_name", "ph": "M", "pid": 1, "args": {"name": m.get("name") or self.path.name}}]
+        out += [{"name": "thread_name", "ph": "M", "pid": 1, "tid": tid, "args": {"name": n}} for tid, n in names.items()]
+        for e in self.events:
+            tid = tracks.get(e["type"], 4)
+            args = {"status": e["status"], **({"detail": e["detail"]} if e.get("detail") else {})}
+            if e.get("loc"):
+                args["at"] = f"{e['loc'][0]}:{e['loc'][1]}"
+            end = e.get("end_t")
+            if end is not None and end > e["t"]:
+                out.append({"name": _call(e), "ph": "X", "ts": e["t"] * us, "dur": (end - e["t"]) * us, "pid": 1, "tid": tid, "args": args})
+            else:
+                out.append({"name": _call(e), "ph": "i", "s": "t", "ts": e["t"] * us, "pid": 1, "tid": tid, "args": args})
+        joints = m.get("joint_names", [])
+        for i in range(len(self)):
+            t = float(a["t"][i]) * us
+            out.append({"name": "joints (rad)", "ph": "C", "ts": t, "pid": 1, "args": dict(zip(joints, map(float, a["qpos"][i])))})
+            if self.contacts and i < len(self.contacts):
+                out.append({"name": "contacts", "ph": "C", "ts": t, "pid": 1, "args": {"count": len(self.contacts[i])}})
+        return {"traceEvents": out, "displayTimeUnit": "ms", "metadata": {"robowright": m.get("robowright"), "backend": m["backend"]}}
+
     def summary(self, events: int = 40) -> str:
         """The trace as text, for a log, a terminal or an AI agent: what ran, what failed and why,
         and the state of the robot and the objects at the moment it failed (or at the end)."""

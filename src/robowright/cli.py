@@ -364,6 +364,15 @@ def _init(args, rest):
 
 
 def _show(args, rest):
+    if args.perfetto:
+        import json as _json
+
+        from .trace import Trace
+
+        out = Path(args.perfetto)
+        out.write_text(_json.dumps(Trace(args.trace).chrome_trace()))
+        print(f"{out}: open it in https://ui.perfetto.dev or chrome://tracing")
+        return 0
     if args.text:
         from .trace import Trace
 
@@ -761,6 +770,7 @@ def main(argv=None) -> int:
     s.add_argument("-o", "--out")
     s.add_argument("--no-open", action="store_true", help="write the HTML but do not open a browser")
     s.add_argument("--text", action="store_true", help="print what ran, what failed and the state at the failure, as text")
+    s.add_argument("--perfetto", metavar="OUT.json", help="write the trace for ui.perfetto.dev / chrome://tracing instead")
     mr = sub.add_parser("merge-reports", help="one HTML report from the blobs of a sharded run (pytest --rw-blob)")
     mr.add_argument("blobs", nargs="+", help="the blobs, one per shard")
     mr.add_argument("-o", "--output", default="report.html")
