@@ -1,0 +1,49 @@
+name: Release
+
+# Publishes robowright to PyPI when a version tag is pushed (git tag v0.1.0 && git push origin v0.1.0).
+# PyPI trusts this workflow directly (trusted publishing, OpenID Connect): no token or password is stored anywhere.
+# The tag must match the version in pyproject.toml, and CI must pass on the tagged commit first.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The tag is the package's version
+        run: |
+          want="v$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "$GITHUB_REF_NAME" = "$want" || { echo "tag $GITHUB_REF_NAME does not match pyproject.toml's $want"; exit 1; }
+      - run: pip install build==1.2.2 twine==6.0.1
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - name: The wheel installs and its quickstart passes
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
+          python -m venv /tmp/fresh && /tmp/fresh/bin/pip install dist/*.whl
+          mkdir /tmp/proj && cd /tmp/proj && /tmp/fresh/bin/robowright init && MUJOCO_GL=egl /tmp/fresh/bin/python -m pytest -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/robowright/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.12.4
