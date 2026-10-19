@@ -26,6 +26,7 @@ Options::
     --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
     --rw-report report.html          an HTML report of the run, each failure with its trace
     --rw-blob shard-2.zip            the run's results and traces in one zip, for robowright merge-reports
+    --rw-json results.json           the run's results as JSON
     --rw-fidelity published|adjusted robots as their model files have them (default), or with robowright's tuning
     --rw-live [PORT]                 watch each test live in a browser (http://127.0.0.1:8765)
     --rw-headed                      watch each test in MuJoCo's window as it runs, at real-time pace
@@ -40,6 +41,8 @@ Markers::
     @pytest.mark.robots("panda", "ur5e")         # restrict
     @pytest.mark.trials(20, min_success=0.9)     # up to 20 seeds, each with the scene randomized; judge the rate
     @pytest.mark.only                            # run only the tests marked so (Playwright's test.only)
+    @pytest.mark.fixme("why")                    # known broken: skipped, saying why (test.fixme)
+    pytestmark = pytest.mark.serial              # a module (or class) whose tests depend on each other
 """
 
 from __future__ import annotations
@@ -70,6 +73,7 @@ _TRACES = pytest.StashKey[list]()
 _REPORTS = pytest.StashKey[dict]()
 _LIVE = pytest.StashKey[object]()
 _CHANGED = pytest.StashKey[object]()  # --rw-only-changed: the test files to run, or None for all
+_SERIAL_FAILED = pytest.StashKey[set]()  # serial groups (module or class node ids) with a failed test
 _STARTED = pytest.StashKey[float]()  # when the run began (--rw-global-timeout)
 _STACK = pytest.StashKey[object]()  # this worker's ROS 2 stack ([ros2] stack), or None
 
@@ -150,6 +154,7 @@ def pytest_addoption(parser):
         metavar="PATH",
         help="write this run's results, traces included, to one zip, for robowright merge-reports (a sharded CI run)",
     )
+    g.addoption("--rw-json", metavar="PATH", help="write the run's results as JSON (Playwright's json reporter)")
     g.addoption(
         "--rw-timeout",
         type=float,
@@ -245,12 +250,19 @@ def pytest_configure(config):
     )
     config.addinivalue_line("markers", "xdist_group(name): pytest-xdist's grouping, set per robot and engine")
     config.addinivalue_line("markers", "rw_timeout(seconds): this test's time limit, wall clock, setup included (0: none)")
+    config.addinivalue_line("markers", "fixme(reason): a test known to be broken, skipped saying why (Playwright's test.fixme)")
+    config.addinivalue_line(
+        "markers",
+        "serial: the module's or class's tests depend on each other: they run in order on one worker, and once one fails "
+        "the rest are skipped (Playwright's serial mode)",
+    )
     config.addinivalue_line("markers", "only: run only the tests marked so (Playwright's test.only); --rw-forbid-only refuses it")
     config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
     from . import github
 
+    config.pluginmanager.register(_Skips(), "robowright-skips")
     summary = _Summary()
     summary.config = config
     summary.github = github.enabled(config.getoption("--rw-github", "auto"))  # decided once: a test may set the variable
@@ -428,6 +440,21 @@ def pytest_collection_modifyitems(config, items):
                 # other tests, and it is the longest: on its own it can start while they run.
                 group += f"-{item.originalname}"
             item.add_marker(pytest.mark.xdist_group(group))
+    serial_groups = set()
+    for item in items:  # a serial group runs on one worker, in order, whatever the robot and engine
+        serial = _serial_group(item)
+        if serial is not None:
+            serial_groups.add(serial)
+            item.add_marker(pytest.mark.xdist_group(f"serial-{serial}"), append=False)
+    dist = _dist(config)
+    if serial_groups and dist not in ("no", "loadgroup") and os.environ.get("PYTEST_XDIST_WORKER", "gw0") == "gw0":
+        warnings.warn(
+            pytest.PytestWarning(
+                f"serial tests ({', '.join(sorted(serial_groups))}) under --dist {dist} can run on different workers, "
+                "where one's failure is not seen by the rest: use --dist loadgroup"
+            ),
+            stacklevel=1,
+        )
 
 
 @pytest.fixture
@@ -695,6 +722,10 @@ def scene(world):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
+    if rep.failed and rep.outcome != "rerun":
+        group = _serial_group(item)
+        if group is not None:
+            item.config.stash.setdefault(_SERIAL_FAILED, set()).add(group)
     if rep.when == "call":
         item._rw_call_report = rep
         retry = _attempt(item) > 0  # a retry's trace is kept whatever it shows (on-first-retry records it)
@@ -761,6 +792,44 @@ def _other_threads(limit: int = 6) -> str:
         stack = traceback.extract_stack(frame)[-limit:]
         out.append(f"  thread {names.get(ident, ident)}:\n" + "".join(f"    {s.filename}:{s.lineno} in {s.name}\n" for s in stack))
     return "other threads:\n" + "".join(out) if out else ""
+
+
+class _Skips:
+    """fixme and serial skips, raised as pytest's own skip markers are: from a plain setup hook, before any fixture.
+    (Raised from the time limit's setup wrapper instead, the plugins wrapped inside it, logging and capture, never set
+    a test up, and their teardown then failed.)"""
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_setup(self, item):
+        fixme = item.get_closest_marker("fixme")
+        if fixme:
+            pytest.skip(f"fixme: {fixme.args[0] if fixme.args else 'known to be broken'}")
+        group = _serial_group(item)
+        if group is not None and group in item.config.stash.setdefault(_SERIAL_FAILED, set()):
+            pytest.skip(f"an earlier test in {group} failed, and its tests depend on each other (serial)")
+
+
+def _dist(config) -> str:
+    """xdist's distribution mode. A worker's own options say "no"; the controller's command line says what it is."""
+    argv = getattr(config, "workerinput", {}).get("mainargv")
+    if argv is None:
+        return getattr(config.option, "dist", "no")
+    for i, a in enumerate(argv):
+        if a == "--dist" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--dist="):
+            return a.split("=", 1)[1]
+    return "load"  # -n without --dist
+
+
+def _serial_group(item) -> str | None:
+    """The module or class marked serial that ``item`` belongs to (its node id), or None."""
+    node = item.parent
+    while node is not None and not isinstance(node, pytest.Session):
+        if any(m.name == "serial" for m in node.own_markers):
+            return node.nodeid
+        node = node.parent
+    return None
 
 
 def _global_timeout(session) -> None:
@@ -1015,6 +1084,10 @@ class _Summary:
         if out and self.run.tests:
             terminalreporter.section("robowright report")
             terminalreporter.line(str(self.run.write(out)))
+        js = terminalreporter.config.getoption("--rw-json", None)
+        if js:
+            terminalreporter.section("robowright json")
+            terminalreporter.line(str(self.run.save_json(js)))
         blob = terminalreporter.config.getoption("--rw-blob")
         if blob:  # written even for a shard with no tests: the report job expects one blob from each
             terminalreporter.section("robowright report blob")

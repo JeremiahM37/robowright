@@ -80,3 +80,63 @@ def test_expect_configure_sets_defaults():
     w._soft_failures.clear()
     assert slow.configure(soft=True)(w.scene["cube"]).soft
     w.close()
+
+
+SERIAL = """
+import pytest
+
+pytestmark = pytest.mark.serial
+
+def test_1_connect():
+    pass
+
+def test_2_calibrate():
+    assert False, "calibration failed"
+
+def test_3_pick():
+    pass
+
+def test_4_place():
+    pass
+"""
+
+OTHER = """
+import pytest
+
+@pytest.mark.fixme("the gripper slips on the new pads")
+def test_known_broken():
+    assert False
+
+def test_independent():
+    pass
+"""
+
+
+@pytest.mark.parametrize("workers", [[], ["-n", "3", "--dist", "loadgroup"]], ids=["serial-run", "xdist"])
+def test_a_serial_module_skips_the_rest_once_one_fails(pytester, workers):
+    if workers:
+        pytest.importorskip("xdist")
+    pytester.makepyfile(test_serial=SERIAL, test_other=OTHER)
+    r = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-rs", *workers)
+    r.assert_outcomes(passed=2, failed=1, skipped=3)  # 1 passes, 2 fails, 3 and 4 skipped; other: 1 skip, 1 pass
+    out = r.stdout.str()
+    assert "an earlier test in test_serial.py failed" in out
+    assert "fixme: the gripper slips on the new pads" in out
+
+
+def test_json_results(pytester):
+    import json
+
+    pytester.makepyfile(test_other=OTHER)
+    pytester.runpytest("-p", "no:cacheprovider", "--rw-json", "out/results.json")
+    doc = json.loads((pytester.path / "out" / "results.json").read_text())
+    assert doc["counts"] == {"skipped": 1, "passed": 1}
+    assert doc["tests"]["test_other.py::test_known_broken"]["outcome"] == "skipped"
+    assert "fixme" in doc["tests"]["test_other.py::test_known_broken"]["message"]
+
+
+def test_serial_tests_under_load_distribution_are_warned_about(pytester):
+    pytest.importorskip("xdist")
+    pytester.makepyfile(test_serial=SERIAL)
+    r = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-n", "2", "--dist", "load")
+    assert "use --dist loadgroup" in r.stdout.str()

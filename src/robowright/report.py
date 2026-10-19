@@ -126,6 +126,19 @@ class Run:
         )
         return out
 
+    def save_json(self, path: str | Path) -> Path:
+        """The results as JSON, for other tools (Playwright's json reporter): each test's outcome, duration, message,
+        traces, trials and attachments, and the counts by outcome."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        counts: dict[str, int] = {}
+        for t in self.tests.values():
+            counts[t["outcome"]] = counts.get(t["outcome"], 0) + 1
+        seconds = self.seconds if self.seconds is not None else time.time() - self.started
+        doc = {"format": 1, "seconds": round(seconds, 3), "counts": counts, "tests": self.tests}
+        path.write_text(json.dumps(doc, indent=2, default=str) + "\n")
+        return path
+
     def save_blob(self, path: str | Path) -> Path:
         """The results, with the trace and attachment files they name, in one zip (see the module)."""
         path = Path(path)

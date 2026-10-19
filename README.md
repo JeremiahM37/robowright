@@ -706,6 +706,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | blob reporter, `merge-reports` | `pytest --rw-shard 2/4 --rw-blob shard-2.zip` on each machine, then `robowright merge-reports shard-*.zip -o report.html`: one report of the whole run, each failure's trace carried inside its shard's zip |
 | retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |
 | `test.only`, `forbidOnly`, `globalTimeout` | `@pytest.mark.only`; `--rw-forbid-only` (on by itself when `CI` is set); `--rw-global-timeout 3600` |
+| `test.fixme`, serial mode, json reporter | `@pytest.mark.fixme("why")`; `pytestmark = pytest.mark.serial` (in order on one worker, the rest skipped once one fails); `--rw-json results.json` |
 | `expect.configure` | `expect.configure(timeout=10, soft=True)`: an `expect` with its own defaults |
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
 | `github` reporter | on a GitHub Actions runner, each failed test is an error annotation at the line of your test that failed (the trace's `show-trace` command in it), each flaky one a warning, on the pull request's diff; `--rw-github off` to stop it, `on` to see them anywhere |

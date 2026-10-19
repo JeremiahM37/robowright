@@ -28,6 +28,8 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `testInfo.attach` | `rw_attach("stack.log", path=...)`, `rw_attach.camera(world)` | same |
 | annotations: `skip`, `fail`, `fixme`, `slow`, tags | pytest markers: `skip`, `xfail(strict=True)`, custom markers with `-m` | same (pytest's) |
 | `test.only` | `@pytest.mark.only` runs only the marked tests | same |
+| `test.fixme` | `@pytest.mark.fixme("why")`: skipped, saying why | same |
+| serial mode (`describe.configure({mode: 'serial'})`) | `pytestmark = pytest.mark.serial` on a module or class: in order, on one worker (`--dist loadgroup`), the rest skipped once one fails | same |
 | parameterize | `pytest.mark.parametrize`; `--rw-robot`, `--rw-backend` run every test on each | same |
 | page object model | plain Python classes and fixtures | same |
 | statistical tests | `@pytest.mark.trials(20, min_success=0.9)`: randomized scenes, a success rate with confidence intervals | robot (Playwright has none) |
@@ -79,7 +81,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | HTML reporter, `show-report` | `--rw-report report.html`, `robowright show-report` | same |
 | blob reporter, `merge-reports` | `--rw-blob`, `robowright merge-reports` | same |
 | `github` reporter | annotations at the failing line on GitHub Actions, by itself | same |
-| JUnit, JSON reporters | pytest's `--junitxml`; pytest-json-report | same (pytest's) |
+| JUnit, JSON reporters | pytest's `--junitxml`; `--rw-json results.json` (every test's outcome, message, traces, trials and attachments) | same |
 | line, dot, list reporters | pytest's `-q`, `-v` | same (pytest's) |
 | custom reporters | pytest plugins and hooks | same (pytest's) |
 | `video` | `--rw-video retain-on-failure`, played in the HTML report | same |
