@@ -685,6 +685,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | blob reporter, `merge-reports` | `pytest --rw-shard 2/4 --rw-blob shard-2.zip` on each machine, then `robowright merge-reports shard-*.zip -o report.html`: one report of the whole run, each failure's trace carried inside its shard's zip |
 | retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
+| `--only-changed` | `pytest --rw-only-changed` (or `=main`): only the test files your uncommitted changes (or changes since `main`) can affect: changed tests, and tests importing a changed module, followed through the project's imports; a changed `conftest.py`, plugin, setting or robot model file runs everything |
 | `--headed` | `pytest --rw-live`: watch each test live in a browser (camera, joints, contacts, the current action); `--rw-headed`: MuJoCo's own window |
 | UI mode (`--ui`) | `robowright test --ui` (any pytest arguments): the suite by file in a browser; run everything, a file or one test with a click and see each result as it comes; every test's trace opens in place, the camera can be watched live as a test runs, and Watch runs again on every save |
 | watch mode | `robowright test --watch` (any pytest arguments): runs again on every save, only the changed test files when only tests changed and everything when your code, a robot model or the settings did; Enter runs everything |
@@ -1302,6 +1303,12 @@ and lists them at the end.
 fresh world with the same seed, as Playwright's `--repeat-each`. A simulator run is the same
 from the same seed, so repeats that disagree mean the test depends on something else: a ROS 2
 stack's timing, Gazebo's threads, the wall clock. The `rw_repeat` fixture says which run it is.
+
+`pytest --rw-only-changed` runs only the tests your uncommitted changes can affect, as
+Playwright's `--only-changed`: a changed test file, and every test that imports a changed module,
+directly or through others. `--rw-only-changed=main` counts everything since `main`, for a quick
+CI job on a branch. A changed `conftest.py`, pytest plugin, setting or model file could affect any
+test, so then every test runs, and a run with nothing to do passes.
 
 `pytest --rw-report report.html` writes one page for the whole run, Playwright's HTML
 report: every test with its outcome and time, trials with their rates, and each failure

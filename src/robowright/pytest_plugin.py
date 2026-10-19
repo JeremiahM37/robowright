@@ -18,6 +18,7 @@ Options::
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
     --rw-update-snapshots            write the images expect(world).to_match_snapshot compares against
     --rw-shard K/N                   run the K-th of N parts of the suite, one part per CI machine
+    --rw-only-changed [REF]          only the test files a change since REF (default HEAD) can affect, found from git
     --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
     --rw-report report.html          an HTML report of the run, each failure with its trace
     --rw-blob shard-2.zip            the run's results and traces in one zip, for robowright merge-reports
@@ -60,6 +61,7 @@ pytest.register_assert_rewrite("robowright.contract")
 _TRACES = pytest.StashKey[list]()
 _REPORTS = pytest.StashKey[dict]()
 _LIVE = pytest.StashKey[object]()
+_CHANGED = pytest.StashKey[object]()  # --rw-only-changed: the test files to run, or None for all
 _STACK = pytest.StashKey[object]()  # this worker's ROS 2 stack ([ros2] stack), or None
 
 
@@ -139,6 +141,15 @@ def pytest_addoption(parser):
         help="run the K-th of N parts of the suite (1-based), for N CI machines; every test is in exactly one part",
     )
     g.addoption(
+        "--rw-only-changed",
+        nargs="?",
+        const="HEAD",
+        default=None,
+        metavar="REF",
+        help="run only the test files that changes since the git commit REF (default HEAD: uncommitted changes) can "
+        "affect: changed tests, and tests importing a changed module; a changed conftest.py or setting runs every test",
+    )
+    g.addoption(
         "--rw-update-snapshots",
         action="store_true",
         help="write every image expect(world).to_match_snapshot compares against, from this run",
@@ -159,6 +170,16 @@ def pytest_configure(config):
         except (ValueError, KeyError) as e:
             raise pytest.UsageError(f"--rw-robot: {e}") from None
     _shard(config)  # a malformed --rw-shard is said before anything runs
+    ref = config.getoption("--rw-only-changed", None)
+    if ref:
+        from . import changed
+
+        try:
+            files = changed.changed_files(ref, config.rootpath)
+        except changed.GitError as e:
+            raise pytest.UsageError(f"--rw-only-changed {ref}: {e}") from None
+        plugins = {Path(f).resolve() for m in config.pluginmanager.get_plugins() if (f := getattr(m, "__file__", None))}
+        config.stash[_CHANGED] = changed.affected(files, config.rootpath, plugins)
     mode = config.getoption("--rw-fidelity", None)
     if mode:
         _set_env(config, fidelity.ENV, mode)
@@ -188,6 +209,17 @@ def pytest_configure(config):
         # kind, at the end of the run; robowright's own order (pytest_collection_modifyitems)
         # starts those first.
         config.option.loadscopereorder = False
+
+
+def pytest_report_header(config):
+    ref = config.getoption("--rw-only-changed", None)
+    if not ref:
+        return None
+    wanted = config.stash.get(_CHANGED, None)
+    if wanted is None:
+        return f"robowright: --rw-only-changed {ref}: a conftest.py, plugin, setting or model file changed, so every test runs"
+    names = sorted(os.path.relpath(p, config.rootpath) for p in wanted)
+    return f"robowright: --rw-only-changed {ref}: {len(names)} test file(s) affected" + "".join(f"\n    {n}" for n in names)
 
 
 def _shard(config) -> tuple[int, int] | None:
@@ -278,9 +310,10 @@ def pytest_generate_tests(metafunc):
 
 def pytest_sessionfinish(session, exitstatus):
     """A shard that the hash dealt no tests (a small suite over many machines) has passed, as Playwright's does: pytest's
-    "no tests collected" (5) would fail that CI job for having nothing to do. With ``--rw-fail-on-flaky`` a flaky test
-    fails a run that otherwise passed."""
-    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and _shard(session.config) is not None:
+    "no tests collected" (5) would fail that CI job for having nothing to do; so has --rw-only-changed with no change.
+    With ``--rw-fail-on-flaky`` a flaky test fails a run that otherwise passed."""
+    nothing_to_do = _shard(session.config) is not None or session.config.stash.get(_CHANGED, None) is not None
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and nothing_to_do:
         session.exitstatus = pytest.ExitCode.OK
     summary = session.config.pluginmanager.get_plugin("robowright-summary")
     if session.config.getoption("--rw-fail-on-flaky", False) and summary is not None and summary.flaky:
@@ -297,6 +330,12 @@ def pytest_collection_modifyitems(config, items):
     result. Ordered and grouped, the tests that share a scene run one after another in one
     process and reuse it, instead of every robot's scene being built for every test.
     """
+    wanted = config.stash.get(_CHANGED, None)
+    if wanted is not None:
+        dropped = [i for i in items if Path(i.path).resolve() not in wanted]
+        if dropped:
+            config.hook.pytest_deselected(items=dropped)
+            items[:] = [i for i in items if Path(i.path).resolve() in wanted]
     shard = _shard(config)
     if shard is not None:
         k, n = shard
