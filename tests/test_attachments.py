@@ -21,5 +21,8 @@ def test_attachments_are_in_the_report(pytester):
     assert (att / "stack.log").read_text() == "[INFO] controller up"
     assert (att / "start.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     page = (pytester.path / "out" / "report.html").read_text()
-    assert '<img src="../robowright-traces/attachments/test_att.py__test_with_attachments[mujoco]/start.png"' in page
+    # The report keeps its own copy beside it (report-traces/attachments), so it is shared as one folder.
+    src = page.split('<img src="', 1)[1].split('"', 1)[0]
+    assert src.startswith("report-traces/attachments/") and src.endswith("start.png")
+    assert (pytester.path / "out" / src).read_bytes() == (att / "start.png").read_bytes()
     assert ">notes.txt</a>" in page and ">stack.log</a>" in page
