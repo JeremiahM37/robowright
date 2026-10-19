@@ -1921,9 +1921,9 @@ robowright check --robot my_arm --backend mujoco,drake    # the contract every r
   model's wheel servos), with no path planning and no obstacle avoidance. Genesis cannot give one link its
   own friction against the floor (it takes the larger of two, with no per-pair override), so a TurtleBot
   4's 0.1 caster drags at the floor's 1.0 there: straight drives cover 77-82 % of the command. Omni bases
-  are driven on MuJoCo, Genesis and Drake, not PyBullet (released, the rollers blow the simulation apart);
-  as published they slip in a straight line on MuJoCo, from their rollers' armature (`--rw-fidelity adjusted`
-  frees them; see above); mecanum bases are untested (no published model with modelled rollers was
+  are driven on all four built-in engines; as published they slip in a straight line on MuJoCo and PyBullet,
+  from their rollers' armature (`--rw-fidelity adjusted` frees them, and both then drive within 6 %; see above);
+  mecanum bases are untested (no published model with modelled rollers was
   at hand), and there is no localisation (the estimate is the true pose).
 - **No walking controller:** legged robots stand, crouch and recover from shoves on their
   joint servos; locomotion has to come from a policy.

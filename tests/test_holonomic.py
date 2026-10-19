@@ -146,6 +146,14 @@ _UNRESOLVED = (
 )
 
 
+# PyBullet's converted model folds the rollers' armature into their inertia: the same flywheels, 29 % forward and 54 %
+# sideways as published; with adjusted fidelity 101 %, 94 % and a 95 % pivot.
+_FLYWHEELS = (
+    "as published, PyBullet's converted rollers carry the wheel motors' armature as inertia, cannot spin up and slip "
+    "(adjusted fidelity frees them)"
+)
+
+
 # The pivot turned 80-82 % on every engine until the map's turn term took each wheel's lever from where its floor roller
 # is (57.2 mm from the centre) rather than its joint's anchor (47.2 mm); it now turns 97 % (MuJoCo), 99 % (Genesis) and
 # 100 % (Drake). On Genesis and Drake forward and sideways land within 3 %.
@@ -157,7 +165,7 @@ def _installed(*engines):
     return [pytest.param(e, marks=pytest.mark.skipif(e not in have, reason=f"{e} is not installed")) for e in engines]
 
 
-ENGINES = _installed("mujoco", "genesis", "drake")
+ENGINES = _installed("mujoco", "pybullet", "genesis", "drake")
 
 
 def _expect(request, engine, xfail_on):
@@ -167,7 +175,7 @@ def _expect(request, engine, xfail_on):
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_forward_drive_goes_forward_without_drift(path, engine, request):
-    _expect(request, engine, {"mujoco": _UNRESOLVED})
+    _expect(request, engine, {"mujoco": _UNRESOLVED, "pybullet": _FLYWHEELS})
     w = _settled(path, engine)
     b = w.robot.base
     p0 = b.position.copy()
@@ -179,7 +187,7 @@ def test_forward_drive_goes_forward_without_drift(path, engine, request):
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_sideways_drive_goes_sideways_without_drift(path, engine, request):
-    _expect(request, engine, {"mujoco": _UNRESOLVED})
+    _expect(request, engine, {"mujoco": _UNRESOLVED, "pybullet": _FLYWHEELS})
     w = _settled(path, engine)
     b = w.robot.base
     p0 = b.position.copy()
@@ -200,9 +208,10 @@ def test_pivot_turns_on_the_spot_the_right_way(path, engine):
     assert float(np.linalg.norm((b.position - p0)[:2])) < 0.02
 
 
+@pytest.mark.parametrize("engine", _installed("mujoco", "pybullet"))
 @pytest.mark.parametrize("cmd", [(0.1, 0.0, 0.0), (0.0, 0.1, 0.0)], ids=["forward", "sideways"])
-def test_adjusted_fidelity_frees_the_rollers_and_mujoco_drives_as_commanded(path, cmd):
-    w = rw.launch(robot=path, backend="mujoco", settings=rw.Settings(fidelity="adjusted"))
+def test_adjusted_fidelity_frees_the_rollers_and_the_base_drives_as_commanded(path, cmd, engine):
+    w = rw.launch(robot=path, backend=engine, settings=rw.Settings(fidelity="adjusted"))
     assert any(c.what == "free rollers" and c.kind == "adjusted" for c in w.model_changes)
     w.wait(1.0)
     b = w.robot.base

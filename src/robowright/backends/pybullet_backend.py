@@ -232,17 +232,17 @@ class PybulletBackend(WheeledDrive, Backend):
             # The drive as MuJoCo measures this model, and its wheel motors at the model's torque limit (step).
             wheels, servo = measure(spec, seed)
             if "matrix" in wheels:
-                # An omni or mecanum wheel rolls on passive rollers. Bullet's default motors hold them still, so the
-                # base cannot roll sideways; released, Robot Soccer Kit's rollers (millimetre links) blew the
-                # simulation apart at rest (the base 170 m away after 2 s). Observed, not driven, here.
-                self._drive_refused = (
-                    f"{rm.title}: an omni or mecanum base is not driven on PyBullet: its passive rollers are either held "
-                    "(no sideways rolling) or unstable at this scale. Drive it on MuJoCo"
-                )
-            else:
-                self.wheels, self._servo = wheels, servo
-                self._wheel_u = np.zeros(self.n_arm)
-                self._wheel_force = np.where(np.isfinite(servo["force"]), servo["force"], 1e9)
+                # An omni or mecanum wheel rolls on passive rollers, which Bullet's default motors hold still (no
+                # sideways rolling): they are let turn freely, as in the model. The converted model folds a joint's
+                # armature into its link's inertia, so rollers that carry the wheel motors' armature turn like
+                # flywheels and slip as they do on MuJoCo, unless adjusted fidelity frees them ("free rollers").
+                arm = set(self._arm)
+                for j in range(p.getNumJoints(self.robot, physicsClientId=c)):
+                    if j not in arm and p.getJointInfo(self.robot, j, physicsClientId=c)[2] == p.JOINT_REVOLUTE:
+                        p.setJointMotorControl2(self.robot, j, p.VELOCITY_CONTROL, force=0, physicsClientId=c)
+            self.wheels, self._servo = wheels, servo
+            self._wheel_u = np.zeros(self.n_arm)
+            self._wheel_force = np.where(np.isfinite(servo["force"]), servo["force"], 1e9)
             # The file's own friction for a link on the ground (a TurtleBot 4 caster's Gazebo mu1, 0.1), as MuJoCo
             # gets it: Bullet multiplies the two bodies' coefficients, and the floor's is 1.
             for link, mu in rm.ground_friction().items():

@@ -52,8 +52,6 @@ class WheeledDrive:
     ``self._wheel_u`` (the targets, rad/s) and sends those targets to its wheel motors each physics step."""
 
     def drive_base(self, linear: float, angular: float, lateral: float = 0.0) -> None:
-        if getattr(self, "_drive_refused", None):
-            raise CapabilityError(self._drive_refused)
         if not hasattr(self, "_servo"):  # not a wheeled robot
             return super().drive_base(linear, angular, lateral)
         self.set_wheel_speeds(speeds(self.wheels, self.robot_model.title, linear, angular, lateral))
