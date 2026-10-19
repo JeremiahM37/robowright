@@ -5,8 +5,9 @@ The measurement (each wheel's radius, where it sits on the base, which way it tu
 or mecanum base, the matrix from the base's twist to its wheel speeds) is MuJoCo's backend's own, run on the same
 scene at rest, so every engine drives a robot from the same numbers. A wheel's motor is the model's velocity
 actuator: torque kv * (target - speed), limited to its force range, with the target limited to its control range.
-An engine applies that torque each physics step, rather than its own velocity motor, so a wheel pulls with the
-model's force, not with whatever stiffness the engine's motor has.
+Each engine runs it with its own implicit velocity control, as MuJoCo does (Genesis at the model's kv and torque
+limit; Bullet's motor at the torque limit, holding speed more stiffly than kv). The servo law applied as explicit
+torque each physics step chattered between its torque limits on light wheels, so no engine does that.
 """
 
 from __future__ import annotations
@@ -46,14 +47,9 @@ def speeds(wheels: dict, title: str, linear: float, angular: float, lateral: flo
     return np.array([wh["sign"] * (linear - angular * wh["y"]) / wheels["radius"] for wh in wheels["wheels"]])
 
 
-def torques(servo: dict, target: np.ndarray, speed: np.ndarray) -> np.ndarray:
-    """The wheels' motor torques this step: the velocity servo's law."""
-    return np.clip(servo["kv"] * (target - speed), -servo["force"], servo["force"])
-
-
 class WheeledDrive:
     """``drive_base``/``stop_base``/``wheel_command`` for a backend that keeps ``self.wheels``, ``self._servo`` and
-    ``self._wheel_u`` (the targets, rad/s) and applies :func:`torques` each physics step."""
+    ``self._wheel_u`` (the targets, rad/s) and sends those targets to its wheel motors each physics step."""
 
     def drive_base(self, linear: float, angular: float, lateral: float = 0.0) -> None:
         if getattr(self, "_drive_refused", None):
