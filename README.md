@@ -46,6 +46,14 @@ uv pip install "robowright @ git+https://github.com/JeremiahM37/robowright"   # 
 robowright info                                    # sanity check: versions, engines, offscreen rendering
 ```
 
+Or in Docker, with nothing installed but Docker (MuJoCo and PyBullet, rendering on the CPU):
+
+```bash
+docker build -t robowright https://github.com/JeremiahM37/robowright.git
+docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work robowright robowright init .
+docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/work robowright    # pytest
+```
+
 ### Test your controller or policy
 
 A policy is anything that maps an observation to joint targets: a function, a class, or a

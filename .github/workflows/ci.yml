@@ -76,6 +76,21 @@ jobs:
         env:
           ROBOWRIGHT_PYTHON: python
 
+  docker:
+    # The Dockerfile's image, built and used as a newcomer would: a project made by robowright init, its tests run
+    # inside the container, rendering on the CPU. Built only; nothing is published.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t robowright .
+      - run: |
+          docker run --rm robowright robowright info | tee info.txt
+          grep -q "offscreen rendering: ok" info.txt
+      - run: |
+          mkdir proj
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/proj":/work robowright robowright init .
+          docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD/proj":/work robowright pytest -q -p no:cacheprovider
+
   matrix:
     # Every robot on every engine CI can run (Isaac Sim needs an NVIDIA GPU machine): the backend
     # contract and the legged contract. The statistical examples on every robot (20-trial runs) are
