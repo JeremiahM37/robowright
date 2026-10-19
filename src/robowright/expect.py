@@ -100,7 +100,7 @@ class Expectation:
             rec["kwargs"]["timeout"] = self.timeout
         if hold:
             rec["kwargs"]["hold"] = hold
-        if isinstance(self.subject, _Polled) or name.startswith("to_satisfy"):
+        if isinstance(self.subject, _Polled) or name.startswith("to_satisfy") or name.split("(")[0] in _CUSTOM:
             rec["code"] = True  # it runs the test's own code, which a trace does not keep: codegen cannot write it again
         if self.mode != "always" and not _ONCE.get():  # once per assertion: not each try of a to_pass block
             hooks = list(getattr(w, "_action_hooks", ()))  # a debugger (--rw-debug) pausing before it
@@ -607,6 +607,8 @@ def expect(subject, *, timeout: float | None = None, message: str | None = None,
 
     * ``expect.soft(subject)``: a failure is recorded and the test carries on; it fails at teardown.
     * ``expect.poll(fn, name=None)``: ``fn()`` is read again at every control step until the matcher holds.
+
+    ``expect.extend(to_be_level=fn)`` adds your own matchers (see :func:`_extend`).
     """
     return Expectation(subject, world, timeout, message=message)
 
@@ -626,6 +628,57 @@ def _poll(fn, *, name: str | None = None, timeout=None, message=None, world=None
 
 
 expect.poll = _poll
+
+_CUSTOM: set[str] = set()  # matchers added with expect.extend
+
+
+def _extend(**matchers) -> None:
+    """Add your own matchers, as Playwright's ``expect.extend``::
+
+        def to_be_level(obj, tol_deg=2.0):
+            tilt = obj.tilt_deg()
+            return tilt <= tol_deg, f"tilted {tilt:.1f} deg"
+
+        expect.extend(to_be_level=to_be_level)
+        expect(scene["tray"]).to_be_level(tol_deg=1.0, timeout=2.0)
+
+    Each function takes what ``expect()`` was given (a scene object's handle, the robot, a joint, the world; the value
+    for ``expect.poll``) and its own arguments, and returns ``(passed, detail)`` or a bool. It then behaves as the
+    built-in matchers do: checked every control step until it holds or ``timeout`` runs out, ``hold=`` seconds, ``.not_``,
+    ``.always``, ``expect.soft``, ``condition()``, in the trace and the debugger. Names start with ``to_`` and cannot
+    replace a built-in matcher; a generated test (codegen) leaves them as comments, as it does ``to_satisfy``."""
+    import inspect
+
+    for name, fn in matchers.items():
+        if not name.startswith("to_") or not name.isidentifier():
+            raise ValueError(f"expect.extend: a matcher's name starts with to_ (got {name!r})")
+        if hasattr(Expectation, name) and name not in _CUSTOM:
+            raise ValueError(f"expect.extend: {name} is a built-in matcher")
+        if not callable(fn):
+            raise TypeError(f"expect.extend: {name} is {fn!r}, not a function")
+        sig = inspect.signature(fn)
+
+        def matcher(self, *args, timeout=None, hold=0.0, _fn=fn, _name=name, _sig=sig, **kwargs):
+            bound = _sig.bind(None, *args, **kwargs).arguments
+            recorded = {k: v for i, (k, v) in enumerate(bound.items()) if i}  # the subject is not an argument
+
+            def check():
+                subject = self.world if isinstance(self.subject, _WorldView) else self.subject
+                if isinstance(subject, _Polled):
+                    subject = subject.value
+                out = _fn(subject, *args, **kwargs)
+                ok, detail = out if isinstance(out, tuple) else (out, "")
+                return bool(ok), str(detail) if detail else f"{_name} returned {ok!r}"
+
+            return self._run(_name, check, timeout, hold, recorded)
+
+        matcher.__name__ = matcher.__qualname__ = name
+        matcher.__doc__ = fn.__doc__
+        setattr(Expectation, name, matcher)
+        _CUSTOM.add(name)
+
+
+expect.extend = _extend
 
 
 def condition(subject, matcher: str, *args, world=None, **kwargs):

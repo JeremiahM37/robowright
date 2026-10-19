@@ -678,6 +678,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: object positions, joints and a mobile robot's base, against text kept beside the test, each within a tolerance; delete a line to stop checking it |
 | `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time |
+| `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`: `fn(subject, ...)` returns `(passed, detail)`; the matcher then retries every control step, takes `timeout`/`hold`, `.not_`, `.always`, `expect.soft`, `expect.poll` and `condition()`, and shows in the trace and the debugger |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
 | `route.fulfill` for an API | `world.ros.serve("/detect", "std_srvs/srv/Trigger", answer)` and `world.ros.serve_action(...)`: the test answers a service or an action your stack calls, each call kept |
@@ -1076,6 +1077,18 @@ expect.soft(cube).to_be_upright()  # record and keep going; fail at the end
 ```
 ExpectationError: expect(cube).to_be_inside failed after 2.00s (timeout 2.0s)
   cube at (0.256, -0.102, 0.012); bin spans (0.150, 0.070, 0.000)..(0.250, 0.170, 0.040)
+```
+
+Your own matchers work the same way, as with Playwright's `expect.extend`: a function of the
+subject that returns whether it holds and what it saw, retried until it does:
+
+```python
+def to_be_left_of(obj, other, by=0.0):
+    gap = other.position[1] - obj.position[1]
+    return gap >= by, f"{gap * 100:.1f} cm left of {other.name}"
+
+expect.extend(to_be_left_of=to_be_left_of)   # in conftest.py, once
+expect(cube).to_be_left_of(bin, by=0.05, timeout=1.0)
 ```
 
 Time spent waiting is *simulated* time, so a 2-second timeout costs a few milliseconds of
