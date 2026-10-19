@@ -71,19 +71,23 @@ class AttachedSubject(Subject):
 
     @property
     def position(self) -> np.ndarray:
+        """Where it is (x, y, z, metres, world frame), read from the simulation now."""
         return self._b.pose(self.handle)[0]
 
     @property
     def quaternion(self) -> np.ndarray:
+        """Its orientation (w, x, y, z), world frame."""
         return self._b.pose(self.handle)[1]
 
     @property
     def yaw(self) -> float:
+        """Its heading about the world's z axis (radians)."""
         w, x, y, z = self.quaternion
         return float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
 
     @property
     def up_axis(self) -> np.ndarray:
+        """Its own z axis in the world frame: (0, 0, 1) when upright (what ``to_be_upright`` checks)."""
         w, x, y, z = self.quaternion
         return np.array([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)])
 
@@ -93,6 +97,7 @@ class AttachedSubject(Subject):
         return self._b.velocity(self.handle)
 
     def bounds(self):
+        """Not known for a body here: raises CapabilityError (``to_be_inside`` needs a built world's box)."""
         raise CapabilityError(f"{self.name!r} has no bounds: a body is not a box in this simulation; test its position instead")
 
     def contacts(self) -> list[str]:
@@ -114,6 +119,7 @@ class AttachedJoint(Subject):
 
     @property
     def value(self) -> float:
+        """The joint's value now: a hinge's angle (rad) or a slide's travel (m)."""
         self.world._sync()
         return self.world.backend.joint_value(self.name)
 
@@ -131,6 +137,7 @@ class AttachedScene:
         return iter(self.all())
 
     def all(self) -> list[AttachedSubject]:
+        """The simulation's free bodies (the things a test can move and push), as subjects."""
         return [self.world.body(n) for n in self.world.object_names]
 
 
@@ -257,6 +264,7 @@ class AttachedWorld(World):
 
     @property
     def model(self) -> mujoco.MjModel:
+        """A MuJoCo simulation's own ``MjModel`` (other engines raise CapabilityError)."""
         self._sync()
         if not isinstance(self.backend, AttachedBackend):
             raise CapabilityError(f"the {self.backend.engine} engine has no MuJoCo model; use world.backend for its state")
@@ -264,6 +272,7 @@ class AttachedWorld(World):
 
     @property
     def data(self) -> mujoco.MjData:
+        """A MuJoCo simulation's own ``MjData``, as the environment last stepped it."""
         self._sync()
         if not isinstance(self.backend, AttachedBackend):
             raise CapabilityError(f"the {self.backend.engine} engine has no MuJoCo data; use world.backend for its state")

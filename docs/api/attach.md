@@ -6,4 +6,14 @@ checks invariants on every step, applies faults, and records the run.
 
 ::: robowright.attached.attach
 
+::: robowright.attached.AttachedWorld
+    options:
+      members: [bodies, joints, body, joint, step, run_until, model, data]
+
+::: robowright.attached.AttachedSubject
+
+::: robowright.attached.AttachedJoint
+
+::: robowright.attached.AttachedScene
+
 ::: robowright.attached_remote.attachable
