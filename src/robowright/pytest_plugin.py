@@ -10,6 +10,8 @@ Options::
     --rw-robot path/to/robot.xml             ...or on any robot, from its model file (MJCF or URDF)
     --rw-trace on|off|retain-on-failure|on-first-retry
     --rw-retries N                   run a failed test again, up to N times; one that then passes is reported flaky
+    --rw-fail-on-flaky               a flaky test fails the run
+    --rw-repeat-each N               run every test N times (the same seed each time), to find the ones that only fail sometimes
     --rw-trace-dir DIR
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
@@ -80,6 +82,19 @@ def pytest_addoption(parser):
         metavar="N",
         help="run a failed test again, up to N times, in a fresh world; a test that fails and then passes is reported "
         "flaky (not passed), with the failed attempt's trace kept",
+    )
+    g.addoption(
+        "--rw-fail-on-flaky",
+        action="store_true",
+        help="fail the run if any test was flaky (failed, then passed on a retry), as Playwright's --fail-on-flaky-tests",
+    )
+    g.addoption(
+        "--rw-repeat-each",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run every test N times, each with the same seed and a fresh world, as Playwright's --repeat-each: a "
+        "test whose repeats disagree depends on something besides its seed (wall-clock timing, a simulator's threads)",
     )
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
@@ -255,13 +270,22 @@ def pytest_generate_tests(metafunc):
             names = [n for n in names if n in m.args] or list(m.args[:1])
         if len(names) > 1 or m:
             metafunc.parametrize("rw_robot", names, ids=[_robot_id(n) for n in names], scope="function")
+    repeats = metafunc.config.getoption("--rw-repeat-each", 1)
+    if repeats > 1:  # last, so the id reads test[mujoco-repeat2]
+        metafunc.fixturenames.append("rw_repeat")
+        metafunc.parametrize("rw_repeat", range(1, repeats + 1), ids=[f"repeat{i}" for i in range(1, repeats + 1)], scope="function")
 
 
 def pytest_sessionfinish(session, exitstatus):
     """A shard that the hash dealt no tests (a small suite over many machines) has passed, as Playwright's does: pytest's
-    "no tests collected" (5) would fail that CI job for having nothing to do."""
+    "no tests collected" (5) would fail that CI job for having nothing to do. With ``--rw-fail-on-flaky`` a flaky test
+    fails a run that otherwise passed."""
     if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and _shard(session.config) is not None:
         session.exitstatus = pytest.ExitCode.OK
+    summary = session.config.pluginmanager.get_plugin("robowright-summary")
+    if session.config.getoption("--rw-fail-on-flaky", False) and summary is not None and summary.flaky:
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.hookimpl(tryfirst=True)  # before xdist reads the groups into node ids
@@ -436,6 +460,11 @@ def _seed(item) -> int:
 @pytest.fixture
 def rw_backend():  # parametrized by pytest_generate_tests
     return "mujoco"
+
+
+@pytest.fixture
+def rw_repeat() -> int:  # which run of --rw-repeat-each this is (1-based); parametrized by pytest_generate_tests
+    return 1
 
 
 @pytest.fixture
@@ -785,12 +814,15 @@ class _Summary:
 
         self.trials: list = []
         self.traces: list = []
+        self.flaky: list = []
         self.run = Run()
 
     def pytest_runtest_logreport(self, report):
         self.run.add(report)
         # Runs on the xdist controller too, so traces from workers are listed.
         flaky = any(k == "robowright_flaky" for k, _ in report.user_properties)
+        if flaky:
+            self.flaky.append(_plain(report.nodeid))
         for k, v in report.user_properties:
             if k == "robowright_trace" and (report.failed or report.outcome == "rerun" or flaky):
                 self.traces.append((_plain(report.nodeid), v))
@@ -806,6 +838,10 @@ class _Summary:
         if blob:  # written even for a shard with no tests: the report job expects one blob from each
             terminalreporter.section("robowright report blob")
             terminalreporter.line(str(self.run.save_blob(blob)))
+        if self.flaky and terminalreporter.config.getoption("--rw-fail-on-flaky", False):
+            terminalreporter.section("robowright flaky tests (--rw-fail-on-flaky)")
+            for nodeid in dict.fromkeys(self.flaky):
+                terminalreporter.line(f"FLAKY {nodeid}")
         if self.trials:
             terminalreporter.section("robowright trials")
             for nodeid, summary, outcome in self.trials:

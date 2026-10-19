@@ -106,3 +106,39 @@ def test_unmarked_fails_once_and_for_all(world):
     )
     r = pytester.runpytest("-p", "no:cacheprovider")
     _assert_outcomes(r, failed=1, rerun=1, flaky=1)
+
+
+def test_fail_on_flaky_fails_a_run_with_a_flaky_test(pytester):
+    pytester.makepyfile(test_robots=TEST)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-retries", "1", "--rw-fail-on-flaky", "-k", "fails_once or passes")
+    _assert_outcomes(r, passed=1, rerun=1, flaky=1)
+    assert r.ret == 1
+    assert "FLAKY test_robots.py::test_fails_once[mujoco]" in r.stdout.str()
+
+
+def test_fail_on_flaky_leaves_a_clean_run_passing(pytester):
+    pytester.makepyfile(test_robots=TEST)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-retries", "1", "--rw-fail-on-flaky", "-k", "passes")
+    _assert_outcomes(r, passed=1)
+    assert r.ret == 0
+
+
+REPEAT = """
+from pathlib import Path
+from robowright import expect
+
+def test_counts(world, scene, rw_repeat):
+    f = Path("runs.txt")
+    f.write_text((f.read_text() if f.exists() else "") + f"{rw_repeat} {world.seed}\\n")
+    expect(scene["cube"]).to_be_at_rest()
+    assert rw_repeat != 2, "only the second run fails"
+"""
+
+
+def test_repeat_each_runs_every_test_n_times_with_the_same_seed(pytester):
+    pytester.makepyfile(test_robots=REPEAT)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-repeat-each", "3")
+    _assert_outcomes(r, passed=2, failed=1)
+    assert "FAILED test_robots.py::test_counts[mujoco-repeat2]" in r.stdout.str()
+    runs = (pytester.path / "runs.txt").read_text().split()
+    assert runs[0::2] == ["1", "2", "3"] and len(set(runs[1::2])) == 1  # every repeat has the same seed
