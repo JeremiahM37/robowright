@@ -665,7 +665,7 @@ evidence to debug it. robowright brings that workflow to robots:
 | auto-waiting actions | `robot.arm.move_to(...)` returns only once the arm has settled; `gripper.close()` returns once the jaws have stalled |
 | web-first assertions | `expect(cube).to_be_inside(bin)` re-checks every control step until it holds or times out, in *simulated* time |
 | locators | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)` are live handles, not snapshots |
-| trace viewer | every failure leaves a `.zip` trace with joints, object poses, contacts and the action timeline, viewable as HTML with camera views drawn from it |
+| trace viewer | every failure leaves a `.zip` trace with joints, object poses, contacts and the action timeline, viewable as HTML with camera views drawn from it, and a Source tab at the line of your test each action came from |
 | codegen | `robowright codegen trace.zip` rebuilds the exact failing situation as a pytest test; `robowright codegen --robot panda` writes one from what you do in a browser page |
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
@@ -1243,6 +1243,13 @@ tests/test_bin.py::test_cube_lands_in_bin[mujoco]
 ```
 
 <p align="center"><img src="docs/viewer.png" alt="robowright trace viewer showing the action list, camera frame, timeline and joint plots of a failing test"></p>
+
+Each action and expectation in a trace keeps the line of your code that made it: the test's own
+line, or the line in a helper of yours that the test called. The viewer's Source tab shows that
+file with the line of the selected action marked (red for the one that failed), as Playwright's
+does, and the text summary prints the failed line under its event (`at test_bin.py:14:
+expect(cube).to_be_inside(bin)`). The trace keeps those files' text, so it reads the same on
+another machine; robowright's own files and installed packages are left out.
 
 When the robot is behind ROS 2 (`backend="ros2"`, or your stack driving the world through the `ros2`
 fixture), the trace also keeps the graph's traffic, as Playwright's trace keeps the network log: for

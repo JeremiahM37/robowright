@@ -63,6 +63,11 @@ pre { background: var(--code); padding: 8px; border-radius: 6px; overflow: auto;
 .logline.logwarn b { color: #b26a00; } .logline.logbad b { color: #c62828; }
 details.topic { border-bottom: 1px solid var(--line, #ddd); padding: 6px 0; overflow-wrap: anywhere; }
 details.topic summary { cursor: pointer; }
+.src { font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border-radius: 6px; padding: 6px 0; overflow: auto; }
+.src div { white-space: pre; padding: 0 8px 0 0; }
+.src div span { display: inline-block; width: 3.5em; padding-right: 10px; text-align: right; color: var(--muted); user-select: none; }
+.src div.at { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.src div.at.failed { background: color-mix(in srgb, var(--bad) 22%, transparent); }
 pre.msg { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 40vh; overflow: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
 td, th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
@@ -94,7 +99,7 @@ th { color: var(--muted); font-weight: 600; }
     <div class="legend" id="legend"></div>
   </section>
   <section>
-    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button><button data-tab="topics" id="topicsTab" hidden>Topics</button><button data-tab="log" id="logTab" hidden>Log</button></div>
+    <div class="tabs"><button class="on" data-tab="details">Details</button><button data-tab="state">State</button><button data-tab="run">Run</button><button data-tab="source" id="sourceTab" hidden>Source</button><button data-tab="topics" id="topicsTab" hidden>Topics</button><button data-tab="log" id="logTab" hidden>Log</button></div>
     <div class="pane" id="pane"></div>
   </section>
 </main>
@@ -103,6 +108,8 @@ const D = __TRACE_DATA__;
 const M = D.meta, N = D.t.length, J = M.joint_names;
 if (M.ros_topics && M.ros_topics.length) document.getElementById("topicsTab").hidden = false;
 if (M.ros_log && M.ros_log.length) document.getElementById("logTab").hidden = false;
+const SOURCES = M.sources || {};
+if (Object.keys(SOURCES).length) document.getElementById("sourceTab").hidden = false;
 const openTopics = new Set();  // the topics whose last message is shown: kept open as the pane is redrawn
 // On the click itself, not on "toggle": that comes a moment later, and a redraw in between (playback redraws every
 // frame) would have replaced the row it fired on.
@@ -142,7 +149,9 @@ function selectEvent(i, seek) {
   sel = i;
   [...$("events").children].forEach((li, k) => li.classList.toggle("sel", k === i));
   if (seek) { const e = evs[i]; cur = Math.min(N - 1, Math.max(0, e.status === "failed" ? (e.end_step ?? e.step) : e.step)); }
-  tab = "details"; setTab(); render();
+  if (tab !== "source") tab = "details";  // the source of the next action, if that is what is being read
+  setTab(); render();
+  if (tab === "source") { const at = document.querySelector(".src .at"); if (at) at.scrollIntoView({block: "center"}); }
 }
 
 function sizeCanvas(c) { const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1; c.width = r.width * dpr; c.height = r.height * dpr; const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); return [g, r.width, r.height]; }
@@ -247,7 +256,19 @@ function render() {
   if (cam) { const f = frameAt(cur); if (f) $("frame").src = f; }
   $("clock").textContent = `t = ${fmt(D.t[cur], 2)}s · step ${cur} / ${N - 1}`;
   drawTimeline(); drawPlot();
-  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : tab === "topics" ? paneTopics() : tab === "log" ? paneLog() : paneRun();
+  $("pane").innerHTML = tab === "details" ? paneDetails() : tab === "state" ? paneState() : tab === "topics" ? paneTopics() : tab === "log" ? paneLog() : tab === "source" ? paneSource() : paneRun();
+}
+
+// The test's code, at the line that made the selected event (or the last one before the playhead).
+function paneSource() {
+  let e = sel >= 0 ? evs[sel] : null;
+  if (!e || !e.loc) for (let i = evs.length - 1; i >= 0; i--) if (evs[i].loc && evs[i].step <= cur) { e = evs[i]; break; }
+  if (!e || !e.loc) e = evs.find((x) => x.loc);
+  if (!e) return '<p class="muted">no source in this trace</p>';
+  const [file, line] = e.loc, text = SOURCES[file];
+  if (text == null) return `<p class="muted">${esc(file)}:${line} was not kept in the trace</p>`;
+  const rows = text.split("\n").map((l, k) => `<div class="${k + 1 === line ? "at " + e.status : ""}"><span>${k + 1}</span>${esc(l)}</div>`).join("");
+  return `<h3 title="${esc(file).replace(/"/g, "&quot;")}">${esc(file.split(/[\\/]/).pop())}:${line} · ${esc(e.name)}</h3><div class="src">${rows}</div>`;
 }
 
 function tick(ts) {

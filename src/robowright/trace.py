@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import sys
+import sysconfig
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -27,6 +30,25 @@ FORMAT_VERSION = 1
 
 
 BEHAVIOUR_SETTINGS = ("expect_timeout", "action_timeout", "max_joint_speed", "max_tcp_speed")
+
+# Not the caller's own code: robowright itself, installed packages (pytest, an engine) and the standard library.
+_PACKAGE = os.path.dirname(os.path.abspath(__file__)) + os.sep
+_LIBRARY = tuple(
+    {os.path.abspath(p) + os.sep for k in ("stdlib", "platstdlib", "purelib", "platlib") if (p := sysconfig.get_paths().get(k))}
+)
+MAX_SOURCE = 256_000  # bytes of one source file a trace keeps
+
+
+def _caller() -> tuple[str, int] | None:
+    """The file and line of the code that called into robowright: a test, or the user's own helper it called."""
+    f = sys._getframe(1)
+    while f is not None:
+        raw = f.f_code.co_filename
+        name = os.path.abspath(raw)
+        if not raw.startswith("<") and not name.startswith(_PACKAGE) and not name.startswith(_LIBRARY):  # <frozen runpy>, <string>
+            return name, f.f_lineno
+        f = f.f_back
+    return None
 
 
 @dataclass
@@ -41,11 +63,14 @@ class Event:
     args: dict = field(default_factory=dict)
     detail: str = ""
     depth: int = 0  # how many rw.step()s the event is inside
+    loc: list | None = None  # [file, line] of the code that made it, its text in the trace's "sources"
 
     def to_dict(self):
         d = dict(self.__dict__)
         if not d["depth"]:
             del d["depth"]  # a trace with no steps reads exactly as before
+        if d["loc"] is None:
+            del d["loc"]
         return d
 
 
@@ -57,6 +82,7 @@ class Recorder:
         self.cameras = cameras
         self.image_size = image_size
         self.events: list[Event] = []
+        self.sources: dict[str, str] = {}  # file -> its text, for each file an event came from (the viewer's Source tab)
         self.t: list[float] = []
         self.qpos: list[np.ndarray] = []
         self.ctrl: list[np.ndarray] = []
@@ -156,6 +182,15 @@ class Recorder:
         w = self.world
         e = Event(type, name, w.step_count, w.time, args=args or {}, status=status, detail=detail)
         e.depth = len(w.__dict__.get("_rw_steps", ()))
+        loc = _caller()
+        if loc is not None:
+            e.loc = [loc[0], loc[1]]
+            if loc[0] not in self.sources:
+                try:
+                    with open(loc[0], encoding="utf-8", errors="replace") as fh:
+                        self.sources[loc[0]] = fh.read(MAX_SOURCE)
+                except OSError:
+                    self.sources[loc[0]] = ""
         if type not in ("action", "step"):  # these two last a while: finish_event closes them
             e.end_step, e.end_t = e.step, e.t
         self.events.append(e)
@@ -201,6 +236,7 @@ class Recorder:
             # The settings that shape motion and timing, so codegen can rebuild the same run.
             "settings": {k: getattr(w.settings, k) for k in BEHAVIOUR_SETTINGS},
             "events": [e.to_dict() for e in self.events],
+            "sources": {k: v for k, v in self.sources.items() if v},
         }
 
     def save(self, path: str | Path) -> Path:
@@ -334,6 +370,17 @@ class Trace:
     def __len__(self):
         return len(self.arrays["t"])
 
+    def _code_line(self, loc) -> str:
+        """``file:line`` and that line of the code, as the trace kept it."""
+        file, line = loc
+        text = (self.meta.get("sources") or {}).get(file, "").splitlines()
+        code = text[line - 1].strip() if 0 < line <= len(text) else ""
+        try:
+            file = os.path.relpath(file)
+        except ValueError:  # another drive (Windows)
+            pass
+        return f"{file}:{line}" + (f": {code}" if code else "")
+
     def summary(self, events: int = 40) -> str:
         """The trace as text, for a log, a terminal or an AI agent: what ran, what failed and why,
         and the state of the robot and the objects at the moment it failed (or at the end)."""
@@ -365,6 +412,8 @@ class Trace:
             mark = {"ok": "  ", "failed": "✗ ", "running": "… "}.get(e["status"], "  ")
             pad = "  " * e.get("depth", 0)  # inside rw.step()s: indented under them
             lines.append(f"  {mark}{span}  {pad}{_call(e)}" + (f"\n        {pad}{e['detail']}" if e.get("detail") else ""))
+            if e["status"] == "failed" and e.get("loc"):
+                lines.append(f"        {pad}at {self._code_line(e['loc'])}")
         if len(shown) > events:
             lines.append(f"  ... {len(shown) - events} more")
         lines.append(f"{'at the failure' if failed else 'at the end'} (t={float(a['t'][at]):.2f} s, step {at}):")

@@ -234,7 +234,7 @@ def test_viewer_without_gl_keeps_the_telemetry(tmp_path, monkeypatch):
     monkeypatch.setattr(importlib.import_module("robowright.render"), "jpeg_frames", broken)
     with pytest.warns(UserWarning, match="without camera frames"):
         html = build_html(path)
-    assert "data:image/jpeg" not in html and '"qpos"' in html
+    assert '"frames":{}' in html and '"qpos"' in html
 
 
 @pytest.mark.parametrize("robot", ["so101", "go2"])
@@ -378,3 +378,53 @@ def test_the_text_of_a_trace_lists_its_faults(tmp_path):
     path = w.close(failed=True, trace_path=tmp_path / "pushed.zip")
     text = Trace(path).summary()
     assert "faults: Push(object=cube, force=" in text and "duration=0.1" in text
+
+
+def _failing_pick(tmp_path):
+    w = rw.launch(backend="mujoco", seed=0, name="lip", settings=rw.Settings(trace="on", trace_dir=str(tmp_path)))
+    w.robot.reset_to()
+    w.robot.pick(w.scene["cube"], lift=0.05)
+    with pytest.raises(rw.ExpectationError):
+        expect(w.scene["cube"]).to_be_above(0.12, timeout=0.5)
+    return w.close(failed=True)
+
+
+def _line_of(text: str) -> int:
+    return next(i for i, line in enumerate(Path(__file__).read_text().splitlines(), 1) if text in line)
+
+
+def test_each_event_keeps_the_line_of_the_test_that_made_it(tmp_path):
+    tr = Trace(_failing_pick(tmp_path))
+    here = str(Path(__file__).resolve())
+    at = {e["name"]: e.get("loc") for e in tr.events}
+    assert at["robot.pick"] == [here, _line_of('w.robot.pick(w.scene["cube"], lift=0.05)')]
+    assert at["expect(cube).to_be_above"] == [here, _line_of('expect(w.scene["cube"]).to_be_above(0.12, timeout=0.5)')]
+    assert tr.meta["sources"][here] == Path(__file__).read_text()  # the viewer's Source tab shows it
+    assert list(tr.meta["sources"]) == [here]  # robowright's own files and pytest's are not kept
+
+
+def test_the_text_of_a_failed_trace_says_where_the_test_failed(tmp_path):
+    text = Trace(_failing_pick(tmp_path)).summary()
+    line = _line_of('expect(w.scene["cube"]).to_be_above(0.12, timeout=0.5)')
+    assert f'test_trace_replay_codegen.py:{line}: expect(w.scene["cube"]).to_be_above(0.12, timeout=0.5)' in text
+
+
+def test_the_viewer_shows_the_source_at_the_selected_action(tmp_path):
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from robowright.viewer import build_html
+
+    page_file = tmp_path / "view.html"
+    page_file.write_text(build_html(_failing_pick(tmp_path)))
+    with sync_api.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(page_file.as_uri())
+        page.click('button[data-tab="source"]')
+        page.click("#events li.failed")
+        assert "to_be_above(0.12, timeout=0.5)" in page.inner_text(".src .at.failed")
+        page.click("#events li:has-text('robot.pick')")  # the tab stays on Source, at the new action's line
+        assert "w.robot.pick(" in page.inner_text(".src .at")
+        browser.close()
+    assert not errors

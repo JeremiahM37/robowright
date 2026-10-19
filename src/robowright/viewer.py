@@ -9,6 +9,7 @@ so only the traces someone opens pay for rendering.
 from __future__ import annotations
 
 import base64
+import html
 import json
 from pathlib import Path
 
@@ -45,8 +46,11 @@ def build_html(trace: str | Path | Trace) -> str:
         "frames": frames,
         "source": tr.path.name,
     }
-    payload = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
-    return _TEMPLATE.read_text().replace("__TRACE_DATA__", payload).replace("__TITLE__", tr.meta["name"])
+    # Every "<" escaped: the data holds the test's own source, and "</script>" or "<!--" in it would end or upset the
+    # script it sits in. The title goes in first, so the data is never searched for the placeholder.
+    payload = json.dumps(data, separators=(",", ":")).replace("<", "\\u003c")
+    page = _TEMPLATE.read_text().replace("__TITLE__", html.escape(tr.meta["name"]))
+    return page.replace("__TRACE_DATA__", payload)
 
 
 def _redraw(tr: Trace) -> dict[str, dict[int, bytes]]:
