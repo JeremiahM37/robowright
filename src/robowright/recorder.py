@@ -68,7 +68,21 @@ class Recorder:
             "log": self.log,
             "code": self.code(),
             "output": str(self.output),
+            **self.picks(),
         }
+
+    def picks(self) -> dict:
+        """For the page's locator picker, as the live view has it: where each object is in each camera's image and
+        the locators that find it (see robowright.live)."""
+        from .live import _picks
+
+        w = self.session.world
+        return _picks(w, (640, 480)) if w.has_ground_truth else {}
+
+    def picked(self, locator: str) -> str:
+        """A locator chosen in the page: printed, for an editor waiting on it (VS Code's Pick locator)."""
+        print(f"robowright picked: {locator}", flush=True)
+        return locator
 
     def code(self) -> str:
         return self.session.generate_test(test_name=self.test_name)
@@ -134,6 +148,8 @@ class Recorder:
                     self._json(rec.act(str(req.get("action", "")), dict(req.get("args") or {})))
                 elif self.path == "/save":
                     self._json({"saved": rec.save()})
+                elif self.path == "/picked":
+                    self._json({"picked": rec.picked(str(req.get("locator", "")))})
                 else:
                     self._send(404, "text/plain", b"not found")
 

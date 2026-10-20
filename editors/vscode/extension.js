@@ -296,30 +296,25 @@ function newTestFile(cwd) {
   }
 }
 
-// `robowright codegen --robot R`: a page where what you do runs on the robot and is written as a test; Save writes
-// it, and the test opens here. Resolves once the page is up, with its address and the file it saves to.
-async function recordNew(opts = {}) {
+// `robowright codegen --robot R -o file` in the background: resolves with the page's address once it is up (undefined if it
+// did not start), and calls onLine with each line it prints
+async function startRecorder(robot, file, onLine) {
   const cwd = root();
-  if (!cwd) return;
-  const robot = opts.robot || (await vscode.window.showInputBox({ prompt: "Record a test on which robot? (a name or a model file)", value: robotArg() || "so101" }));
-  if (!robot) return;
-  const file = opts.file || newTestFile(cwd);
   const py = await python();
   const p = cp.spawn(py, ["-m", "robowright.cli", "codegen", "--robot", robot, "--port", "0", "-o", file], { cwd, env: { ...process.env, PYTHONUNBUFFERED: "1" } });
   recorders.add(p);
   p.on("close", () => recorders.delete(p));
-  let shown = false;
-  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(path.dirname(file), path.basename(file)));
-  const opened = async uri => {
-    const doc = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(doc, { preview: false });
-    if (!shown) { shown = true; discover(); }
-  };
-  watcher.onDidCreate(opened); watcher.onDidChange(opened);
-  p.on("close", () => watcher.dispose());
   const url = await new Promise(resolve => {
-    let out = "";
-    const take = d => { out += d; output.append(String(d)); const m = out.match(/https?:\/\/127\.0\.0\.1:\d+\//); if (m) resolve(m[0]); };
+    let out = "", rest = "";
+    const take = d => {
+      output.append(String(d));
+      out += d;
+      const m = out.match(/https?:\/\/127\.0\.0\.1:\d+\//);
+      if (m) resolve(m[0]);
+      const lines = (rest + d).split("\n");
+      rest = lines.pop();
+      if (onLine) lines.forEach(onLine);
+    };
     p.stdout.on("data", take);
     p.stderr.on("data", take);
     p.on("close", () => resolve(undefined));
@@ -328,11 +323,59 @@ async function recordNew(opts = {}) {
   if (!url) {
     vscode.window.showErrorMessage("robowright: the recorder did not start; see the robowright output");
     output.show(true);
-    return;
   }
+  return { p, url };
+}
+
+async function askRobot() {
+  return vscode.window.showInputBox({ prompt: "Which robot? (a name or a model file)", value: robotArg() || "so101" });
+}
+
+// Record new: a page where what you do runs on the robot and is written as a test; Save writes it, and the test opens
+// here. Resolves once the page is up, with its address and the file it saves to.
+async function recordNew(opts = {}) {
+  const cwd = root();
+  if (!cwd) return;
+  const robot = opts.robot || (await askRobot());
+  if (!robot) return;
+  const file = opts.file || newTestFile(cwd);
+  let shown = false;
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(path.dirname(file), path.basename(file)));
+  const opened = async uri => {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: false });
+    if (!shown) { shown = true; discover(); }
+  };
+  watcher.onDidCreate(opened); watcher.onDidChange(opened);
+  const { p, url } = await startRecorder(robot, file);
+  p.on("close", () => watcher.dispose());
+  if (!url) return;
   if (!opts.noOpen) vscode.env.openExternal(vscode.Uri.parse(url));
   vscode.window.showInformationMessage(`robowright: recording on ${robot}. Save in the page writes ${path.relative(cwd, file)}.`);
   return { url, file, stop: () => p.kill("SIGTERM") };
+}
+
+// Pick locator: click an object in the robot's camera image, choose one of the locators that find it, and it is typed
+// at the cursor of the editor you were in (Playwright's Pick locator)
+async function pickLocator(opts = {}) {
+  const cwd = root();
+  if (!cwd) return;
+  const editor = vscode.window.activeTextEditor;
+  const robot = opts.robot || (await askRobot());
+  if (!robot) return;
+  const picked = [];
+  const { p, url } = await startRecorder(robot, path.join(storage, `picker-${Date.now()}.py`), async line => {
+    const m = line.match(/^robowright picked: (.+)$/);
+    if (!m) return;
+    picked.push(m[1]);
+    const target = editor && !editor.document.isClosed ? editor : vscode.window.activeTextEditor;
+    if (target) await target.edit(e => e.replace(target.selection, m[1]));
+    else await vscode.env.clipboard.writeText(m[1]);
+  });
+  if (!url) return;
+  if (!opts.noOpen) vscode.env.openExternal(vscode.Uri.parse(url));
+  vscode.window.showInformationMessage("robowright: click an object in the page's camera image, then Use on the locator you want.");
+  return { url, picked, stop: () => p.kill("SIGTERM") };
 }
 
 async function openUI() {
@@ -361,10 +404,11 @@ function activate(context) {
     vscode.commands.registerCommand("robowright.openUI", openUI),
     vscode.commands.registerCommand("robowright.refresh", discover),
     vscode.commands.registerCommand("robowright.recordNew", () => recordNew()),
+    vscode.commands.registerCommand("robowright.pickLocator", () => pickLocator()),
     { dispose: () => recorders.forEach(p => p.kill("SIGTERM")) },
   );
   // what the extension's own tests drive it through
-  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace, recordNew };
+  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace, recordNew, pickLocator };
 }
 
 function deactivate() {}

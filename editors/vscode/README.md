@@ -17,6 +17,8 @@ Robot tests in the editor, as Playwright's extension has them for web tests:
 - **Record a new test.** *robowright: Record a new test* (the record button on the Testing view) opens a page where
   pick, place, the gripper, waits and checks run on the robot as you choose them and are written as a test; *Save*
   writes `tests/test_recorded.py`, which opens here and joins the Test Explorer (Playwright's *Record new*).
+- **Pick locator.** *robowright: Pick locator* opens the robot's camera view: click an object, then *Use* on one of
+  the locators that find it (`scene["cube"]`, `scene.get(color="red")`, ...), and it is typed at your cursor.
 - **UI mode.** *robowright: Open the UI* runs `robowright test --ui` in a terminal.
 
 ## Settings

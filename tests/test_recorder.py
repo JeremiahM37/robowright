@@ -94,3 +94,32 @@ def test_the_page_records_a_test_in_a_real_browser(tmp_path):
         browser.close()
     run = run_pytest(out)
     assert run.returncode == 0 and "1 passed" in run.stdout, run.stdout + run.stderr
+
+
+def test_clicking_an_object_in_the_page_picks_its_locator(tmp_path, capfd):
+    """Playwright's Pick locator: click the cube in the camera image; its locators show, and Use prints the one chosen
+    (what VS Code's Pick locator reads)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    started, box = threading.Event(), {}
+
+    def serve():
+        rec = box["rec"] = Recorder(robot="so101", output=tmp_path / "test_x.py")
+        rec.serve(port=0, ready=lambda url: (box.update(url=url), started.set()))
+
+    threading.Thread(target=serve, daemon=True).start()
+    assert started.wait(120), "the recorder did not start"
+    with sync_api.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(box["url"])
+        page.wait_for_function("(f => f.complete && f.naturalWidth > 0)(document.getElementById('frame'))")
+        cam = page.eval_on_selector("#camera", "s => s.value")
+        state = page.evaluate("async () => (await fetch('state')).json()")
+        u0, v0, u1, v1 = next(b for n, b, _ in state["picks"][cam] if n == "cube")
+        size = page.eval_on_selector("#frame", "f => [f.clientWidth, f.clientHeight]")
+        page.click("#frame", position={"x": (u0 + u1) / 2 * size[0], "y": (v0 + v1) / 2 * size[1]})
+        assert 'scene["cube"]' in page.text_content("#picked")
+        page.click("#picked button")
+        page.wait_for_function("document.querySelector('#picked button').textContent === 'sent'")
+        browser.close()
+    assert 'robowright picked: scene["cube"]' in capfd.readouterr().out

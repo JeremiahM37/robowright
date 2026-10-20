@@ -23,7 +23,9 @@ pre{white-space:pre;overflow:auto;max-height:60vh;background:var(--bg);border:1p
 <main>
 <section>
   <div class="row"><select id="camera"></select></div>
-  <img id="frame" alt="the robot's camera">
+  <div style="position:relative"><img id="frame" alt="the robot's camera" title="click an object: the code that finds it">
+  <div id="pickbox" hidden style="position:absolute;border:2px solid #f0f;border-radius:3px;pointer-events:none"></div></div>
+  <div id="picked" class="muted" hidden></div>
   <h2>Do</h2>
   <div class="row"><select id="obj"></select><button data-act="pick">pick</button>
     <span class="muted">place on</span><select id="onto"></select><button data-act="place">place</button></div>
@@ -68,6 +70,29 @@ document.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
   else if (a === "expect") {
     const m = $("matcher").value, k = ARGS[m], args = k ? {[k]: $("arg").value} : {};
     act("expect", {subject: $("subject").value, matcher: m, args, negate: $("negate").checked});
+  }
+});
+// Pick a locator, as Playwright's picker does: click an object in the camera image and get the code that finds it
+$("frame").addEventListener("click", ev => {
+  if (!S || !S.picks) return;
+  const cam = $("camera").value, r = $("frame").getBoundingClientRect();
+  const u = (ev.clientX - r.left) / r.width, v = (ev.clientY - r.top) / r.height;
+  const hits = (S.picks[cam] || []).filter(p => u >= p[1][0] && u <= p[1][2] && v >= p[1][1] && v <= p[1][3]).sort((a, b) => a[2] - b[2]);
+  const el = $("picked"), bx = $("pickbox");
+  el.hidden = false; el.replaceChildren();
+  if (!hits.length) { bx.hidden = true; el.textContent = "nothing there: click an object"; return; }
+  const [name, b] = hits[0];
+  bx.hidden = false;
+  Object.assign(bx.style, {left: b[0] * 100 + "%", top: b[1] * 100 + "%", width: (b[2] - b[0]) * 100 + "%", height: (b[3] - b[1]) * 100 + "%"});
+  for (const loc of S.locators[name] || []) {
+    const row = document.createElement("div"), c = document.createElement("code"), btn = document.createElement("button");
+    c.textContent = loc; btn.textContent = "use"; btn.style.marginLeft = "6px";
+    btn.onclick = async () => {
+      if (navigator.clipboard) navigator.clipboard.writeText(loc).catch(() => {});
+      await fetch("picked", {method: "POST", body: JSON.stringify({locator: loc})});  // to an editor waiting on it
+      btn.textContent = "sent";
+    };
+    row.append(c, btn); el.append(row);
   }
 });
 $("save").onclick = async () => { const r = await (await fetch("save", {method: "POST"})).json(); $("saved").textContent = `saved ${r.saved}`; };

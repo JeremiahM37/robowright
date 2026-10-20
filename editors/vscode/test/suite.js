@@ -89,10 +89,27 @@ async function run() {
     if (rec) rec.stop();
   }
 
+  // Pick locator: a locator chosen in the page is typed at the cursor of the editor that was active
+  const doc = await vscode.workspace.openTextDocument({ language: "python", content: "cube = " });
+  const ed = await vscode.window.showTextDocument(doc);
+  ed.selection = new vscode.Selection(0, 7, 0, 7);
+  const picker = await api.pickLocator({ robot: "so101", noOpen: true });
+  try {
+    const state = await (await fetch(picker.url + "state")).json();
+    const cam = state.cameras[0];
+    assert.ok(state.picks[cam].some(p => p[0] === "cube"), "the cube is in the picker's view");
+    assert.deepStrictEqual(state.locators.cube[0], 'scene["cube"]');
+    await fetch(picker.url + "picked", { method: "POST", body: JSON.stringify({ locator: state.locators.cube[0] }) });
+    for (let i = 0; i < 100 && doc.getText() === "cube = "; i++) await new Promise(r => setTimeout(r, 100));
+    assert.strictEqual(doc.getText(), 'cube = scene["cube"]', "the locator is typed at the cursor");
+  } finally {
+    picker.stop();
+  }
+
   const panel = await api.showTrace(api.traces.get(shelf.id));
   assert.ok(panel.webview.html.includes("test_reaches_the_shelf"), "the trace viewer, for this test");
   panel.dispose();
-  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, a test recorded, trace viewer opened`);
+  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, a test recorded, a locator picked, trace viewer opened`);
   if (process.env.ROBOWRIGHT_TEST_MUST_FAIL) assert.fail("ROBOWRIGHT_TEST_MUST_FAIL is set");
 }
 
