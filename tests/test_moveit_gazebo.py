@@ -203,8 +203,18 @@ def test_urs_own_example_moves_the_arm_where_it_says(world):
     # pose UR's simulation starts in, which UR's example is written for (the last test's MoveIt
     # plan can leave the wrists most of a turn away, and the example then sweeps them back in 4 s).
     start = rig.start_pose()
-    home = _pymoveit2("ex_joint_goal.py", f"joint_positions:=[{', '.join(map(str, start))}]")
-    _watch(home, lambda: expect(r).to_satisfy(at(start, 0.01), "at UR's start pose", timeout=45, hold=0.3))
+    for attempt in range(3):
+        home = _pymoveit2("ex_joint_goal.py", f"joint_positions:=[{', '.join(map(str, start))}]")
+        try:
+            _watch(home, lambda: expect(r).to_satisfy(at(start, 0.01), "at UR's start pose", timeout=45, hold=0.3))
+        except AssertionError as e:
+            # Setup, not the code under test: pymoveit2 reads the robot description when it starts, from
+            # move_group's parameters and then (UR's config has it only there) from the latched topics, for 5 s
+            # at most; under load discovery took longer once in about ten gate runs. Its client is tried again.
+            if attempt < 2 and "Unable to read the robot description" in "".join(getattr(e, "__notes__", [])):
+                continue
+            raise
+        break
     out, _ = home.communicate(timeout=60)
     assert home.returncode == 0, out
     example = subprocess.Popen(
