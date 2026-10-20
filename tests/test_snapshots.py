@@ -254,3 +254,14 @@ def test_a_region_snapshot_checks_the_object_wherever_it_is(pytester, monkeypatc
     monkeypatch.setenv("MOVE", "0.23,-0.05")  # the cube itself moves a little: the window follows it
     r = _run(pytester)
     assert "to_match_snapshot('cube.png')" not in r.stdout.str()  # only the whole view differs
+
+
+def test_a_snapshot_path_template_puts_the_baselines_where_it_says(pytester):
+    """[snapshots] path in robowright.toml, Playwright's snapshotPathTemplate, relative to that file."""
+    (pytester.path / "robowright.toml").write_text('[snapshots]\npath = "baselines/{robot}/{engine}/{test_file_path}/{name}{ext}"\n')
+    pytester.mkdir("tests")
+    (pytester.path / "tests" / "test_view.py").write_text(TEST)
+    _run(pytester, "tests").assert_outcomes(failed=1)  # the first run writes it
+    assert (pytester.path / "baselines/so101/mujoco/tests/test_view/tidy.png").exists()
+    assert not (pytester.path / "tests/__snapshots__").exists()
+    _run(pytester, "tests").assert_outcomes(passed=1)

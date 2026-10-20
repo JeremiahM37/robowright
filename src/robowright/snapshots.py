@@ -51,10 +51,47 @@ def _slug(s: str) -> str:
     return re.sub(r"[^\w.-]+", "_", s).strip("_") or "x"
 
 
+DEFAULT_PATH = "{test_dir}/__snapshots__/{test_file}/{name}-{engine}-{robot}{ext}"
+
+
+def _template() -> tuple[str, Path | None]:
+    """Where baselines go: ``[snapshots] path`` in robowright.toml (Playwright's snapshotPathTemplate), relative to that
+    file; else the default, beside each test."""
+    from .plugins import find_config
+
+    try:
+        found = find_config()
+    except Exception:  # noqa: BLE001 - an unreadable settings file is reported where it is read for robots
+        found = None
+    if found:
+        template = (found[1].get("snapshots") or {}).get("path")
+        if template:
+            return str(template), found[0].parent
+    return DEFAULT_PATH, None
+
+
 def baseline_path(name: str, engine: str, robot: str, test_file: Path | None = None) -> Path:
-    f = test_file or _caller_file()
+    """A baseline's file, from the template: ``{test_dir}`` (the test file's folder), ``{test_file}`` (its name without
+    .py), ``{test_file_path}`` (its path from the settings file's folder, without .py), ``{name}``, ``{engine}``,
+    ``{robot}`` and ``{ext}`` (the snapshot's own, .png unless named otherwise)."""
+    f = (test_file or _caller_file()).resolve()
     stem, suffix = Path(name).stem, Path(name).suffix or ".png"
-    return f.parent / "__snapshots__" / f.stem / f"{_slug(stem)}-{_slug(engine)}-{_slug(robot)}{suffix}"
+    template, base = _template()
+    try:
+        rel = f.with_suffix("").relative_to(base) if base else Path(f.stem)
+    except ValueError:
+        rel = Path(f.stem)
+    path = template.format(
+        test_dir=f.parent,
+        test_file=f.stem,
+        test_file_path=rel.as_posix(),
+        name=_slug(stem),
+        engine=_slug(engine),
+        robot=_slug(robot),
+        ext=suffix,
+    )
+    p = Path(path)
+    return p if p.is_absolute() or base is None else base / p
 
 
 MASK_COLOR = (255, 0, 255)
