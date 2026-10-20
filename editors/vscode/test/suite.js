@@ -3,6 +3,7 @@
 "use strict";
 
 const assert = require("assert");
+const path = require("path");
 const vscode = require("vscode");
 
 async function run() {
@@ -35,10 +36,40 @@ async function run() {
   assert.strictEqual(await api.run([tests.find(t => t.id.endsWith("test_sum"))]), 0);
   assert.deepStrictEqual([...api.results.keys()], ["tests/test_plain.py::test_sum"]);
 
+  // the Debug profile: the same test under the Python Debugger, stopping at a breakpoint in it
+  const sum = tests.find(t => t.id.endsWith("test_sum"));
+  api.results.clear();
+  if (vscode.extensions.getExtension("ms-python.debugpy")) {
+    const stops = [];
+    const tracker = vscode.debug.registerDebugAdapterTrackerFactory("debugpy", {
+      createDebugAdapterTracker: session => ({
+        onDidSendMessage: async m => {
+          if (m.type !== "event" || m.event !== "stopped") return;
+          const st = await session.customRequest("stackTrace", { threadId: m.body.threadId, levels: 1 });
+          stops.push(`${path.basename(st.stackFrames[0].source.path)}:${st.stackFrames[0].line}`);
+          await session.customRequest("continue", { threadId: m.body.threadId });
+        },
+      }),
+    });
+    const bp = new vscode.SourceBreakpoint(new vscode.Location(sum.uri, new vscode.Position(1, 0)));
+    vscode.debug.addBreakpoints([bp]);
+    try {
+      assert.strictEqual(await api.run([sum], false, true), 0, "the test passes under the debugger");
+    } finally {
+      vscode.debug.removeBreakpoints([bp]);
+      tracker.dispose();
+    }
+    assert.deepStrictEqual(stops, ["test_plain.py:2"], "it stopped at the breakpoint, then ran on");
+    assert.strictEqual(api.results.get(sum.id), "passed");
+  } else {
+    assert.strictEqual(await api.run([sum], false, true), -1, "no Python Debugger: the run says so");
+    assert.ok(!api.results.has(sum.id));
+  }
+
   const panel = await api.showTrace(api.traces.get(shelf.id));
   assert.ok(panel.webview.html.includes("test_reaches_the_shelf"), "the trace viewer, for this test");
   panel.dispose();
-  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, trace viewer opened`);
+  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, trace viewer opened`);
   if (process.env.ROBOWRIGHT_TEST_MUST_FAIL) assert.fail("ROBOWRIGHT_TEST_MUST_FAIL is set");
 }
 

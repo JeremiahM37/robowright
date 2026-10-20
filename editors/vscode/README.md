@@ -11,6 +11,9 @@ Robot tests in the editor, as Playwright's extension has them for web tests:
   `.zip` opens from the Explorer's context menu, or with *robowright: Show trace*.
 - **Live view.** The *Run with live view* profile opens the camera in your browser as soon as a test builds its world.
   Tests then run at real-time pace.
+- **Debug.** The *Debug* profile (the bug icon on a test) runs it under the Python Debugger, so a breakpoint in the
+  test, a fixture or robowright itself stops there with the world's state in the Variables view. One process (any
+  `-n` is dropped) and no `--rw-timeout` while stopped. Needs the Python Debugger extension (`ms-python.debugpy`).
 - **UI mode.** *robowright: Open the UI* runs `robowright test --ui` in a terminal.
 
 ## Settings
@@ -40,5 +43,6 @@ same id.
 ## Tests
 
 `npm test` runs the extension inside a real VS Code (downloaded by `@vscode/test-electron`) on a small project of robot
-tests. It needs a display: `xvfb-run -a npm test` on a server. `ROBOWRIGHT_PYTHON` names the Python with robowright
-(default: the repository's `.venv`).
+tests. It needs a display: `xvfb-run -a npm test` on a server. It installs the Python Debugger into
+`.vscode-test/extensions-debugpy` for the Debug profile's test (`ROBOWRIGHT_TEST_NO_DEBUGPY=1` runs without it).
+`ROBOWRIGHT_PYTHON` names the Python with robowright (default: the repository's `.venv`).

@@ -68,8 +68,7 @@ async function discover() {
   if (!cwd) return;
   const py = await python();
   const file = eventsFile("collect");
-  const xdist = a => /^-n/.test(a) || /^--(numprocesses|dist|maxprocesses)=/.test(a);
-  const argv = ["--collect-only", "-q", ...args().filter(a => !xdist(a))];
+  const argv = ["--collect-only", "-q", ...withoutXdist(args())];
   const text = await new Promise(resolve => {
     const p = pytest(py, argv, file, cwd);
     let out = "";
@@ -132,7 +131,7 @@ function lineOf(message, file) {
   return found.length ? Number(found[found.length - 1][1]) - 1 : undefined;
 }
 
-async function run(request, token, live) {
+async function run(request, token, live, debug = false) {
   const cwd = root();
   const run = controller.createTestRun(request);
   const chosen = request.include ? leaves(request.include) : leaves(controller.items);
@@ -142,16 +141,15 @@ async function run(request, token, live) {
   items.forEach(i => run.enqueued(i));
   const ids = request.include ? items.map(i => i.id) : [];
   const traceDir = path.join(storage, "traces");
-  const argv = [...args().filter(a => !(request.include && !a.startsWith("-") && fs.existsSync(path.join(cwd, a.split("::")[0])))), ...ids];
+  let argv = [...args().filter(a => !(request.include && !a.startsWith("-") && fs.existsSync(path.join(cwd, a.split("::")[0])))), ...ids];
+  // under the debugger: one process (breakpoints are in this one) and no time limit while stopped at one
+  if (debug) argv = [...withoutXdist(argv), "--rw-timeout", "0"];
   argv.push("--rw-trace", "on", "--rw-trace-dir", traceDir);
   if (rootdir && !args().some(a => a.startsWith("--rootdir"))) argv.push("--rootdir", rootdir);
   const livePort = live ? await freePort() : 0;
   if (live) argv.push("--rw-live", String(livePort));
   const file = eventsFile("run");
   const py = await python();
-  const p = pytest(py, argv, file, cwd);
-  token.onCancellationRequested(() => p.kill("SIGTERM"));
-  p.stdout.on("data", d => run.appendOutput(String(d).replace(/\r?\n/g, "\r\n")));
   // the live view starts with the first test that builds a world: open it once it answers
   let opened = false;
   const watchLive = live && setInterval(() => {
@@ -162,8 +160,8 @@ async function run(request, token, live) {
     });
     s.on("error", () => {});
   }, 500);
-  p.stderr.on("data", d => run.appendOutput(String(d).replace(/\r?\n/g, "\r\n")));
   let seen = 0;
+  const outcomes = new Map(); // this run's
   const take = () => {
     const all = events(file);
     for (const e of all.slice(seen)) {
@@ -173,6 +171,7 @@ async function run(request, token, live) {
       if (e.event !== "result") continue;
       if (e.traces && e.traces.length) traces.set(item.id, e.traces[0]);
       results.set(item.id, e.outcome);
+      outcomes.set(item.id, e.outcome);
       const ms = (e.duration || 0) * 1000;
       if (e.outcome === "passed" || e.outcome === "xfailed") run.passed(item, ms);
       else if (e.outcome === "skipped") run.skipped(item);
@@ -181,7 +180,11 @@ async function run(request, token, live) {
     seen = all.length;
   };
   const timer = setInterval(take, 250);
-  const code = await new Promise(resolve => {
+  const code = debug ? await underDebugger(py, argv, file, cwd, run, token) : await new Promise(resolve => {
+    const p = pytest(py, argv, file, cwd);
+    token.onCancellationRequested(() => p.kill("SIGTERM"));
+    p.stdout.on("data", d => run.appendOutput(String(d).replace(/\r?\n/g, "\r\n")));
+    p.stderr.on("data", d => run.appendOutput(String(d).replace(/\r?\n/g, "\r\n")));
     p.on("error", e => { run.appendOutput(`could not start ${py}: ${e.message}\r\n`); resolve(-1); });
     p.on("close", resolve);
   });
@@ -189,8 +192,61 @@ async function run(request, token, live) {
   if (watchLive) clearInterval(watchLive);
   take();
   try { fs.unlinkSync(file); } catch {}
+  // a test the run never reached (the debugger could not start, or was stopped first) is not left spinning
+  if (code === -1) items.filter(i => !outcomes.has(i.id)).forEach(i => run.errored(i, new vscode.TestMessage("not run: see the output")));
   run.end();
+  if (code !== -1 && debug) return [...outcomes.values()].some(o => !["passed", "xfailed", "skipped"].includes(o)) ? 1 : 0;
   return code;
+}
+
+function withoutXdist(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "-n" || argv[i] === "--numprocesses" || argv[i] === "--dist" || argv[i] === "--maxprocesses") { i++; continue; }
+    if (/^-n\S/.test(argv[i]) || /^--(numprocesses|dist|maxprocesses)=/.test(argv[i])) continue;
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+// the launch configuration the Python Debugger (ms-python.debugpy) runs: the same pytest, events and arguments as a run
+function debugConfig(py, argv, eventsPath, cwd) {
+  return {
+    type: "debugpy",
+    request: "launch",
+    name: "robowright: debug tests",
+    module: "pytest",
+    args: [...argv, "-p", "robowright.ui_events"],
+    python: py,
+    cwd,
+    env: { ROBOWRIGHT_UI_EVENTS: eventsPath, PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" },
+    console: "internalConsole",
+    justMyCode: false,
+    purpose: ["debug-test"],
+  };
+}
+
+// runs pytest under the Python Debugger: breakpoints in tests (and in robowright) stop there. Resolves when the
+// session ends (-1: it could not start)
+async function underDebugger(py, argv, file, cwd, run, token) {
+  if (!vscode.extensions.getExtension("ms-python.debugpy")) {
+    const msg = "robowright: debugging tests needs the Python Debugger extension (ms-python.debugpy)";
+    run.appendOutput(msg + "\r\n");
+    vscode.window.showErrorMessage(msg, "Install").then(c => { if (c) vscode.commands.executeCommand("workbench.extensions.installExtension", "ms-python.debugpy"); });
+    return -1;
+  }
+  const config = debugConfig(py, argv, file, cwd);
+  const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
+  let session;
+  const started = vscode.debug.onDidStartDebugSession(s => { if (!session && s.configuration.name === config.name) session = s; });
+  const ended = new Promise(resolve => {
+    const sub = vscode.debug.onDidTerminateDebugSession(s => { if (session && s.id === session.id) { sub.dispose(); resolve(0); } });
+  });
+  token.onCancellationRequested(() => session && vscode.debug.stopDebugging(session));
+  const ok = await vscode.debug.startDebugging(folder, config, { testRun: run });
+  started.dispose();
+  if (!ok || !session) { run.appendOutput("robowright: the debugger did not start\r\n"); return -1; }
+  return ended;
 }
 
 function freePort() {
@@ -238,6 +294,7 @@ function activate(context) {
   controller.refreshHandler = () => discover();
   controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, (r, t) => run(r, t, false), true);
   controller.createRunProfile("Run with live view", vscode.TestRunProfileKind.Run, (r, t) => run(r, t, true), false);
+  controller.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, (r, t) => run(r, t, false, true), true);
   const watcher = vscode.workspace.createFileSystemWatcher("**/{test_*.py,*_test.py,conftest.py,pytest.ini,pyproject.toml,robowright.toml}");
   watcher.onDidCreate(discover); watcher.onDidDelete(discover); watcher.onDidChange(discover);
   context.subscriptions.push(
@@ -247,9 +304,9 @@ function activate(context) {
     vscode.commands.registerCommand("robowright.refresh", discover),
   );
   // what the extension's own tests drive it through
-  return { controller, discover, run: (include, live = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live), traces, results, showTrace };
+  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace };
 }
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, lineOf };
+module.exports = { activate, deactivate, lineOf, debugConfig, withoutXdist };

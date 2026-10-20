@@ -1,7 +1,7 @@
 {
   "name": "robowright",
   "displayName": "robowright",
-  "description": "Run robot tests from the editor: robowright's tests in the Test Explorer, each failure on its line with its trace, live view, and the UI mode.",
+  "description": "Run robot tests from the editor: robowright's tests in the Test Explorer, each failure on its line with its trace, live view, debugging, and the UI mode.",
   "version": "0.1.0",
   "publisher": "jeremiahm37",
   "license": "Apache-2.0",

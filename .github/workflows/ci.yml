@@ -57,7 +57,7 @@ jobs:
 
   vscode:
     # The VS Code extension (editors/vscode) inside a real VS Code, on a small project of robot tests: found, run,
-    # each outcome reported, and a failure's trace opened in a tab.
+    # each outcome reported, a test stopped at a breakpoint under the Python Debugger, and a failure's trace opened.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
