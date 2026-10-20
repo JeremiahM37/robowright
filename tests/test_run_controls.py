@@ -392,3 +392,33 @@ def test_rw_log_prints_each_action_and_expectation_as_it_runs(pytester):
     assert "< robot.pick: done in" in out and "s simulated" in out and "s wall" in out
     assert "expect expect(cube).to_be_inside: FAILED" in out and "test_logged.py:7" in out
     assert not (pytester.path / "robowright-traces").exists(), "--rw-trace off still saves nothing"
+
+
+TEARDOWN = """
+[projects.setup]
+match = "setup_*.py"
+teardown = "cleanup"
+
+[projects.cleanup]
+match = "cleanup_*.py"
+
+[projects.arms]
+depends = ["setup"]
+ignore = ["setup_*.py", "cleanup_*.py"]
+"""
+
+
+def test_a_setup_projects_teardown_runs_last_whatever_happened(pytester):
+    """Playwright's teardown: the cleanup project a setup project names joins the run and runs after everything else,
+    when the tests before it failed too."""
+    (pytester.path / "robowright.toml").write_text(TEARDOWN)
+    pytester.makeini("[pytest]\npython_files = test_*.py setup_*.py cleanup_*.py\n")
+    pytester.makepyfile(
+        setup_calibrate="def test_calibrate():\n    pass\n",
+        test_arm="def test_reach():\n    assert False, 'the arm missed'\n",
+        cleanup_park="def test_park():\n    pass\n",
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider", "-v", "--rw-project", "arms")
+    ran = [line.split(" ")[0] for line in r.stdout.lines if " PASSED" in line or " FAILED" in line]
+    assert ran == ["setup_calibrate.py::test_calibrate[setup]", "test_arm.py::test_reach[arms]", "cleanup_park.py::test_park[cleanup]"], ran
+    assert _outcomes(r) == {"passed": 2, "failed": 1}

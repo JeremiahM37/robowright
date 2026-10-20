@@ -285,7 +285,7 @@ def _flat(value):
     return ",".join(value) if isinstance(value, list) else value
 
 
-_PROJECT_OWN = {"use", "mark", "depends", "match", "ignore"}  # project keys that are not flags
+_PROJECT_OWN = {"use", "mark", "depends", "match", "ignore", "teardown"}  # project keys that are not flags
 _DEPS_FAILED = pytest.StashKey[set]()  # projects with a failed (or dependency-skipped) test
 
 
@@ -310,6 +310,16 @@ def _with_dependencies(names: list, projects: dict, found) -> list:
 
     for n in names:
         add(n, [])
+    # a project's teardown (Playwright's teardown: a cleanup after everything that ran), last
+    for n in list(out):
+        t = projects.get(n, {}).get("teardown")
+        if t is None:
+            continue
+        if t not in projects:
+            raise pytest.UsageError(f"[projects.{n}] in {found[0]}: teardown {t}, which is not a project")
+        if t in out:
+            out.remove(t)
+        out.append(t)
     return out
 
 
@@ -698,11 +708,12 @@ def pytest_collection_modifyitems(config, items):
             config.hook.pytest_deselected(items=dropped)
         items[:] = keep
     module = {}
-    order = {name: i for i, name in enumerate(tables or {})} if tables and any("depends" in t for t in tables.values()) else {}
+    ordered = tables and any("depends" in t or "teardown" in t for t in tables.values())
+    order = {name: i for i, name in enumerate(tables or {})} if ordered else {}
     if order and getattr(config.option, "numprocesses", None):
         warnings.warn(
             pytest.PytestWarning(
-                "--rw-project with depends: dependencies run first in one process; under -n a "
+                "--rw-project with depends or teardown: dependencies run first and teardowns last in one process; under -n a "
                 "dependent project's tests may start before its dependencies have finished"
             ),
             stacklevel=1,
