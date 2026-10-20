@@ -249,6 +249,33 @@ async function underDebugger(py, argv, file, cwd, run, token) {
   return ended;
 }
 
+// Watch (a profile's eye button, Playwright's watch mode): the chosen tests run again whenever a Python file in the
+// workspace is saved, until the watch is stopped. A run already going finishes first; saves meanwhile run once after.
+async function watch(request, token, live) {
+  let pending = false, running = false;
+  const again = async () => {
+    if (running) { pending = true; return; }
+    running = true;
+    try {
+      do {
+        pending = false;
+        await run(new vscode.TestRunRequest(request.include, request.exclude, request.profile), token, live);
+      } while (pending && !token.isCancellationRequested);
+    } finally {
+      running = false;
+    }
+  };
+  let timer;
+  const saved = vscode.workspace.onDidSaveTextDocument(doc => {
+    if (doc.languageId !== "python" && !doc.fileName.endsWith(".py")) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => { if (!token.isCancellationRequested) again(); }, 300);
+  });
+  await new Promise(resolve => token.onCancellationRequested(resolve));
+  clearTimeout(timer);
+  saved.dispose();
+}
+
 function freePort() {
   return new Promise(resolve => {
     const srv = net.createServer();
@@ -393,8 +420,9 @@ function activate(context) {
   controller = vscode.tests.createTestController("robowright", "robowright");
   controller.resolveHandler = async item => { if (!item) await discover(); };
   controller.refreshHandler = () => discover();
-  controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, (r, t) => run(r, t, false), true);
-  controller.createRunProfile("Run with live view", vscode.TestRunProfileKind.Run, (r, t) => run(r, t, true), false);
+  const runOrWatch = live => (r, t) => (r.continuous ? watch(r, t, live) : run(r, t, live));
+  controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, runOrWatch(false), true, undefined, true);
+  controller.createRunProfile("Run with live view", vscode.TestRunProfileKind.Run, runOrWatch(true), false, undefined, true);
   controller.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, (r, t) => run(r, t, false, true), true);
   const watcher = vscode.workspace.createFileSystemWatcher("**/{test_*.py,*_test.py,conftest.py,pytest.ini,pyproject.toml,robowright.toml}");
   watcher.onDidCreate(discover); watcher.onDidDelete(discover); watcher.onDidChange(discover);
@@ -408,7 +436,8 @@ function activate(context) {
     { dispose: () => recorders.forEach(p => p.kill("SIGTERM")) },
   );
   // what the extension's own tests drive it through
-  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace, recordNew, pickLocator };
+  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace, recordNew, pickLocator,
+    watch: (include, token) => watch(new vscode.TestRunRequest(include, undefined, undefined, true), token, false) };
 }
 
 function deactivate() {}

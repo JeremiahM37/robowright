@@ -106,10 +106,36 @@ async function run() {
     picker.stop();
   }
 
+  // Watch: a saved Python file runs the watched tests again, until the watch is stopped
+  {
+    const plain = tests.find(t => t.id.endsWith("test_sum"));
+    let runs = 0;
+    const source = new vscode.CancellationTokenSource();
+    api.results.clear();
+    const watching = api.watch([plain], source.token);
+    const doc = await vscode.workspace.openTextDocument(plain.uri);
+    for (let i = 1; i <= 2; i++) {
+      api.results.clear();
+      const ed2 = await vscode.window.showTextDocument(doc);
+      await ed2.edit(e => e.insert(new vscode.Position(doc.lineCount, 0), `# saved ${i}\n`));
+      await doc.save();
+      for (let k = 0; k < 300 && !api.results.has(plain.id); k++) await new Promise(r => setTimeout(r, 100));
+      assert.strictEqual(api.results.get(plain.id), "passed", `save ${i} ran the watched test again`);
+      runs++;
+    }
+    source.cancel();
+    await watching;
+    api.results.clear();
+    await doc.save();
+    await new Promise(r => setTimeout(r, 1500));
+    assert.ok(!api.results.has(plain.id), "after the watch stops, a save runs nothing");
+    assert.strictEqual(runs, 2);
+  }
+
   const panel = await api.showTrace(api.traces.get(shelf.id));
   assert.ok(panel.webview.html.includes("test_reaches_the_shelf"), "the trace viewer, for this test");
   panel.dispose();
-  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, a test recorded, a locator picked, trace viewer opened`);
+  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, a test recorded, a locator picked, watched, trace viewer opened`);
   if (process.env.ROBOWRIGHT_TEST_MUST_FAIL) assert.fail("ROBOWRIGHT_TEST_MUST_FAIL is set");
 }
 

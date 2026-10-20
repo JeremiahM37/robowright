@@ -14,6 +14,8 @@ Robot tests in the editor, as Playwright's extension has them for web tests:
 - **Debug.** The *Debug* profile (the bug icon on a test) runs it under the Python Debugger, so a breakpoint in the
   test, a fixture or robowright itself stops there with the world's state in the Variables view. One process (any
   `-n` is dropped) and no `--rw-timeout` while stopped. Needs the Python Debugger extension (`ms-python.debugpy`).
+- **Watch.** The eye button on a run profile (Playwright's watch mode): the chosen tests run again each time a Python
+  file is saved, until you stop it.
 - **Record a new test.** *robowright: Record a new test* (the record button on the Testing view) opens a page where
   pick, place, the gripper, waits and checks run on the robot as you choose them and are written as a test; *Save*
   writes `tests/test_recorded.py`, which opens here and joins the Test Explorer (Playwright's *Record new*).
