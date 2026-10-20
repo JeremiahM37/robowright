@@ -298,6 +298,9 @@ def test_a_bag_plays_at_its_recorded_pace_in_simulated_time(world, ros2, tmp_pat
 def test_a_bag_from_ros2_bag_record_plays_too(world, ros2, tmp_path):
     bag = tmp_path / "cli_bag"
     with ros2.run(["ros2", "bag", "record", "-o", str(bag), "/joint_states"]):
+        # Recording starts once the recorder has found the topic, which takes it a while (a fixed wait before it found
+        # it recorded nothing, now and then).
+        assert world.run_until(lambda: ros2.node.count_subscribers("/joint_states") > 0, timeout=30.0), "the recorder never subscribed"
         world.wait(3.0)  # ros2 bag record stamps by the wall clock it received them on: offsets are what play uses
     assert len(_bag_messages(bag)) > 20
     seen = _listen(world, ros2, tmp_path / "play", route={"/joint_states": rw.route.from_bag(bag)}, seconds=2.0)

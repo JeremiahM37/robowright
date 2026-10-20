@@ -128,7 +128,7 @@ if mode == "talk":
     def talk():
         ticks["n"] += 1
         log = node.get_logger()
-        log.info(f"tick {ticks['n']}")
+        log.info(f"tick {ticks['n']} at {node.get_clock().now().nanoseconds / 1e9:.3f}")  # its own clock, to check
         if ticks["n"] == 3:
             log.warning("transform from map to base_link timed out")
         if ticks["n"] == 5:
