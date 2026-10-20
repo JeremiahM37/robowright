@@ -73,6 +73,27 @@ def test_on_first_retry_records_only_the_first_retry(pytester):
     assert "robowright show-trace robowright-traces/test_robots.py__test_fails_once[mujoco]-retry1.zip" in r.stdout.str()
 
 
+def test_on_all_retries_records_every_retry(pytester):
+    pytester.makepyfile(test_robots=TEST)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-retries", "2", "--rw-trace", "on-all-retries")
+    _assert_outcomes(r, passed=1, failed=1, rerun=3, flaky=1)
+    assert _traces(pytester) == [
+        "test_robots.py__test_always_fails[mujoco]-retry1.zip",
+        "test_robots.py__test_always_fails[mujoco]-retry2.zip",
+        "test_robots.py__test_fails_once[mujoco]-retry1.zip",
+    ]
+
+
+def test_retain_on_first_failure_keeps_only_the_first_attempts_trace(pytester):
+    pytester.makepyfile(test_robots=TEST)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-retries", "2", "--rw-trace", "retain-on-first-failure")
+    _assert_outcomes(r, passed=1, failed=1, rerun=3, flaky=1)
+    assert _traces(pytester) == [
+        "test_robots.py__test_always_fails[mujoco].zip",
+        "test_robots.py__test_fails_once[mujoco].zip",
+    ]
+
+
 def test_without_retries_nothing_changes(pytester):
     pytester.makepyfile(test_robots=TEST)
     r = pytester.runpytest("-p", "no:cacheprovider")

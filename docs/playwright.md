@@ -65,7 +65,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | trace viewer | `robowright show-trace`: actions, camera drawn from the recorded state, timeline, joint plots, contacts | robot |
 | trace: source tab | the Source tab, at the line of your code each action came from | same |
 | trace: network, console | the Topics and Log tabs of a ROS 2 run | robot |
-| `trace: 'on-first-retry'` | `--rw-trace on-first-retry` | same |
+| `trace: 'on-first-retry'`, `'on-all-retries'`, `'retain-on-first-failure'` | `--rw-trace on-first-retry`, `on-all-retries`, `retain-on-first-failure` | same |
 | `--debug`, `page.pause()`, Inspector | `--rw-debug`, `world.pause()`: Step, Resume, Pause in the live view | same |
 | `DEBUG=pw:api` (the API log) | `pytest --rw-log` (or `ROBOWRIGHT_DEBUG=1`): every step, action and expectation as it runs, with simulated and wall time and the line it came from | same |
 | `--headed` | `--rw-live` (a browser page), `--rw-headed` (MuJoCo's window) | same |

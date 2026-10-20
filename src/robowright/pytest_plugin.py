@@ -8,7 +8,7 @@ Options::
     --rw-backend mujoco,pybullet     run every robot test on each backend
     --rw-robot so101,panda | all | legged   run every robot test on each robot ("all": every arm)
     --rw-robot path/to/robot.xml             ...or on any robot, from its model file (MJCF or URDF)
-    --rw-trace on|off|retain-on-failure|on-first-retry
+    --rw-trace on|off|retain-on-failure|on-first-retry|on-all-retries|retain-on-first-failure
     --rw-retries N                   run a failed test again, up to N times; one that then passes is reported flaky
     --rw-fail-on-flaky               a flaky test fails the run
     --rw-repeat-each N               run every test N times (the same seed each time), to find the ones that only fail sometimes
@@ -90,8 +90,9 @@ def pytest_addoption(parser):
     g.addoption(
         "--rw-trace",
         default="retain-on-failure",
-        choices=["on", "off", "retain-on-failure", "on-first-retry"],
-        help="on-first-retry: record only the first retry of a failed test (with --rw-retries), as Playwright's CI default",
+        choices=["on", "off", "retain-on-failure", "on-first-retry", "on-all-retries", "retain-on-first-failure"],
+        help="on-first-retry: record only the first retry of a failed test (with --rw-retries), as Playwright's CI "
+        "default; on-all-retries: every retry; retain-on-first-failure: the first attempt's trace, kept if it fails",
     )
     g.addoption(
         "--rw-retries",
@@ -824,6 +825,10 @@ def _settings(config, attempt: int = 0, item=None) -> Settings:
     trace = _opt(config, item, "trace")
     if trace == "on-first-retry":  # the first run of a test is not recorded; its first retry is, whatever its outcome
         trace = "on" if attempt == 1 else "off"
+    elif trace == "on-all-retries":  # every retry, whatever its outcome
+        trace = "on" if attempt >= 1 else "off"
+    elif trace == "retain-on-first-failure":  # the first attempt, kept if it fails; retries are not recorded
+        trace = "retain-on-failure" if attempt == 0 else "off"
     video = _opt(config, item, "video", "off")
     if video == "on" or (video == "retain-on-failure" and trace == "off"):  # a video is drawn from the trace
         trace = "on" if video == "on" else "retain-on-failure"
@@ -969,7 +974,8 @@ def world(request, rw_backend, rw_robot):
     if path and (video == "on" or (video == "retain-on-failure" and failed)):
         _video(item, path)
         mode = _opt(item.config, item, "trace")
-        if not failed and mode != "on" and not (mode == "on-first-retry" and _attempt(item) == 1):
+        kept = mode == "on" or (mode == "on-first-retry" and _attempt(item) == 1) or (mode == "on-all-retries" and _attempt(item) >= 1)
+        if not failed and not kept:
             Path(path).unlink(missing_ok=True)  # recorded only to draw the video from
 
 
