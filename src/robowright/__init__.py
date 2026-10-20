@@ -43,7 +43,7 @@ def _offscreen_gl(find=None) -> str | None:
     import ctypes.util
 
     find = find or ctypes.util.find_library
-    if find("EGL"):
+    if find("EGL") and (find("OpenGL") or find("GL")):  # PyOpenGL's EGL loads OpenGL too (a runner can have only EGL)
         return "egl"
     if find("OSMesa"):
         return "osmesa"

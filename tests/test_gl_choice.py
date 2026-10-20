@@ -34,7 +34,8 @@ def test_offscreen_gl_is_one_whose_library_loads():
     """EGL named on a machine without libEGL made `import robowright` itself fail (a bare CI runner)."""
     from robowright import _offscreen_gl
 
-    libs = {"EGL": "libEGL.so.1", "OSMesa": "libOSMesa.so.8"}
+    libs = {"EGL": "libEGL.so.1", "OpenGL": "libOpenGL.so.0", "OSMesa": "libOSMesa.so.8"}
     assert _offscreen_gl(lambda n: libs.get(n)) == "egl"
+    assert _offscreen_gl(lambda n: libs.get(n) if n == "EGL" else None) is None  # EGL alone: PyOpenGL cannot use it
     assert _offscreen_gl(lambda n: libs.get(n) if n == "OSMesa" else None) == "osmesa"
     assert _offscreen_gl(lambda n: None) is None
