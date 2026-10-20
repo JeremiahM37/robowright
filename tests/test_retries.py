@@ -142,3 +142,9 @@ def test_repeat_each_runs_every_test_n_times_with_the_same_seed(pytester):
     assert "FAILED test_robots.py::test_counts[mujoco-repeat2]" in r.stdout.str()
     runs = (pytester.path / "runs.txt").read_text().split()
     assert runs[0::2] == ["1", "2", "3"] and len(set(runs[1::2])) == 1  # every repeat has the same seed
+
+
+def test_a_flaky_tests_failed_attempt_is_said_even_under_q(pytester):
+    pytester.makepyfile(test_robots=TEST)
+    r = pytester.runpytest("-q", "-p", "no:cacheprovider", "--rw-retries", "1", "-k", "fails_once")
+    assert "FLAKY test_robots.py::test_fails_once[mujoco]: its failed attempt: AssertionError: the first attempt fails" in r.stdout.str()

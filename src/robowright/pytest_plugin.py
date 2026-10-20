@@ -1102,10 +1102,15 @@ class _Summary:
         if blob:  # written even for a shard with no tests: the report job expects one blob from each
             terminalreporter.section("robowright report blob")
             terminalreporter.line(str(self.run.save_blob(blob)))
-        if self.flaky and terminalreporter.config.getoption("--rw-fail-on-flaky", False):
-            terminalreporter.section("robowright flaky tests (--rw-fail-on-flaky)")
+        if self.flaky:  # passed on a retry: why the first attempt failed, even under -q (as Playwright shows it)
+            from .github import _message
+
+            failing = " (--rw-fail-on-flaky: the run fails)" if terminalreporter.config.getoption("--rw-fail-on-flaky", False) else ""
+            terminalreporter.section(f"robowright flaky tests{failing}")
             for nodeid in dict.fromkeys(self.flaky):
-                terminalreporter.line(f"FLAKY {nodeid}")
+                attempt = next((r for k, r in self.failed_attempts.items() if _plain(k) == nodeid), None)
+                why = _message(attempt).splitlines()[0][:200] if attempt is not None else ""
+                terminalreporter.line(f"FLAKY {nodeid}" + (f": its failed attempt: {why}" if why else ""))
         if self.trials:
             terminalreporter.section("robowright trials")
             for nodeid, summary, outcome in self.trials:
