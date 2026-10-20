@@ -28,3 +28,13 @@ def test_a_display_without_glx_renders_with_egl():
 
 def test_an_explicit_choice_is_kept():
     assert _mujoco_gl(DISPLAY=":4711", MUJOCO_GL="osmesa") == "osmesa"
+
+
+def test_offscreen_gl_is_one_whose_library_loads():
+    """EGL named on a machine without libEGL made `import robowright` itself fail (a bare CI runner)."""
+    from robowright import _offscreen_gl
+
+    libs = {"EGL": "libEGL.so.1", "OSMesa": "libOSMesa.so.8"}
+    assert _offscreen_gl(lambda n: libs.get(n)) == "egl"
+    assert _offscreen_gl(lambda n: libs.get(n) if n == "OSMesa" else None) == "osmesa"
+    assert _offscreen_gl(lambda n: None) is None

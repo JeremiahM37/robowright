@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import webbrowser
 import zipfile
@@ -544,6 +545,8 @@ def _info(args, rest):
         print(f"offscreen rendering: ok ({img.shape[1]}x{img.shape[0]})")
     except Exception as e:  # rendering is optional: traces just lose their frames
         print(f"offscreen rendering: unavailable ({type(e).__name__}: {e})")
+        if sys.platform.startswith("linux") and not os.environ.get("MUJOCO_GL"):
+            print("  no EGL or OSMesa library was found: install one (Debian/Ubuntu: apt install libegl1, or libosmesa6)")
     return 0
 
 

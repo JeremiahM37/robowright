@@ -36,13 +36,31 @@ def _has_glx(display: str) -> bool:
         x11.XCloseDisplay(handle)
 
 
-# Render offscreen via EGL on headless Linux (CI, servers), and where the display cannot do
-# OpenGL through GLX: MuJoCo picks GLFW whenever DISPLAY is set, which then fails with "GLX
-# extension not found". Must happen before anything imports mujoco.
+def _offscreen_gl(find=None) -> str | None:
+    """The offscreen OpenGL that loads here: EGL, else OSMesa (CPU only), else None. MuJoCo loads the one named in
+    MUJOCO_GL when it is imported, so naming one whose library is missing (EGL on a bare CI runner) made
+    ``import robowright`` itself fail; with neither, nothing is named, and only rendering is unavailable."""
+    import ctypes.util
+
+    find = find or ctypes.util.find_library
+    if find("EGL"):
+        return "egl"
+    if find("OSMesa"):
+        return "osmesa"
+    return None
+
+
+# Render offscreen on headless Linux (CI, servers), and where the display cannot do OpenGL through GLX: MuJoCo picks
+# GLFW whenever DISPLAY is set, which then fails with "GLX extension not found". Must happen before anything imports
+# mujoco.
 if sys.platform.startswith("linux") and "MUJOCO_GL" not in os.environ:
     _display = os.environ.get("DISPLAY")
     if not _display or not _has_glx(_display):
-        os.environ["MUJOCO_GL"] = "egl"
+        _gl = _offscreen_gl()
+        if _gl:
+            os.environ["MUJOCO_GL"] = _gl
+            if _gl == "osmesa":
+                os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
 __version__ = "0.1.0"
 
