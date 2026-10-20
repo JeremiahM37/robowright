@@ -15,6 +15,7 @@ Options::
     --rw-trace-dir DIR
     --rw-video on|off|retain-on-failure   each test's run as an MP4 beside its trace (needs robowright[video])
     --rw-project NAME[,NAME]|all     the settings of [projects.NAME] in robowright.toml; several: every test in each
+    --rw-log                         every action and expectation printed as it runs (Playwright's DEBUG=pw:api)
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
@@ -122,6 +123,12 @@ def pytest_addoption(parser):
     )
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
+    g.addoption(
+        "--rw-log",
+        action="store_true",
+        help="print every action and expectation as it runs, with simulated and wall time and the line it came from "
+        "(Playwright's DEBUG=pw:api); ROBOWRIGHT_DEBUG=1 does the same outside pytest",
+    )
     g.addoption(
         "--rw-project",
         default=None,
@@ -403,6 +410,13 @@ def pytest_configure(config):
     mode = config.getoption("--rw-fidelity", None)
     if mode:
         _set_env(config, fidelity.ENV, mode)
+    if config.getoption("--rw-log", False):
+        from . import trace
+
+        _set_env(config, trace.LOG_ENV, "1")
+        previous = trace.LOG_SINK
+        trace.LOG_SINK = lambda line: _say(config, line)
+        config.add_cleanup(lambda: setattr(trace, "LOG_SINK", previous))
     if config.getoption("--rw-update-snapshots", None):
         from . import snapshots
 
@@ -1241,6 +1255,10 @@ def pytest_runtest_setup(item):
     waits for ever, a join on a thread blocked in C). For that, faulthandler's own watchdog, which runs in C: if the test
     is still running HANG_GRACE seconds after its limit, every thread's stack goes to ``hung-<test>.txt`` in the trace
     directory and the process ends, so a hang costs its limit and a minute, not the rest of the CI job."""
+    from .trace import log_line, logging_on
+
+    if logging_on():
+        log_line(f"--- {item.nodeid}")
     limit = _time_limit(item)
     if limit > 0:
         import faulthandler

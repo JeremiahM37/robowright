@@ -26,6 +26,7 @@ from .mobile import MobileRobot
 from .robot import Robot
 from .scene import SceneSpec, default_scene
 from .trace import Recorder
+from .trace import logging_on as trace_logging_on
 
 # Keep robowright internals out of pytest failure tracebacks (--full-trace shows them).
 __tracebackhide__ = True
@@ -104,7 +105,7 @@ class World:
             self.robot = {"legged": LeggedRobot, "mobile": MobileRobot}.get(family, Robot)(self)
         self.scene = SceneLocator(self)
         self.trace: Recorder | None = None
-        if self.settings.trace != "off":
+        if self.settings.trace != "off" or trace_logging_on():  # the debug log reads the trace's events
             s = self.settings
             self.trace = Recorder(self, s.frame_every, s.trace_cameras, s.image_size)
             start = getattr(self.backend, "topic_log", None)  # a ROS 2 backend: the graph's topics go in the trace

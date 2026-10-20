@@ -67,6 +67,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | trace: network, console | the Topics and Log tabs of a ROS 2 run | robot |
 | `trace: 'on-first-retry'` | `--rw-trace on-first-retry` | same |
 | `--debug`, `page.pause()`, Inspector | `--rw-debug`, `world.pause()`: Step, Resume, Pause in the live view | same |
+| `DEBUG=pw:api` (the API log) | `pytest --rw-log` (or `ROBOWRIGHT_DEBUG=1`): every step, action and expectation as it runs, with simulated and wall time and the line it came from | same |
 | `--headed` | `--rw-live` (a browser page), `--rw-headed` (MuJoCo's window) | same |
 | pick locator | click an object in the live view's camera image: its locators, most robust first (`scene["cube"]`, `scene.get(color="red")`, `scene.get(inside="bin")`), each with a copy button | same |
 | UI mode | `robowright test --ui` | same |

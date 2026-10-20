@@ -367,3 +367,28 @@ def test_a_dependency_cycle_is_a_usage_error(pytester):
     pytester.makepyfile(test_x="def test_x():\n    pass\n")
     r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "a")
     assert r.ret == pytest.ExitCode.USAGE_ERROR and "depends on itself through a -> b -> a" in r.stderr.str()
+
+
+LOGGED = """
+import robowright as rw
+from robowright import expect
+
+def test_put_away(robot, scene):
+    with rw.step("put it away"):
+        robot.pick(scene["cube"])
+    expect(scene["cube"]).to_be_inside(scene["bin"], timeout=0.2)
+"""
+
+
+def test_rw_log_prints_each_action_and_expectation_as_it_runs(pytester):
+    """--rw-log is Playwright's DEBUG=pw:api: each step, action and expectation as it happens, with simulated and wall
+    time and its line, past pytest's capture, with the trace off too."""
+    pytester.makepyfile(test_logged=LOGGED)
+    r = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--rw-log", "--rw-trace", "off")
+    out = r.stdout.str()
+    assert "rw:api --- test_logged.py::test_put_away[mujoco]" in out
+    assert "> 'put it away'  test_logged.py:5" in out
+    assert "> robot.pick(obj=cube)  test_logged.py:6" in out
+    assert "< robot.pick: done in" in out and "s simulated" in out and "s wall" in out
+    assert "expect expect(cube).to_be_inside: FAILED" in out and "test_logged.py:7" in out
+    assert not (pytester.path / "robowright-traces").exists(), "--rw-trace off still saves nothing"

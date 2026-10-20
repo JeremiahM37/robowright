@@ -74,9 +74,37 @@ class Event:
         return d
 
 
+LOG_ENV = "ROBOWRIGHT_DEBUG"  # set (pytest --rw-log): every action and expectation printed as it runs
+
+
+def logging_on() -> bool:
+    return os.environ.get(LOG_ENV, "") not in ("", "0")
+
+
+LOG_SINK = None  # where the debug log goes when not stderr: the pytest plugin's, past its output capture
+
+
+def log_line(text: str) -> None:
+    """One line of the debug log, as it happens (under pytest, past its capture, which would hold it to the end)."""
+    if LOG_SINK is not None:
+        LOG_SINK(f"rw:api {text}")
+        return
+    sys.stderr.write(f"rw:api {text}\n")
+    sys.stderr.flush()
+
+
+def _args_text(args: dict) -> str:
+    def show(v):
+        return v["$ref"] if isinstance(v, dict) and set(v) == {"$ref"} else repr(v)  # an object: its name
+
+    return ", ".join(f"{k}={show(v)}" for k, v in (args or {}).items())[:160]
+
+
 class Recorder:
     def __init__(self, world, frame_every: int = 5, cameras=None, image_size=(320, 240)):
         self.world = world
+        self._log = logging_on()
+        self._walls: dict[int, float] = {}  # an open event's wall-clock start, for the debug log
         self._perceived = {} if world.has_ground_truth else world.backend.perception()  # recorded each step
         self.frame_every = frame_every
         self.cameras = cameras
@@ -194,12 +222,29 @@ class Recorder:
         if type not in ("action", "step"):  # these two last a while: finish_event closes them
             e.end_step, e.end_t = e.step, e.t
         self.events.append(e)
+        if self._log and type != "edit":
+            where = f"  {Path(e.loc[0]).name}:{e.loc[1]}" if e.loc else ""
+            indent = "  " * e.depth
+            if type in ("action", "step"):
+                self._walls[id(e)] = time.perf_counter()
+                call = f"{name}({_args_text(e.args)})" if type == "action" else repr(name)  # a step is a name
+                log_line(f"t={e.t:8.3f}s {indent}> {call}{where}")
+            else:
+                mark = {"ok": "ok", "failed": "FAILED"}.get(status, status)
+                log_line(f"t={e.t:8.3f}s {indent}  {type} {name}: {mark}{(' - ' + detail.splitlines()[0][:160]) if detail else ''}{where}")
         return e
 
     def finish_event(self, e: Event, status="ok", detail=""):
         e.end_step, e.end_t, e.status = self.world.step_count, self.world.time, status
         if detail:
             e.detail = detail
+        if self._log:
+            wall = time.perf_counter() - self._walls.pop(id(e), time.perf_counter())
+            mark = "done" if status == "ok" else status.upper()
+            log_line(
+                f"t={e.end_t:8.3f}s {'  ' * e.depth}< {e.name}: {mark} in {e.end_t - e.t:.3f}s simulated, {wall:.3f}s wall"
+                + (f" - {detail.splitlines()[0][:160]}" if detail and status != "ok" else "")
+            )
 
     def meta(self) -> dict:
         from .robots.detect import recorded
