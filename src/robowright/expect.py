@@ -80,6 +80,14 @@ class Expectation:
         return self.subject if isinstance(self.subject, _Polled) else self.raw
 
     # core --------------------------------------------------------------------
+    def _settles(self, check, timeout) -> bool:
+        """Whether ``check`` comes to hold within the matcher's wait: a snapshot under ``--rw-update-snapshots changed``
+        is written again only once it has had the time a test gives it to match."""
+        if self.negate or self.mode == "always" or _ONCE.get():
+            return True
+        t = timeout if timeout is not None else self.timeout
+        return self.world.run_until(lambda: check()[0], self.world.settings.expect_timeout if t is None else t, 0.0)
+
     def _run(self, name: str, check, timeout=None, hold: float = 0.0, args=None):
         w = self.world
         label = f"expect({self.subject.name}){'.not_' if self.negate else ''}.{name}"
@@ -293,14 +301,21 @@ class Expectation:
             size = window or (box[2] - box[0], box[3] - box[1])
             return snapshots.crop(img, center, size), (None if masked is None else snapshots.crop(masked, center, size))
 
-        if snapshots.updating() or not path.exists():
+        mode = snapshots.update_mode()
+
+        def write():
             img, masked = view()
             snapshots.write(path, img)
             if mask:
                 snapshots.write(mask_path, np.repeat(masked[..., None], 3, -1).astype(np.uint8) * 255)
             else:
                 mask_path.unlink(missing_ok=True)
-            if snapshots.updating():
+
+        if not path.exists() and mode == "none":
+            return self._run(label, lambda: (False, f"no snapshot {path} (--rw-update-snapshots none: not written)"), 0.0, 0.0, args)
+        if mode == "all" or not path.exists():
+            write()
+            if mode in ("all", "changed"):
                 return self._run(label, lambda: (True, f"wrote {path}"), timeout, 0.0, args)
             missing = f"no snapshot {path} yet: wrote it from this run; look at it, then run again"
             return self._run(label, lambda: (False, missing), 0.0, 0.0, args)
@@ -323,6 +338,9 @@ class Expectation:
             d = snapshots.write(Path(f"{out}-diff.png"), diff)
             return False, f"{n} pixels differ ({ratio:.2%}, {max_diff_pixel_ratio:.2%} allowed) from {path}\n  actual: {a}\n  diff: {d}"
 
+        if mode == "changed" and not self._settles(check, timeout):
+            write()
+            return self._run(label, lambda: (True, f"updated {path}: it no longer matched"), 0.0, 0.0, args)
         return self._run(label, check, timeout, 0.0, args)
 
     def to_match_state_snapshot(self, name: str, *, tol: float = 0.01, joint_tol: float = 0.05, timeout: float = 0.0):
@@ -343,10 +361,17 @@ class Expectation:
         args = {"name": name, "tol": tol, "joint_tol": joint_tol}
         label = f"to_match_state_snapshot({name!r})"
         header = f"robowright state snapshot {name!r}: {w.backend.name}, {w.spec.robot or 'robot'}"
-        if snapshots.updating() or not path.exists():
+        mode = snapshots.update_mode()
+
+        def write():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(snapshots.format_state(snapshots.state_of(w), header))
-            if snapshots.updating():
+
+        if not path.exists() and mode == "none":
+            return self._run(label, lambda: (False, f"no snapshot {path} (--rw-update-snapshots none: not written)"), 0.0, 0.0, args)
+        if mode == "all" or not path.exists():
+            write()
+            if mode in ("all", "changed"):
                 return self._run(label, lambda: (True, f"wrote {path}"), timeout, 0.0, args)
             missing = f"no snapshot {path} yet: wrote it from this run; read it, then run again"
             return self._run(label, lambda: (False, missing), 0.0, 0.0, args)
@@ -363,6 +388,12 @@ class Expectation:
             n = f"{len(diffs)} entries differ" if len(diffs) > 1 else "1 entry differs"
             return False, f"{n} from {path}:\n  " + "\n  ".join(diffs) + f"\n  this run's state: {out}"
 
+        if mode == "changed" and not self._settles(check, timeout):
+            # the entries the snapshot has, as they are now: a line deleted to stop checking it stays deleted
+            actual = snapshots.state_of(w)
+            kept = {sec: {k: actual[sec][k] for k in entries if k in actual.get(sec, {})} for sec, entries in expected.items()}
+            path.write_text(snapshots.format_state(kept, header))
+            return self._run(label, lambda: (True, f"updated {path}: it no longer matched"), 0.0, 0.0, args)
         return self._run(label, check, timeout, 0.0, args)
 
     # state matchers -------------------------------------------------------------

@@ -17,7 +17,7 @@ Options::
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
-    --rw-update-snapshots            write the images expect(world).to_match_snapshot compares against
+    --rw-update-snapshots [MODE]     write snapshots again: changed (bare flag), all, missing (default), none
     --rw-shard K/N                   run the K-th of N parts of the suite, one part per CI machine
     --rw-github auto|on|off          failures as GitHub Actions annotations on the failing line (auto: on a GitHub runner)
     --rw-forbid-only                 fail the run if any test is marked only (default on CI)
@@ -201,14 +201,37 @@ def pytest_addoption(parser):
     )
     g.addoption(
         "--rw-update-snapshots",
-        action="store_true",
-        help="write every image expect(world).to_match_snapshot compares against, from this run",
+        nargs="?",
+        const="changed",
+        default=None,
+        metavar="MODE",
+        help="write the snapshots expect(world).to_match_snapshot and to_match_state_snapshot compare against, from this "
+        "run: changed (the bare flag) those that no longer match, all, missing (the default without the flag: only "
+        "missing ones), none (not even those, for CI)",
     )
     g.addoption(
         "--rw-trace-text",
         action="store_true",
         help="print each failing trace as text at the end: what ran, what failed, the state then (for CI logs and AI agents)",
     )
+
+
+_SNAPSHOT_MODES = ("all", "changed", "missing", "none")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config, parser, args):
+    """``--rw-update-snapshots`` and ``--rw-only-changed`` take an optional value, and argparse gives them the next
+    word whatever it is: ``pytest --rw-update-snapshots tests/`` would take ``tests/`` as the mode and leave it out of
+    the run. A next word that is not a mode (or that is a path, for ``--rw-only-changed``) stays a test path."""
+    for i, a in enumerate(args[:-1]):
+        nxt = args[i + 1]
+        if nxt.startswith("-"):
+            continue
+        if a == "--rw-update-snapshots" and nxt not in _SNAPSHOT_MODES:
+            args[i] = "--rw-update-snapshots=changed"
+        elif a == "--rw-only-changed" and os.path.exists(nxt.split("::")[0]):
+            args[i] = "--rw-only-changed=HEAD"
 
 
 def pytest_configure(config):
@@ -236,10 +259,14 @@ def pytest_configure(config):
     mode = config.getoption("--rw-fidelity", None)
     if mode:
         _set_env(config, fidelity.ENV, mode)
-    if config.getoption("--rw-update-snapshots", False):
+    if config.getoption("--rw-update-snapshots", None):
         from . import snapshots
 
-        _set_env(config, snapshots.UPDATE_ENV, "1")
+        mode = config.getoption("--rw-update-snapshots")
+        if mode not in _SNAPSHOT_MODES:  # checked here, not by argparse: see pytest_load_initial_conftests
+            raise pytest.UsageError(f"--rw-update-snapshots takes {', '.join(_SNAPSHOT_MODES)}, not {mode!r}")
+
+        _set_env(config, snapshots.UPDATE_ENV, mode)
     config.addinivalue_line("markers", "scene(spec): scene spec or zero-arg factory for this test")
     config.addinivalue_line("markers", "seed(n): seed for this test")
     config.addinivalue_line("markers", "backends(*names): only run on these backends")

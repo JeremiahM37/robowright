@@ -716,7 +716,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | projects (browsers) | `--rw-backend mujoco,drake` and `--rw-robot panda,ur5e` run every test on each engine and robot |
 | `npm init playwright` | `robowright init`: an example test, settings, a CI workflow, and the MCP server registered for AI agents |
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
-| `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes them again |
+| `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes again the ones that changed (`=all`, `=missing`, `=none` as Playwright's) |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: object positions, joints and a mobile robot's base, against text kept beside the test, each within a tolerance; delete a line to stop checking it |
 | `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time |
 | `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`: `fn(subject, ...)` returns `(passed, detail)`; the matcher then retries every control step, takes `timeout`/`hold`, `.not_`, `.always`, `expect.soft`, `expect.poll` and `condition()`, and shows in the trace and the debugger |
@@ -1367,7 +1367,9 @@ with an image kept beside the test, in `__snapshots__/<test file>/tidy-<engine>-
 and fails, so a missing baseline is never a pass: look at it, then run again. A changed view
 fails with the number of pixels that moved, and writes the actual image and a diff (changed
 pixels in red) next to the traces. `threshold` (per pixel, 0..1) and `max_diff_pixel_ratio`
-set what counts as the same view; `pytest --rw-update-snapshots` writes every baseline again.
+set what counts as the same view. `pytest --rw-update-snapshots` writes again the baselines that
+no longer match (and missing ones), as Playwright's `--update-snapshots`; `=all` writes every one,
+and `=none` not even a missing one, for CI.
 `expect(cube).to_match_snapshot("cube.png")` compares only the window around one object, as
 Playwright's element screenshot does: the window follows the object, so it checks how the object
 looks wherever it is, and a change elsewhere in the view does not fail it.

@@ -61,6 +61,36 @@ def test_update_snapshots_writes_the_baseline_again(suite):
     _run(suite).assert_outcomes(passed=1)  # the moved cube is now what the view should show
 
 
+def test_update_snapshots_changed_writes_only_what_no_longer_matches(suite):
+    """The bare flag is Playwright's --update-snapshots=changed: a baseline that still matches is left as it is."""
+    still_test = "from robowright import expect\n\ndef test_still(world):\n    expect(world).to_match_snapshot('still.png')\n"
+    suite.makepyfile(test_still=still_test)
+    _run(suite)
+    still = suite.path / "__snapshots__/test_still/still-mujoco-so101.png"
+    kept = still.stat().st_mtime_ns
+    (suite.path / "move_cube").touch()
+    before = (suite.path / BASELINE).read_bytes()
+    r = _run(suite, "--rw-update-snapshots")
+    r.assert_outcomes(passed=2)
+    assert (suite.path / BASELINE).read_bytes() != before
+    assert still.stat().st_mtime_ns == kept, "a matching baseline is not written again"
+    _run(suite, "--rw-update-snapshots=all").assert_outcomes(passed=2)
+    assert still.stat().st_mtime_ns != kept, "=all writes every one"
+
+
+def test_update_snapshots_none_writes_nothing_even_a_missing_one(suite):
+    r = _run(suite, "--rw-update-snapshots=none")
+    r.assert_outcomes(failed=1)
+    assert "--rw-update-snapshots none: not written" in r.stdout.str()
+    assert not (suite.path / BASELINE).exists()
+
+
+def test_the_bare_flag_before_a_test_path_leaves_the_path_a_path(suite):
+    suite.makepyfile(test_other="def test_other():\n    pass\n")
+    _run(suite, "--rw-update-snapshots", "test_other.py").assert_outcomes(passed=1)  # only test_other.py ran
+    _run(suite, "--rw-update-snapshots", "all", "test_other.py").assert_outcomes(passed=1)
+
+
 def test_a_snapshot_cannot_be_negated(suite):
     suite.makepyfile(
         test_neg="""
@@ -129,6 +159,17 @@ def test_update_snapshots_writes_the_state_again(state_suite, monkeypatch):
     _run(state_suite, "--rw-update-snapshots").assert_outcomes(passed=1)
     _run(state_suite).assert_outcomes(passed=1)
     assert "cube: [0.2500, 0.0500" in _state_file(state_suite).read_text()
+
+
+def test_update_snapshots_changed_keeps_a_deleted_line_deleted(state_suite, monkeypatch):
+    _run(state_suite)
+    path = _state_file(state_suite)
+    path.write_text("".join(line for line in path.read_text().splitlines(keepends=True) if "wrist" not in line))
+    monkeypatch.setenv("MOVE_CUBE", "1")
+    _run(state_suite, "--rw-update-snapshots").assert_outcomes(passed=1)
+    text = path.read_text()
+    assert "cube: [0.2500, 0.0500" in text and "wrist" not in text
+    _run(state_suite).assert_outcomes(passed=1)
 
 
 def test_an_unreadable_state_snapshot_says_where():

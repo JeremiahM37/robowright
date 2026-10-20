@@ -96,7 +96,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 |---|---|---|
 | `toHaveScreenshot`, element screenshots | `expect(world).to_match_snapshot("tidy.png")` (the whole view) or `expect(cube).to_match_snapshot("cube.png")` (the window around one object, following it), per engine and robot, with a diff | same |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: positions and joints as editable text | robot |
-| `--update-snapshots` | `--rw-update-snapshots` | same |
+| `--update-snapshots`, `=all/changed/missing/none` | `--rw-update-snapshots` (changed), `=all`, `=missing` (without the flag), `=none`; a state snapshot keeps the lines you deleted | same |
 | `mask` in screenshots | `to_match_snapshot(..., mask=["cube"])`: where the object is, now and in the baseline, left out | same |
 
 ## Network and services

@@ -60,6 +60,13 @@ def test_a_changed_module_runs_the_tests_that_import_it(project):
     assert _ran(r) == ["test_controller.py"]
 
 
+def test_a_path_after_the_bare_flag_is_a_path_not_a_ref(project):
+    (project.path / "controller.py").write_text("VALUE = 1  # tuned\n")
+    (project.path / "test_plain.py").write_text("def test_plain():\n    assert True\n")
+    r = project.runpytest("-p", "no:cacheprovider", "-v", "--rw-only-changed", "test_controller.py")
+    assert _ran(r) == ["test_controller.py"]
+
+
 def test_a_module_reached_through_relative_imports(project):
     (project.path / "pkg" / "planner.py").write_text("VALUE = 1  # faster\n")
     r = project.runpytest("-p", "no:cacheprovider", "-v", "--rw-only-changed")

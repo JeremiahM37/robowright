@@ -3,9 +3,11 @@
 A camera's view is compared with a baseline image kept next to the test, in
 ``__snapshots__/<test file>/<name>-<engine>-<robot>.png``: engines draw the same scene differently,
 so each engine and robot has its own. The first run writes the baseline and fails, so that a
-missing baseline is never a pass; ``pytest --rw-update-snapshots`` (or ``ROBOWRIGHT_UPDATE_SNAPSHOTS=1``)
-writes them all again. On a mismatch the actual image and a diff (changed pixels in red) are written
-next to the traces, and the failure names them.
+missing baseline is never a pass. ``pytest --rw-update-snapshots`` writes again the ones that no
+longer match, as Playwright's ``--update-snapshots``; ``=all`` every one, ``=none`` not even a
+missing one (for CI), ``=missing`` (the default) only missing ones. ``ROBOWRIGHT_UPDATE_SNAPSHOTS``
+carries the mode (``1``: ``all``). On a mismatch the actual image and a diff (changed pixels in red)
+are written next to the traces, and the failure names them.
 """
 
 from __future__ import annotations
@@ -21,8 +23,19 @@ UPDATE_ENV = "ROBOWRIGHT_UPDATE_SNAPSHOTS"
 _PACKAGE = Path(__file__).resolve().parent
 
 
+MODES = ("all", "changed", "missing", "none")
+
+
+def update_mode() -> str:
+    """Which baselines a run writes: all, changed (those that no longer match), missing (the default) or none."""
+    v = os.environ.get(UPDATE_ENV, "").strip().lower()
+    if v in ("", "0"):
+        return "missing"
+    return v if v in MODES else "all"
+
+
 def updating() -> bool:
-    return os.environ.get(UPDATE_ENV, "") not in ("", "0")
+    return update_mode() == "all"
 
 
 def _caller_file() -> Path:
