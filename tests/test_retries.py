@@ -49,7 +49,7 @@ def test_a_test_that_passes_on_retry_is_flaky_not_passed(pytester):
     assert "test_robots.py__test_fails_once[mujoco].zip" in traces  # the failed attempt's trace survives its retry
     assert not any("test_passes" in t for t in traces)
     page = (pytester.path / "report.html").read_text()
-    assert '<tr class="flaky">' in page and "the first attempt fails" in page
+    assert '<tr class="flaky" data-tags="">' in page and "the first attempt fails" in page
 
 
 def test_a_test_that_always_fails_fails_after_its_retries(pytester):
