@@ -234,3 +234,49 @@ def test_use_refuses_an_option_it_does_not_have(pytester):
     r = pytester.runpytest("-p", "no:cacheprovider")
     assert r.ret == pytest.ExitCode.USAGE_ERROR
     assert "pytest.mark.use has no option expect_timout; it has action_timeout" in r.stderr.str()
+
+
+PROJECTS = """
+[projects.nightly]
+robot = ["so101", "panda"]
+backend = "mujoco"
+retries = 1
+mark = "not quick"
+use = { expect_timeout = 6.0 }
+
+[projects.typo]
+robots = "panda"
+"""
+
+PROJECT_TESTS = """
+import pytest
+
+def test_robot(world, rw_robot, rw_attempt):
+    assert world.settings.expect_timeout == 6.0
+    assert rw_attempt == 1, "fails the first time: the project's retries run it again"
+
+@pytest.mark.quick
+def test_quick():
+    pass
+"""
+
+
+def test_a_project_runs_with_its_settings(pytester):
+    """--rw-project is Playwright's --project: named settings in robowright.toml, under the command line's flags."""
+    pytester.makeini("[pytest]\nmarkers =\n    quick: fast ones\n")
+    (pytester.path / "robowright.toml").write_text(PROJECTS)
+    pytester.makepyfile(test_p=PROJECT_TESTS)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "nightly")
+    assert _outcomes(r) == {"flaky": 2, "rerun": 2}, r.stdout.str()  # both robots, retried, quick deselected
+    assert "robowright: project nightly: robots so101,panda, backends mujoco, -m 'not quick'" in r.stdout.str()
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "nightly", "--rw-robot", "so101", "--rw-retries", "0")
+    assert _outcomes(r) == {"failed": 1}, "the flags given win over the project's"
+
+
+def test_an_unknown_project_or_key_is_a_usage_error(pytester):
+    (pytester.path / "robowright.toml").write_text(PROJECTS)
+    pytester.makepyfile(test_p="def test_a():\n    pass\n")
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "weekly")
+    assert r.ret == pytest.ExitCode.USAGE_ERROR and "no [projects.weekly]" in r.stderr.str() and "nightly, typo" in r.stderr.str()
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "typo")
+    assert r.ret == pytest.ExitCode.USAGE_ERROR and "unknown robots" in r.stderr.str()

@@ -14,6 +14,7 @@ Options::
     --rw-repeat-each N               run every test N times (the same seed each time), to find the ones that only fail sometimes
     --rw-trace-dir DIR
     --rw-video on|off|retain-on-failure   each test's run as an MP4 beside its trace (needs robowright[video])
+    --rw-project NAME                the settings of [projects.NAME] in robowright.toml (Playwright's --project)
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
@@ -121,6 +122,13 @@ def pytest_addoption(parser):
     )
     g.addoption("--rw-trace-dir", default="robowright-traces")
     g.addoption("--rw-seed", type=int, default=0, help="base seed added to each test's seed")
+    g.addoption(
+        "--rw-project",
+        default=None,
+        metavar="NAME",
+        help="run with the settings of [projects.NAME] in robowright.toml (Playwright's --project): robots, backends, "
+        "retries, timeouts, trace, video, a marker expression and use options; flags given here still win",
+    )
     g.addoption(
         "--rw-all-trials",
         action="store_true",
@@ -234,7 +242,59 @@ def pytest_load_initial_conftests(early_config, parser, args):
             args[i] = "--rw-only-changed=HEAD"
 
 
+# [projects.NAME] keys and the flags they set (a project's "use" table is pytest.mark.use for every test, "mark" is -m)
+_PROJECT_FLAGS = {
+    "robot": "--rw-robot",
+    "backend": "--rw-backend",
+    "retries": "--rw-retries",
+    "timeout": "--rw-timeout",
+    "trace": "--rw-trace",
+    "video": "--rw-video",
+    "seed": "--rw-seed",
+    "fidelity": "--rw-fidelity",
+    "global_timeout": "--rw-global-timeout",
+}
+_PROJECT = pytest.StashKey[dict]()
+
+
+def _apply_project(config) -> None:
+    """``--rw-project NAME``: the project's settings, under the flags given on the command line (or in addopts)."""
+    import shlex
+
+    name = config.getoption("--rw-project", None)
+    if not name:
+        return
+    from .plugins import find_config
+
+    found = find_config(config.rootpath)
+    projects = (found[1].get("projects") or {}) if found else {}
+    if name not in projects:
+        where = f"{found[0]} has {', '.join(sorted(projects)) or 'none'}" if found else "no robowright.toml was found"
+        raise pytest.UsageError(f"--rw-project {name}: no [projects.{name}]; {where}")
+    table = dict(projects[name])
+    unknown = sorted(set(table) - set(_PROJECT_FLAGS) - {"use", "mark"})
+    if unknown:
+        raise pytest.UsageError(
+            f"[projects.{name}] in {found[0]}: unknown {', '.join(unknown)}; it takes {', '.join(sorted(_PROJECT_FLAGS) + ['mark', 'use'])}"
+        )
+    given = [
+        *config.invocation_params.args,
+        *shlex.split(" ".join(config.getini("addopts"))),
+        *shlex.split(os.environ.get("PYTEST_ADDOPTS", "")),
+    ]
+    given = [a for a in given if isinstance(a, str)]
+    for key, flag in _PROJECT_FLAGS.items():
+        if key in table and not any(a == flag or a.startswith(flag + "=") for a in given):
+            value = table[key]
+            value = ",".join(value) if isinstance(value, list) else value
+            setattr(config.option, flag.lstrip("-").replace("-", "_"), value)
+    if "mark" in table and not config.option.markexpr:
+        config.option.markexpr = table["mark"]
+    config.stash[_PROJECT] = {"name": name, "use": dict(table.get("use") or {})}
+
+
 def pytest_configure(config):
+    _apply_project(config)
     if config.getoption("--rw-robot", "so101") != "so101":
         # Named here, not when a test first asks for the robot: a test that builds its own world never
         # does, and a misspelt name then ran nothing on the robot meant and passed.
@@ -312,6 +372,18 @@ def pytest_configure(config):
 
 
 def pytest_report_header(config):
+    lines = []
+    project = config.stash.get(_PROJECT, None)
+    if project:
+        lines.append(
+            f"robowright: project {project['name']}: robots {config.getoption('--rw-robot')}, backends {config.getoption('--rw-backend')}"
+            + (f", -m {config.option.markexpr!r}" if config.option.markexpr else "")
+        )
+    changed = _changed_header(config)
+    return lines + [changed] if changed else lines or None
+
+
+def _changed_header(config):
     ref = config.getoption("--rw-only-changed", None)
     if not ref:
         return None
@@ -547,7 +619,7 @@ def _use(item) -> dict:
     winning for each option (as Playwright's ``test.use`` in a file and a ``describe``)."""
     if item is None:
         return {}
-    out = {}
+    out = dict(item.config.stash.get(_PROJECT, {}).get("use", {}))  # --rw-project's, under the markers
     for m in reversed(list(item.iter_markers("use"))):  # iter_markers yields the closest first
         if m.args:
             raise pytest.UsageError(f"{item.nodeid}: pytest.mark.use takes options by name, as use(expect_timeout=5)")

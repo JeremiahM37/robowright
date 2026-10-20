@@ -40,7 +40,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 
 | Playwright | robowright | Status |
 |---|---|---|
-| projects (browsers) | `--rw-backend mujoco,pybullet,genesis,drake,ros2`, `--rw-robot panda,ur5e,all` | robot |
+| projects (browsers) | `--rw-backend mujoco,pybullet,genesis,drake,ros2`, `--rw-robot panda,ur5e,all`; named ones in `robowright.toml` (`[projects.nightly]`: robots, backends, retries, timeouts, trace, video, `mark`, `use`), run with `--rw-project nightly`, flags given still winning. One project per run, where Playwright runs every project | robot |
 | devices / emulation | 19 robots built in, any MJCF or URDF file with `--rw-robot path` | robot |
 | `webServer` | `[ros2] stack = "ros2 launch ..."`: the stack started once per worker, ready-checked, reset between tests | robot |
 | workers, `fullyParallel` | `-n auto` (pytest-xdist), grouped so tests sharing a scene reuse it | same |
