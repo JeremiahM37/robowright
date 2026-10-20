@@ -23,6 +23,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from robowright.stack import popen_reaped
+
 SHARE = Path(sys.prefix) / "share"
 PYMOVEIT2 = Path(os.environ.get("ROBOWRIGHT_PYMOVEIT2", Path(sys.prefix) / "src" / "pymoveit2"))
 PACKAGE = "moveit_resources_panda_moveit_config"
@@ -67,7 +69,7 @@ def launch_file(workdir: Path) -> Path:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _stop(procs) -> None:

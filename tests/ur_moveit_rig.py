@@ -56,6 +56,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from robowright.stack import popen_reaped
+
 SHARE = Path(sys.prefix) / "share"
 # pymoveit2, whose examples are the MoveIt clients under test (scripts/ros2_env.sh pymoveit2)
 PYMOVEIT2 = Path(os.environ.get("ROBOWRIGHT_PYMOVEIT2", Path(sys.prefix) / "src" / "pymoveit2"))
@@ -146,7 +148,7 @@ def ground(workdir: Path) -> None:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _environment() -> dict:

@@ -24,6 +24,7 @@ import pytest
 
 import robowright as rw
 from robowright import expect
+from robowright.stack import popen_reaped
 
 WEBOTS_HOME = os.environ.get("WEBOTS_HOME")
 PORT = 1234  # the port Webots' extern controller listens on
@@ -65,12 +66,11 @@ def _start_world(project: Path) -> subprocess.Popen:
     world.write_text(_probe_world(home))
     log_path = project / "webots.log"
     with open(log_path, "w") as log:
-        proc = subprocess.Popen(
+        proc = popen_reaped(  # its own process group, so _stop reaches the controllers too, and gone with this process
             [str(home / "webots"), "--no-rendering", "--batch", "--mode=fast", "--stdout", "--stderr", "--minimize", str(world)],
             stdout=log,
             stderr=subprocess.STDOUT,
             env=dict(os.environ),
-            start_new_session=True,  # its own process group, so _stop reaches the controllers too
         )
     deadline = time.monotonic() + 180
     while "Waiting for local or remote connection" not in log_path.read_text(errors="replace"):

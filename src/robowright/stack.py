@@ -367,6 +367,16 @@ sys.exit(child.wait())
 """
 
 
+def popen_reaped(args, **kwargs) -> subprocess.Popen:
+    """``subprocess.Popen(args, ...)`` in a process group of its own, under the reaper (see ``_REAPER``) when started
+    from the main thread: it and everything it started go when this process dies, killed outright included. Stop it as
+    a group (``os.killpg(proc.pid, ...)``): ``proc`` is the reaper, which leads the group and exits with the command."""
+    kwargs["start_new_session"] = True
+    if threading.current_thread() is threading.main_thread():
+        args = [sys.executable, "-c", _REAPER, str(os.getpid()), *args]
+    return subprocess.Popen(args, **kwargs)
+
+
 def _stop_group(proc: subprocess.Popen, grace: float = 1.0) -> None:
     """SIGINT the stack's process group; a second later, SIGKILL whatever is left of it."""
     with contextlib.suppress(ProcessLookupError):

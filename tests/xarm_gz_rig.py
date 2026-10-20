@@ -35,6 +35,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from robowright.stack import popen_reaped
+
 SHARE = Path(sys.prefix) / "share"
 SRC = Path(sys.prefix) / "src" / "xarm_ros2"  # the checkout of scripts/ros2_env.sh xarm
 XARM_WS = Path(os.environ.get("ROBOWRIGHT_XARM_WS", "/mnt/bulk/rw-ext/xarm-ws"))
@@ -129,7 +131,7 @@ def _environment(gripper: bool) -> dict:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _stop(procs) -> None:

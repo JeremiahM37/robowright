@@ -211,3 +211,37 @@ def test_a_stack_does_not_outlive_a_test_run_that_was_killed(tmp_path):
         time.sleep(0.05)
     os.kill(child, 9)
     pytest.fail("the launch process outlived the run that started it")
+
+
+def test_popen_reaped_goes_with_a_process_killed_outright(tmp_path):
+    """stack.popen_reaped (what the test rigs start Gazebo, MoveIt and Nav2 with): when the process that started it is
+    killed with SIGKILL, no cleanup running, the command and what it started go too."""
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    pidfile = tmp_path / "sleep.pid"
+    starter = (
+        "import sys, time\n"
+        "from robowright.stack import popen_reaped\n"
+        "p = popen_reaped(['sh', '-c', 'echo $$ > " + str(pidfile) + "; exec sleep 300'])\n"
+        "time.sleep(300)\n"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", starter])
+    deadline = time.monotonic() + 20
+    while not (pidfile.exists() and pidfile.read_text().strip()) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    pid = int(pidfile.read_text())
+    os.kill(pid, 0)  # running
+    parent.send_signal(signal.SIGKILL)
+    parent.wait()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    os.kill(pid, signal.SIGKILL)
+    raise AssertionError("the command outlived the process that started it")

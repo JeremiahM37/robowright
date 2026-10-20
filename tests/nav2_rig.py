@@ -42,6 +42,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from robowright.stack import popen_reaped
+
 SHARE = Path(sys.prefix) / "share"
 PACKAGES = ("nav2_bringup", "nav2_minimal_tb3_sim", "nav2_simple_commander", "turtlebot3_gazebo")
 # The sandbox world's map is 20 m square, centred on the origin (nav2_bringup's tb3_sandbox.yaml).
@@ -90,7 +92,7 @@ def installed() -> bool:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _environment() -> dict:

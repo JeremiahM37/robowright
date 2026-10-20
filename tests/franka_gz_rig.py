@@ -27,6 +27,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from robowright.stack import popen_reaped
+
 # The workspace ``scripts/ros2_env.sh franka`` builds; the default is next to the environment it runs in.
 WS = Path(os.environ.get("ROBOWRIGHT_FRANKA_WS", f"{sys.prefix}-ws"))
 INSTALL = WS / "install"
@@ -77,7 +79,7 @@ def launch_command(controller: str) -> list[str]:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _stop(procs) -> None:

@@ -39,6 +39,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from robowright.stack import popen_reaped
+
 SHARE = Path(sys.prefix) / "share"
 SRC = Path(sys.prefix) / "src"  # the checkouts of scripts/ros2_env.sh kortex
 KORTEX_LAUNCH = SRC / "ros2_kortex" / "kortex_bringup" / "launch" / "kortex_sim_control.launch.py"
@@ -127,7 +129,7 @@ def headless_launch(workdir: Path) -> Path:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _environment() -> dict:

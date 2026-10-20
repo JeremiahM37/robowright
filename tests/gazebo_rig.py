@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from robowright.stack import popen_reaped
+
 ROS = Path(sys.prefix)
 
 
@@ -150,7 +152,7 @@ def world_sdf(robot: str) -> str:
 
 
 def _start(cmd, log: Path, env=None) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, env=env)  # gone with this process, however it ends
 
 
 def _stop(procs):

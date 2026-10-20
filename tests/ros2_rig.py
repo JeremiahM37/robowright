@@ -27,6 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
+from robowright.stack import popen_reaped
+
 ROS = Path(sys.prefix)  # the ROS 2 environment the tests run in (RoboStack, or a sourced /opt/ros)
 
 
@@ -103,7 +105,7 @@ def _yaml(v) -> str:
 
 
 def _start(cmd, log: Path) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
+    return popen_reaped(cmd, stdout=log.open("w"), stderr=subprocess.STDOUT)  # gone with this process, however it ends
 
 
 def _stop(procs):
@@ -180,11 +182,10 @@ def physics(robot: str = "so101", workdir: Path | None = None, cwd: Path | None 
     """A robowright scene in MuJoCo behind ``ros2_control``'s topics (see :func:`serve`), run
     from ``cwd`` (where a robowright.toml naming the robot is found)."""
     d = Path(workdir or tempfile.mkdtemp(prefix="rw-ros2-"))
-    p = subprocess.Popen(
+    p = popen_reaped(  # its own process group, gone with this process however it ends
         [sys.executable, __file__, "physics", robot],
         stdout=(d / "physics.log").open("w"),
         stderr=subprocess.STDOUT,
-        start_new_session=True,
         cwd=cwd,
     )
     try:

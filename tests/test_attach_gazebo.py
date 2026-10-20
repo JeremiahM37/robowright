@@ -40,6 +40,7 @@ import robowright as rw  # noqa: E402
 from robowright import expect  # noqa: E402
 from robowright.errors import CapabilityError, InvariantViolation  # noqa: E402
 from robowright.gazebo import worlds  # noqa: E402
+from robowright.stack import popen_reaped  # noqa: E402
 
 FORCE_TOPIC = "/model/lift_drag_demo_model/joint/rod_1_joint/cmd_force"
 COMMANDED_FORCE = 0.7  # N m, the shipped world's own example value
@@ -51,7 +52,7 @@ def _start(world_file: Path, *, running: bool, log: Path) -> subprocess.Popen:
     args = [str(GZ), "sim", "-s"] + (["-r"] if running else []) + ["--headless-rendering", str(world_file)]
     env = dict(os.environ, PATH=f"{ENV_BIN}{os.pathsep}{os.environ.get('PATH', '')}")
     with open(log, "w") as out:
-        return subprocess.Popen(args, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        return popen_reaped(args, stdout=out, stderr=subprocess.STDOUT, env=env)  # gone with this process however it ends
 
 
 def _wait_for_world(name: str, proc: subprocess.Popen, log: Path, timeout: float = 90.0) -> None:
