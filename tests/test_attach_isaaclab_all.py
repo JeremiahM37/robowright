@@ -103,15 +103,30 @@ def _run(task: str, cameras: bool, device: str) -> dict:
     # The result is read as soon as it is printed: Isaac Sim's shutdown can then hang (seen on the CPU), and a timeout
     # waiting for the exit threw away a result already given.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
+    import queue
+    import threading
+
     seen: list[str] = []
+    lines: queue.Queue = queue.Queue()
+
+    def read():  # on a thread: a task that hangs printing nothing is still stopped at the deadline
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
     deadline = time.monotonic() + 600
     try:
-        for line in proc.stdout:
+        while True:
+            try:
+                line = lines.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                return {"crashed": "no result within 600 s", "log": "".join(seen[-40:])}
+            if line is None:
+                break
             seen.append(line)
             if line.startswith("RESULT "):
                 return json.loads(line[7:])
-            if time.monotonic() > deadline:
-                return {"crashed": "no result within 600 s", "log": "".join(seen[-40:])}
         proc.wait(30)
     finally:
         if proc.poll() is None:
