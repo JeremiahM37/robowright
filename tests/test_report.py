@@ -247,3 +247,19 @@ def test_tags_and_annotations_in_the_report(pytester):
         page = (pytester.path / "r.html").read_text()
         assert '<button data-t="needs_gpu">@needs_gpu 1</button>' in page and '<span class="tag">@smoke</span>' in page
         assert '<a href="https://github.com/me/robot/issues/12">' in page and "the left finger slips" in page
+
+
+def test_junit_carries_each_tests_robot_engine_seed_and_trace(pytester):
+    """pytest --junitxml: each testcase's properties say its robot, engine and seed, and a failure's trace, so a CI
+    dashboard can split results by robot and link the evidence."""
+    import xml.etree.ElementTree as ET
+
+    pytester.makepyfile(test_robots=TEST)
+    pytester.runpytest("-p", "no:cacheprovider", "--rw-robot", "so101,panda", "--junitxml", "j.xml")
+    cases = {
+        c.get("name"): {p.get("name"): p.get("value") for p in c.iter("property")}
+        for c in ET.parse(pytester.path / "j.xml").iter("testcase")
+    }
+    assert cases["test_pass[mujoco-panda]"] == {"robowright.backend": "mujoco", "robowright.robot": "panda", "robowright.seed": "0"}
+    bad = cases["test_wrong_spot[mujoco-so101]"]
+    assert bad["robowright.robot"] == "so101" and bad["robowright.trace"].endswith("test_robots.py__test_wrong_spot[mujoco-so101].zip")

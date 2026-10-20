@@ -84,7 +84,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | HTML reporter, `show-report` | `--rw-report report.html`, `robowright show-report` | same |
 | blob reporter, `merge-reports` | `--rw-blob`, `robowright merge-reports` | same |
 | `github` reporter | annotations at the failing line on GitHub Actions, by itself | same |
-| JUnit, JSON reporters | pytest's `--junitxml`; `--rw-json results.json` (every test's outcome, message, traces, trials and attachments) | same |
+| JUnit, JSON reporters | pytest's `--junitxml`, each testcase with its robot, engine, seed, project and trace as properties; `--rw-json results.json` (every test's outcome, message, traces, trials and attachments) | same |
 | line, dot, list reporters | pytest's `-q`, `-v` | same (pytest's) |
 | custom reporters | pytest plugins and hooks | same (pytest's) |
 | `video` | `--rw-video retain-on-failure`, played in the HTML report | same |

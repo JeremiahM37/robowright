@@ -947,6 +947,8 @@ def world(request, rw_backend, rw_robot):
         message = crash.message if crash is not None else "the test failed before it ran (in a fixture)"
         w.trace.event("error", message.splitlines()[0][:300], status="failed", detail=message)
     path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid, _attempt(item)))
+    if path:
+        item.user_properties.append(("robowright.trace", str(path)))  # for JUnit's properties
     if path and failed:
         item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))
     video = _opt(item.config, item, "video", "off")
@@ -1055,6 +1057,20 @@ def pytest_runtest_makereport(item, call):
             item.config.stash.setdefault(_SERIAL_FAILED, set()).add(group)
     if rep.when == "setup":  # what the report shows beside the test: its tags and annotations
         import json
+
+        # what JUnit (pytest --junitxml) and other readers of the item's properties see for each test
+        p = getattr(item, "callspec", None)
+        params = p.params if p is not None else {}
+        if "world" in getattr(item, "fixturenames", ()) or "rw_backend" in params:
+            robot = params.get("rw_robot") or (_robot_names(item.config)[0] if "rw_robot" in getattr(item, "fixturenames", ()) else None)
+            for key, value in (
+                ("robowright.backend", params.get("rw_backend")),
+                ("robowright.robot", robot),
+                ("robowright.seed", _seed(item)),
+                ("robowright.project", params.get("rw_project")),
+            ):
+                if value is not None and (key, str(value)) not in item.user_properties:
+                    item.user_properties.append((key, str(value)))
 
         tags = sorted({m.name for m in item.iter_markers() if not m.name.startswith("rw_")} - _NOT_TAGS)
         if tags:
