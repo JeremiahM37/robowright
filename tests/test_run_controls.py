@@ -280,3 +280,42 @@ def test_an_unknown_project_or_key_is_a_usage_error(pytester):
     assert r.ret == pytest.ExitCode.USAGE_ERROR and "no [projects.weekly]" in r.stderr.str() and "nightly, typo" in r.stderr.str()
     r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "typo")
     assert r.ret == pytest.ExitCode.USAGE_ERROR and "unknown robots" in r.stderr.str()
+
+
+MULTI = """
+[projects.arms]
+robot = ["so101", "panda"]
+use = { expect_timeout = 6.0 }
+
+[projects.quick]
+backend = "pybullet"
+mark = "quick"
+seed = 5
+"""
+
+MULTI_TESTS = """
+import pytest
+
+def test_world(world, rw_project, rw_backend, rw_robot, seed):
+    want = {"arms": (6.0, "mujoco", 0), "quick": (2.0, "pybullet", 5)}[rw_project]
+    assert (world.settings.expect_timeout, rw_backend, seed) == want
+
+@pytest.mark.quick
+def test_plain(rw_project):
+    assert rw_project in ("arms", "quick")
+"""
+
+
+def test_several_projects_run_every_test_in_each(pytester):
+    """--rw-project arms,quick runs each test once per project with that project's settings, as Playwright runs every
+    project; a project's mark keeps only its own tests."""
+    pytester.makeini("[pytest]\nmarkers =\n    quick: fast ones\n")
+    (pytester.path / "robowright.toml").write_text(MULTI)
+    pytester.makepyfile(test_m=MULTI_TESTS)
+    r = pytester.runpytest("-p", "no:cacheprovider", "-v", "--rw-project", "arms,quick")
+    assert _outcomes(r) == {"passed": 4}, r.stdout.str()
+    out = r.stdout.str()
+    for test_id in ("test_world[arms-mujoco-so101]", "test_world[arms-mujoco-panda]", "test_plain[arms]", "test_plain[quick]"):
+        assert f"{test_id} PASSED" in out
+    assert "test_world[quick" not in out.replace("deselected", ""), "quick's mark keeps only its quick tests"
+    assert _outcomes(pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "all")) == {"passed": 4}

@@ -14,7 +14,7 @@ Options::
     --rw-repeat-each N               run every test N times (the same seed each time), to find the ones that only fail sometimes
     --rw-trace-dir DIR
     --rw-video on|off|retain-on-failure   each test's run as an MP4 beside its trace (needs robowright[video])
-    --rw-project NAME                the settings of [projects.NAME] in robowright.toml (Playwright's --project)
+    --rw-project NAME[,NAME]|all     the settings of [projects.NAME] in robowright.toml; several: every test in each
     --rw-seed N                      base seed
     --rw-all-trials                  run every trial of a trials test, not just until the verdict is settled
     --rw-trace-text                  print each failing trace as text (what ran, what failed, the state then)
@@ -257,40 +257,90 @@ _PROJECT_FLAGS = {
 _PROJECT = pytest.StashKey[dict]()
 
 
-def _apply_project(config) -> None:
-    """``--rw-project NAME``: the project's settings, under the flags given on the command line (or in addopts)."""
+_PROJECTS = pytest.StashKey[dict]()  # several projects in one run: {name: table}, each test run in each
+_RUN_WIDE = ("fidelity", "global_timeout")  # one value for the whole run, so the same in every project run together
+
+
+def _given(config, flag: str) -> bool:
+    """Whether ``flag`` was given on the command line, in addopts or in PYTEST_ADDOPTS (and so wins over a project)."""
     import shlex
 
-    name = config.getoption("--rw-project", None)
-    if not name:
-        return
-    from .plugins import find_config
-
-    found = find_config(config.rootpath)
-    projects = (found[1].get("projects") or {}) if found else {}
-    if name not in projects:
-        where = f"{found[0]} has {', '.join(sorted(projects)) or 'none'}" if found else "no robowright.toml was found"
-        raise pytest.UsageError(f"--rw-project {name}: no [projects.{name}]; {where}")
-    table = dict(projects[name])
-    unknown = sorted(set(table) - set(_PROJECT_FLAGS) - {"use", "mark"})
-    if unknown:
-        raise pytest.UsageError(
-            f"[projects.{name}] in {found[0]}: unknown {', '.join(unknown)}; it takes {', '.join(sorted(_PROJECT_FLAGS) + ['mark', 'use'])}"
-        )
     given = [
         *config.invocation_params.args,
         *shlex.split(" ".join(config.getini("addopts"))),
         *shlex.split(os.environ.get("PYTEST_ADDOPTS", "")),
     ]
-    given = [a for a in given if isinstance(a, str)]
-    for key, flag in _PROJECT_FLAGS.items():
-        if key in table and not any(a == flag or a.startswith(flag + "=") for a in given):
-            value = table[key]
-            value = ",".join(value) if isinstance(value, list) else value
+    return any(isinstance(a, str) and (a == flag or a.startswith(flag + "=")) for a in given)
+
+
+def _flat(value):
+    return ",".join(value) if isinstance(value, list) else value
+
+
+def _apply_project(config) -> None:
+    """``--rw-project NAME``: the project's settings, under the flags given on the command line (or in addopts).
+    ``--rw-project a,b`` runs every test in each, as Playwright runs every project: see ``_PROJECTS``."""
+    raw = config.getoption("--rw-project", None)
+    if not raw:
+        return
+    from .plugins import find_config
+
+    found = find_config(config.rootpath)
+    projects = (found[1].get("projects") or {}) if found else {}
+    names = list(projects) if raw == "all" else [n.strip() for n in raw.split(",") if n.strip()]
+    tables = {}
+    for name in names:
+        if name not in projects:
+            where = f"{found[0]} has {', '.join(sorted(projects)) or 'none'}" if found else "no robowright.toml was found"
+            raise pytest.UsageError(f"--rw-project {name}: no [projects.{name}]; {where}")
+        table = dict(projects[name])
+        unknown = sorted(set(table) - set(_PROJECT_FLAGS) - {"use", "mark"})
+        if unknown:
+            raise pytest.UsageError(
+                f"[projects.{name}] in {found[0]}: unknown {', '.join(unknown)}; "
+                f"it takes {', '.join(sorted(_PROJECT_FLAGS) + ['mark', 'use'])}"
+            )
+        tables[name] = table
+    if len(tables) == 1:
+        ((name, table),) = tables.items()
+        for key, flag in _PROJECT_FLAGS.items():
+            if key in table and not _given(config, flag):
+                setattr(config.option, flag.lstrip("-").replace("-", "_"), _flat(table[key]))
+        if "mark" in table and not config.option.markexpr:
+            config.option.markexpr = table["mark"]
+        config.stash[_PROJECT] = {"name": name, "use": dict(table.get("use") or {})}
+        return
+    for key in _RUN_WIDE:  # set once, for the run
+        values = {repr(t.get(key)) for t in tables.values()}
+        if len(values) > 1:
+            raise pytest.UsageError(f"--rw-project {raw}: {key} differs between them; it is one value for the whole run")
+        value = next(iter(tables.values())).get(key)
+        flag = _PROJECT_FLAGS[key]
+        if value is not None and not _given(config, flag):
             setattr(config.option, flag.lstrip("-").replace("-", "_"), value)
-    if "mark" in table and not config.option.markexpr:
-        config.option.markexpr = table["mark"]
-    config.stash[_PROJECT] = {"name": name, "use": dict(table.get("use") or {})}
+    for name, table in tables.items():  # each project's robots named now, as a single run's are
+        if "robot" in table and not _given(config, "--rw-robot"):
+            try:
+                _robot_names(config, _flat(table["robot"]), _flat(table.get("backend", "")))
+            except (ValueError, KeyError) as e:
+                raise pytest.UsageError(f"[projects.{name}] robot: {e}") from None
+    config.stash[_PROJECTS] = tables
+
+
+def _project_of(item) -> dict:
+    """The project table this test runs in, when several are run together (else {}: a single one is in the options)."""
+    tables = item.config.stash.get(_PROJECTS, None)
+    p = getattr(item, "callspec", None)
+    name = p.params.get("rw_project") if p is not None else None
+    return tables.get(name, {}) if tables and name else {}
+
+
+def _project_value(item, key: str, default=None):
+    """A run option for this test from its project (several run together), unless its flag was given."""
+    table = _project_of(item) if item is not None else {}
+    if key in table and not _given(item.config, _PROJECT_FLAGS[key]):
+        return _flat(table[key])
+    return item.config.getoption(_PROJECT_FLAGS[key], default) if item is not None else default
 
 
 def pytest_configure(config):
@@ -373,6 +423,8 @@ def pytest_configure(config):
 
 def pytest_report_header(config):
     lines = []
+    for name, table in (config.stash.get(_PROJECTS, None) or {}).items():
+        lines.append(f"robowright: project {name}: " + ", ".join(f"{k} {_flat(v)}" for k, v in table.items() if k != "use"))
     project = config.stash.get(_PROJECT, None)
     if project:
         lines.append(
@@ -434,9 +486,9 @@ def pytest_xdist_auto_num_workers(config):
 STACK_ROBOT = "stack"  # --rw-robot stack: the robot the ROS 2 stack's own description publishes
 
 
-def _robot_names(config) -> list[str]:
-    raw = [r.strip() for r in config.getoption("--rw-robot").split(",") if r.strip()]
-    if raw == ["so101"] and config.getoption("--rw-backend", "") == "ros2" and _stack_configured():
+def _robot_names(config, robots: str | None = None, backends: str | None = None) -> list[str]:
+    raw = [r.strip() for r in (robots or config.getoption("--rw-robot")).split(",") if r.strip()]
+    if raw == ["so101"] and (backends or config.getoption("--rw-backend", "")) == "ros2" and _stack_configured():
         return [STACK_ROBOT]  # no robot named, against the project's own stack: its robot
     out = []
     for r in raw:
@@ -461,13 +513,16 @@ def _robot_names(config) -> list[str]:
 
 
 def pytest_generate_tests(metafunc):
-    if "rw_backend" in metafunc.fixturenames:
+    tables = metafunc.config.stash.get(_PROJECTS, None)
+    if tables:
+        _generate_projects(metafunc, tables)
+    elif "rw_backend" in metafunc.fixturenames:
         names = [b.strip() for b in metafunc.config.getoption("--rw-backend").split(",") if b.strip()]
         m = metafunc.definition.get_closest_marker("backends")
         if m:
             names = [n for n in names if n in m.args] or list(m.args[:1])
         metafunc.parametrize("rw_backend", names, ids=names, scope="function")
-    if "rw_robot" in metafunc.fixturenames:
+    if "rw_robot" in metafunc.fixturenames and not tables:
         names = _robot_names(metafunc.config)
         m = metafunc.definition.get_closest_marker("robots")
         if m:
@@ -478,6 +533,40 @@ def pytest_generate_tests(metafunc):
     if repeats > 1:  # last, so the id reads test[mujoco-repeat2]
         metafunc.fixturenames.append("rw_repeat")
         metafunc.parametrize("rw_repeat", range(1, repeats + 1), ids=[f"repeat{i}" for i in range(1, repeats + 1)], scope="function")
+
+
+def _generate_projects(metafunc, tables: dict) -> None:
+    """Several projects run together: each test once per project, and on that project's backends and robots."""
+    config = metafunc.config
+    backend_m = metafunc.definition.get_closest_marker("backends")
+    robot_m = metafunc.definition.get_closest_marker("robots")
+    combos, ids = [], []
+    for name, table in tables.items():
+        own = "backend" in table and not _given(config, "--rw-backend")
+        backends = [b.strip() for b in str(_flat(table["backend"]) if own else config.getoption("--rw-backend")).split(",") if b.strip()]
+        if backend_m:
+            backends = [b for b in backends if b in backend_m.args] or list(backend_m.args[:1])
+        robot_raw = _flat(table["robot"]) if "robot" in table and not _given(config, "--rw-robot") else None
+        robots = _robot_names(config, robot_raw, ",".join(backends))
+        if robot_m:
+            robots = [r for r in robots if r in robot_m.args] or list(robot_m.args[:1])
+        for b in backends if "rw_backend" in metafunc.fixturenames else [None]:
+            for r in robots if "rw_robot" in metafunc.fixturenames else [None]:
+                combos.append(tuple(x for x in (name, b, r) if x is not None))
+                ids.append("-".join([name] + ([b] if b else []) + ([_robot_id(r)] if r else [])))
+    argnames = ["rw_project"] + [n for n in ("rw_backend", "rw_robot") if n in metafunc.fixturenames]
+    if "rw_project" not in metafunc.fixturenames:
+        metafunc.fixturenames.append("rw_project")
+    if len(argnames) == 1:
+        metafunc.parametrize("rw_project", [c[0] for c in combos], ids=ids, scope="function")
+    else:
+        metafunc.parametrize(argnames, combos, ids=ids, scope="function")
+
+
+@pytest.fixture
+def rw_project():
+    """The project this test runs in (``--rw-project a,b``); parametrized by pytest_generate_tests."""
+    return None
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -504,6 +593,20 @@ def pytest_collection_modifyitems(config, items):
     """
     for i in items:
         _use(i)  # a misspelt option fails the run now, not as each test starts
+    tables = config.stash.get(_PROJECTS, None)
+    if tables and not config.option.markexpr and any("mark" in t for t in tables.values()):
+        from _pytest.mark.expression import Expression
+
+        exprs = {n: Expression.compile(t["mark"]) for n, t in tables.items() if "mark" in t}
+        keep, drop = [], []
+        for i in items:
+            p = getattr(i, "callspec", None)
+            e = exprs.get(p.params.get("rw_project") if p is not None else None)
+            names = {m.name for m in i.iter_markers()}
+            (keep if e is None or e.evaluate(lambda name, _n=names, **kw: name in _n) else drop).append(i)
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+            items[:] = keep
     focused = [i for i in items if i.get_closest_marker("only")]
     if focused:
         forbid = config.getoption("--rw-forbid-only", None)
@@ -620,6 +723,7 @@ def _use(item) -> dict:
     if item is None:
         return {}
     out = dict(item.config.stash.get(_PROJECT, {}).get("use", {}))  # --rw-project's, under the markers
+    out.update(_project_of(item).get("use") or {})
     for m in reversed(list(item.iter_markers("use"))):  # iter_markers yields the closest first
         if m.args:
             raise pytest.UsageError(f"{item.nodeid}: pytest.mark.use takes options by name, as use(expect_timeout=5)")
@@ -633,7 +737,9 @@ def _use(item) -> dict:
 def _opt(config, item, name: str, default=None):
     """A run option for this test: its ``pytest.mark.use``, else the command line."""
     use = _use(item)
-    return use[name] if name in use else config.getoption(_USE_RUN[name], default)
+    if name in use:
+        return use[name]
+    return _project_value(item, name, default) if item is not None else config.getoption(_USE_RUN[name], default)
 
 
 def _settings(config, attempt: int = 0, item=None) -> Settings:
@@ -740,7 +846,7 @@ def _live(config):
 
 def _seed(item) -> int:
     m = item.get_closest_marker("seed")
-    return item.config.getoption("--rw-seed") + (m.args[0] if m else 0)
+    return int(_project_value(item, "seed", 0) or 0) + (m.args[0] if m else 0)
 
 
 @pytest.fixture
