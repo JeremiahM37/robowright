@@ -155,8 +155,10 @@ class SceneLocator:
         """Exactly one object matching ``filters`` (strict, like Playwright's locators). What it is: ``name=``,
         ``color=``, ``kind=``, ``tag=``. Where it is now, as Playwright filters a locator by what it has: ``inside="bin"``
         (its centre within the bin), ``on="tray"`` (resting on top of it), ``touching="floor"``, ``near=(point or
-        object, radius)``, ``held=True`` (between the gripper's fingers), and ``where=fn`` for anything else
-        (``fn(handle) -> bool``). ``scene.get(color="red", inside="bin")`` is the red object in the bin."""
+        object, radius)``, ``held=True`` (between the gripper's fingers). What this robot can do with it, as
+        Playwright finds an element by its role: ``graspable=True`` (not a bin, and narrower than its gripper opens).
+        And ``where=fn`` for anything else (``fn(handle) -> bool``). ``scene.get(color="red", inside="bin")`` is the red
+        object in the bin."""
         found = self.all(**filters)
         if len(found) != 1:
             raise LookupError(f"expected exactly one object matching {filters}, found {[h.name for h in found]}")
@@ -170,7 +172,7 @@ class SceneLocator:
         return min(cands, key=lambda h: float(np.linalg.norm(h.position - p)))
 
 
-_FILTERS = {"color", "kind", "tag", "name", "inside", "on", "touching", "near", "held", "where"}
+_FILTERS = {"color", "kind", "tag", "name", "inside", "on", "touching", "near", "held", "graspable", "where"}
 _ON_GAP = 0.01  # m between an object's bottom and the top it rests on
 
 
@@ -203,6 +205,13 @@ def _match_state(world, h, f) -> bool:
         gripper = getattr(world.robot, "gripper", None)
         held = gripper is not None and gripper.holding() == h.name
         if held != bool(f["held"]):
+            return False
+    if "graspable" in f:
+        from .robot import grasp_width, widest_gap
+
+        robot = world.robot
+        fits = h.spec.kind != "bin" and getattr(robot, "gripper", None) is not None and grasp_width(h.spec) <= widest_gap(robot.model)
+        if fits != bool(f["graspable"]):
             return False
     if "where" in f and not f["where"](h):
         return False

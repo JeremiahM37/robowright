@@ -97,3 +97,17 @@ def test_a_misspelt_filter_is_an_error_not_a_match_for_everything(quiet_world):
     w = quiet_world(scene=tabletop(ObjectSpec("cube")))
     with pytest.raises(TypeError, match="unknown scene filter.*'colour'"):
         w.scene.all(colour="red")
+
+
+def test_graspable_is_what_this_robots_gripper_can_pick_up(quiet_world):
+    w = quiet_world(
+        scene=tabletop(
+            ObjectSpec("cube", pos=(0.22, -0.06, None)),
+            ObjectSpec("slab", "box", (0.09, 0.09, 0.01), (0.25, 0.08, None), color="green"),
+            ObjectSpec("bin", "bin", (0.06, 0.06, 0.02), (0.15, 0.15, 0.0)),
+        )
+    )
+    assert w.scene.get(graspable=True).name == "cube"
+    assert [h.name for h in w.scene.all(graspable=False)] == ["slab", "bin"]
+    with pytest.raises(rw.errors.TooWideError):
+        w.robot.pick(w.scene["slab"])  # what graspable=False said
