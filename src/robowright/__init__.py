@@ -36,18 +36,36 @@ def _has_glx(display: str) -> bool:
         x11.XCloseDisplay(handle)
 
 
-def _offscreen_gl(find=None) -> str | None:
-    """The offscreen OpenGL that loads here: EGL, else OSMesa (CPU only), else None. MuJoCo loads the one named in
-    MUJOCO_GL when it is imported, so naming one whose library is missing (EGL on a bare CI runner) made
-    ``import robowright`` itself fail; with neither, nothing is named, and only rendering is unavailable."""
+def _offscreen_gl(find=None, works=None) -> str | None:
+    """The offscreen OpenGL that works here: EGL, else OSMesa (CPU only), else None. MuJoCo loads the one named in
+    MUJOCO_GL when it is imported, so naming one that cannot load made ``import robowright`` itself fail (a bare CI
+    runner). A library being installed is not enough: GitHub's runner has libEGL and libGL, and PyOpenGL still cannot
+    use them; so each is tried, in a child process (PyOpenGL keeps the first platform it loads), and only one that
+    loads is named. With neither, nothing is named, and only rendering is unavailable."""
     import ctypes.util
 
     find = find or ctypes.util.find_library
-    if find("EGL") and (find("OpenGL") or find("GL")):  # PyOpenGL's EGL loads OpenGL too (a runner can have only EGL)
+    works = works or _loads
+    if find("EGL") and works("egl"):
         return "egl"
-    if find("OSMesa"):
+    if find("OSMesa") and works("osmesa"):
         return "osmesa"
     return None
+
+
+def _loads(platform: str) -> bool:
+    """Whether PyOpenGL can load ``platform`` (egl or osmesa) here, tried where a failure cannot hurt this process."""
+    import subprocess
+
+    probe = {
+        "egl": "from OpenGL import EGL; EGL.eglQueryString",
+        "osmesa": "from OpenGL import osmesa; osmesa.OSMesaCreateContextExt",
+    }[platform]
+    env = {**os.environ, "PYOPENGL_PLATFORM": platform}
+    try:
+        return subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 # Render offscreen on headless Linux (CI, servers), and where the display cannot do OpenGL through GLX: MuJoCo picks
