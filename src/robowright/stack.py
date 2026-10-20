@@ -360,7 +360,10 @@ signal.signal(signal.SIGUSR1, lambda *_: os.killpg(0, signal.SIGKILL))
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 if os.getppid() != parent:  # the test process died before the signal was asked for
     os.killpg(0, signal.SIGKILL)
-sys.exit(subprocess.Popen(sys.argv[2:]).wait())
+# The command gets SIGINT back: an ignored signal is inherited across exec, and a command that only stops cleanly on
+# SIGINT (ros2 bag record, writing its bag) would otherwise be killed instead.
+child = subprocess.Popen(sys.argv[2:], preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+sys.exit(child.wait())
 """
 
 

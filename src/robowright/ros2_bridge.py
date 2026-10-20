@@ -36,6 +36,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time as _time
@@ -352,8 +353,18 @@ class Ros2Bridge:
             self._relays = relays
             for r in relays:
                 self._note(f"route {r.topic}: {r.route.describe()}")
+        from .stack import _REAPER
+
+        # Under a reaper (see stack._REAPER), as a stack is: if this process dies, even killed outright, the command and
+        # everything it started go too. Without it, a test helper outlived a crashed run and spoiled the runs after it.
+        reaper = threading.current_thread() is threading.main_thread()
         proc = subprocess.Popen(
-            args, stdout=log.open("w"), stderr=subprocess.STDOUT, env={**os.environ, **(env or {})}, cwd=cwd, start_new_session=True
+            [sys.executable, "-c", _REAPER, str(os.getpid()), *args] if reaper else args,
+            stdout=log.open("w"),
+            stderr=subprocess.STDOUT,
+            env={**os.environ, **(env or {})},
+            cwd=cwd,
+            start_new_session=True,
         )
         self._note(f"started: {' '.join(args)} (log {log})")
         ok = False

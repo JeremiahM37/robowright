@@ -147,3 +147,42 @@ def test_a_stub_can_be_served_again_once_closed(served):
     for _ in range(2):
         with world.ros.serve_action("/grasp", "control_msgs/action/GripperCommand"):
             pass
+
+
+def _running(argv: list[str]) -> list[int]:
+    """Processes whose command line is exactly ``argv`` (read from /proc, not by matching a pattern)."""
+    import os
+
+    found = []
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if f.read().split(b"\0")[:-1] == [a.encode() for a in argv]:
+                    found.append(int(pid))
+        except OSError:
+            pass
+    return found
+
+
+def test_a_command_goes_when_the_test_process_is_killed_outright(pytester):
+    """ros2.run's command and what it started do not outlive a test run that crashed: one did, and spoiled the runs
+    after it on the same ROS domain."""
+    import subprocess
+    import sys
+    import time
+
+    pytester.makepyfile(
+        test_k="""
+import os, signal
+
+def test_crash(world, ros2):
+    with ros2.run(["sleep", "4321"]):
+        world.wait(0.5)
+        os.kill(os.getpid(), signal.SIGKILL)  # no cleanup can run
+"""
+    )
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], cwd=pytester.path, timeout=120)
+    end = time.monotonic() + 10
+    while _running(["sleep", "4321"]) and time.monotonic() < end:
+        time.sleep(0.2)
+    assert not _running(["sleep", "4321"])
