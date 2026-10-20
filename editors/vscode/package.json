@@ -23,9 +23,13 @@
     "commands": [
       { "command": "robowright.openUI", "title": "Open the UI (robowright test --ui)", "category": "robowright" },
       { "command": "robowright.showTrace", "title": "Show trace", "category": "robowright" },
-      { "command": "robowright.refresh", "title": "Find the tests again", "category": "robowright" }
+      { "command": "robowright.refresh", "title": "Find the tests again", "category": "robowright" },
+      { "command": "robowright.recordNew", "title": "Record a new test", "category": "robowright", "icon": "$(record)" }
     ],
     "menus": {
+      "view/title": [
+        { "command": "robowright.recordNew", "when": "view == workbench.view.testing", "group": "navigation" }
+      ],
       "explorer/context": [
         { "command": "robowright.showTrace", "when": "resourceExtname == .zip", "group": "navigation" }
       ]

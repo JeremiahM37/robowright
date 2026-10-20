@@ -66,10 +66,33 @@ async function run() {
     assert.ok(!api.results.has(sum.id));
   }
 
+  // Record new: the recorder's page acts on the robot; Save writes the test, which opens here and is found
+  const recorded = path.join(process.env.ROBOWRIGHT_TEST_WORKSPACE, "tests", "test_recorded.py");
+  const rec = await api.recordNew({ robot: "so101", file: recorded, noOpen: true });
+  try {
+    assert.ok(rec && rec.url.startsWith("http://127.0.0.1:"), "the recorder's page is up");
+    const post = async (what, body) => (await fetch(rec.url + what, { method: "POST", body: JSON.stringify(body || {}) })).json();
+    const did = await post("act", { action: "pick", args: { object: "cube" } });
+    assert.ok(did.ok === true, `the pick ran: ${JSON.stringify(did)}`);
+    await post("save");
+    for (let i = 0; i < 100 && !(vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri.fsPath === recorded); i++) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    const shown = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+    assert.ok(shown && shown.uri.fsPath === recorded, "the saved test opens in an editor");
+    assert.ok(/def test_\w+\(/.test(shown.getText()) && shown.getText().includes("pick("), "it is the recorded test");
+    await api.discover();
+    const found = [];
+    api.controller.items.forEach(f => f.children.forEach(t => found.push(t.id)));
+    assert.ok(found.some(id => id.startsWith("tests/test_recorded.py::")), `the new test is in the Test Explorer: ${found}`);
+  } finally {
+    if (rec) rec.stop();
+  }
+
   const panel = await api.showTrace(api.traces.get(shelf.id));
   assert.ok(panel.webview.html.includes("test_reaches_the_shelf"), "the trace viewer, for this test");
   panel.dispose();
-  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, trace viewer opened`);
+  console.log(`robowright extension: ${ids.length} tests found, results ${JSON.stringify([...api.results])}, debugger ${vscode.extensions.getExtension("ms-python.debugpy") ? "stopped at the breakpoint" : "absent, said so"}, a test recorded, trace viewer opened`);
   if (process.env.ROBOWRIGHT_TEST_MUST_FAIL) assert.fail("ROBOWRIGHT_TEST_MUST_FAIL is set");
 }
 

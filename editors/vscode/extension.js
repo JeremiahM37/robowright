@@ -277,6 +277,64 @@ async function showTrace(target) {
   return panel;
 }
 
+// --- recording a new test (Playwright's "Record new") ----------------------------------------------------------------
+const recorders = new Set();
+
+function robotArg() {
+  const a = args();
+  const i = a.findIndex(x => x === "--rw-robot" || x.startsWith("--rw-robot="));
+  if (i < 0) return undefined;
+  const v = a[i].includes("=") ? a[i].split("=")[1] : a[i + 1];
+  return v && v.split(",")[0];
+}
+
+function newTestFile(cwd) {
+  const dir = ["tests", "test"].find(d => fs.existsSync(path.join(cwd, d))) || "";
+  for (let n = 1; ; n++) {
+    const f = path.join(cwd, dir, n === 1 ? "test_recorded.py" : `test_recorded_${n}.py`);
+    if (!fs.existsSync(f)) return f;
+  }
+}
+
+// `robowright codegen --robot R`: a page where what you do runs on the robot and is written as a test; Save writes
+// it, and the test opens here. Resolves once the page is up, with its address and the file it saves to.
+async function recordNew(opts = {}) {
+  const cwd = root();
+  if (!cwd) return;
+  const robot = opts.robot || (await vscode.window.showInputBox({ prompt: "Record a test on which robot? (a name or a model file)", value: robotArg() || "so101" }));
+  if (!robot) return;
+  const file = opts.file || newTestFile(cwd);
+  const py = await python();
+  const p = cp.spawn(py, ["-m", "robowright.cli", "codegen", "--robot", robot, "--port", "0", "-o", file], { cwd, env: { ...process.env, PYTHONUNBUFFERED: "1" } });
+  recorders.add(p);
+  p.on("close", () => recorders.delete(p));
+  let shown = false;
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(path.dirname(file), path.basename(file)));
+  const opened = async uri => {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: false });
+    if (!shown) { shown = true; discover(); }
+  };
+  watcher.onDidCreate(opened); watcher.onDidChange(opened);
+  p.on("close", () => watcher.dispose());
+  const url = await new Promise(resolve => {
+    let out = "";
+    const take = d => { out += d; output.append(String(d)); const m = out.match(/https?:\/\/127\.0\.0\.1:\d+\//); if (m) resolve(m[0]); };
+    p.stdout.on("data", take);
+    p.stderr.on("data", take);
+    p.on("close", () => resolve(undefined));
+    p.on("error", e => { output.appendLine(`robowright: could not start ${py}: ${e.message}`); resolve(undefined); });
+  });
+  if (!url) {
+    vscode.window.showErrorMessage("robowright: the recorder did not start; see the robowright output");
+    output.show(true);
+    return;
+  }
+  if (!opts.noOpen) vscode.env.openExternal(vscode.Uri.parse(url));
+  vscode.window.showInformationMessage(`robowright: recording on ${robot}. Save in the page writes ${path.relative(cwd, file)}.`);
+  return { url, file, stop: () => p.kill("SIGTERM") };
+}
+
 async function openUI() {
   const py = await python();
   const term = vscode.window.createTerminal({ name: "robowright UI", cwd: root() });
@@ -302,9 +360,11 @@ function activate(context) {
     vscode.commands.registerCommand("robowright.showTrace", showTrace),
     vscode.commands.registerCommand("robowright.openUI", openUI),
     vscode.commands.registerCommand("robowright.refresh", discover),
+    vscode.commands.registerCommand("robowright.recordNew", () => recordNew()),
+    { dispose: () => recorders.forEach(p => p.kill("SIGTERM")) },
   );
   // what the extension's own tests drive it through
-  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace };
+  return { controller, discover, run: (include, live = false, debug = false) => run(new vscode.TestRunRequest(include), new vscode.CancellationTokenSource().token, live, debug), traces, results, showTrace, recordNew };
 }
 
 function deactivate() {}
