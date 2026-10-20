@@ -25,6 +25,13 @@ BULKY = ("sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage", "sensor_msg
 _PRIVATE = "/robowright/"  # routed topics' private names (routes.py): the real name is the one listed
 
 
+def log_time(stamp: float, now: float) -> float:
+    """When a log line happened, in simulated seconds: its own stamp when that is on the simulation's clock (a node with
+    use_sim_time stamps it as it logs), else ``now``, when it arrived: a node on the wall clock (a stamp of years), or one
+    from the future."""
+    return stamp if 0.0 <= stamp <= now + 1.0 else now
+
+
 class TopicLog:
     """Watches every topic a node can see (see the module). ``poll()`` (each world step) looks at the graph again
     once a second of wall time or a quarter second of simulated time, whichever comes first: a simulation faster than
@@ -119,10 +126,7 @@ class TopicLog:
             m = deserialize_message(raw, cls)
         except Exception:  # noqa: BLE001 - a line that cannot be read is not a failed test
             return
-        # The line's own stamp when it is on the simulation's clock (a node with use_sim_time), else when it arrived: a
-        # node on the wall clock, or a line from before robowright subscribed (rosout keeps them, and sends them at once).
-        stamp = m.stamp.sec + m.stamp.nanosec * 1e-9
-        at = stamp if 0.0 <= stamp <= now + 1.0 else now
+        at = log_time(m.stamp.sec + m.stamp.nanosec * 1e-9, now)
         with self._lock:
             if len(self._log) >= MAX_LOG:
                 self._log_dropped += 1

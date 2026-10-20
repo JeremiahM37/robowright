@@ -181,7 +181,9 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
             # publishes /clock, seen after the controller manager) is not yet the graph to report
             quiet = time.monotonic() - settled > 0.5
             # a clock that nodes wait for and nobody publishes yet: its publisher is still being discovered
-            clock_pending = node.count_subscribers("/clock") > 0 and shape[1] == 0 and time.monotonic() < deadline - timeout / 2
+            # (the name, or a node waiting on it, may be seen first; either says a publisher is coming)
+            clock_wanted = "/clock" in topics or node.count_subscribers("/clock") > 0
+            clock_pending = clock_wanted and shape[1] == 0 and time.monotonic() < deadline - timeout / 2
             if (
                 g.description
                 and len(stamps) > 20
@@ -189,6 +191,13 @@ def inspect(namespace: str = "", timeout: float = 5.0, gazebo: bool = True) -> G
                 and not clock_pending
                 and (g.controllers or time.monotonic() > deadline - timeout / 2)
             ):
+                break
+            time.sleep(0.1)
+        # /clock wanted (subscribed or named) and its publisher not yet discovered: under load the rest of the graph went
+        # quiet before it arrived (once in about ten full gate runs), so it is waited for a little longer
+        until = min(deadline, time.monotonic() + 3.0)
+        while node.count_publishers("/clock") == 0 and ("/clock" in g.topics or node.count_subscribers("/clock") > 0):
+            if time.monotonic() > until:
                 break
             time.sleep(0.1)
         g.sim_time = node.count_publishers("/clock") > 0

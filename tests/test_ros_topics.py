@@ -78,15 +78,27 @@ def test_the_trace_keeps_the_nodes_log_lines_at_their_simulated_time(tmp_path):
     log = [e for e in tr.meta["ros_log"] if e["node"] == "route_node"]
     ticks = [e for e in log if e["msg"].startswith("tick ")]
     assert len(ticks) >= 4 and all(e["level"] == "INFO" for e in ticks)
-    # Stamped on the simulation's clock at the moment the node logged each line: the node writes its own clock's
-    # reading into each tick. (Not "0.5 s apart": a ROS timer under load fires late and the next catches up, 0.68 s
-    # then 0.32 s, which says nothing about the stamps.)
+    # Stamped on the simulation's clock as the node logged each line: the node writes its clock's reading into each
+    # tick, then its logger stamps the line, a moment later on the same clock (40 ms later, under load, once). The
+    # choice of that stamp over the arrival time is tested exactly in test_a_log_line_keeps_its_own_stamp. (Not "0.5 s
+    # apart": a ROS timer under load fires late and the next catches up, 0.68 s then 0.32 s.)
     for e in ticks:
         logged_at = float(e["msg"].rsplit(" at ", 1)[1])
-        assert abs(e["t"] - logged_at) < 0.02, (e["t"], e["msg"])
+        assert logged_at - 0.001 <= e["t"] < logged_at + 0.1, (e["t"], e["msg"])
     assert ticks[-1]["t"] > ticks[0]["t"] + 1.0  # on the simulation's clock, which moved
     (warn,) = [e for e in log if e["level"] == "WARN"]
     (err,) = [e for e in log if e["level"] == "ERROR"]
     assert "timed out" in warn["msg"] and "failed to configure" in err["msg"] and warn["t"] < err["t"]
     text = tr.summary()
     assert "ros 2 log:" in text and "ERROR [route_node] failed to configure the controller" in text, text
+
+
+def test_a_log_line_keeps_its_own_stamp():
+    """A line's time is the stamp its node gave it on the simulation's clock, not when robowright heard it; a node on
+    the wall clock (a stamp of years) or a stamp from the future falls back to the arrival time."""
+    from robowright.ros2_topics import log_time
+
+    assert log_time(2.04, now=2.31) == 2.04
+    assert log_time(0.0, now=0.4) == 0.0
+    assert log_time(1_792_502_428.6, now=12.5) == 12.5  # wall clock
+    assert log_time(14.0, now=12.5) == 12.5  # ahead of the simulation by more than a second
