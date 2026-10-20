@@ -22,7 +22,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`, retried, with `.not_`, `.always`, soft, poll | same |
 | `.not` | `.not_` | same |
 | `expect.configure` | `expect.configure(timeout=10, soft=True)` | same |
-| `test.use` (options per file) | `pytestmark = [pytest.mark.robots(...), pytest.mark.backends(...), pytest.mark.scene(...)]` per module or class; no per-file settings beyond what markers carry | partial |
+| `test.use` (options per file) | `pytestmark = pytest.mark.use(expect_timeout=5, action_timeout=20, trace="retain-on-failure")` on a module, a class or a test, the closest winning: the waits, joint and tool speeds, trace and video, time limit, retries, camera size; with `robots(...)`, `backends(...)` and `scene(...)` markers for which robots, engines and scene | same |
 | invariants | `expect(robot).always.to_have_no_collisions()`: checked every step for the rest of the test | robot (Playwright has none) |
 | `test.step` | `with rw.step("put the cube in the bin"):` in the trace, the viewer and the report | same |
 | `testInfo.attach` | `rw_attach("stack.log", path=...)`, `rw_attach.camera(world)` | same |
@@ -72,7 +72,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | UI mode | `robowright test --ui` | same |
 | watch mode | `robowright test --watch` | same |
 | codegen | `robowright codegen` (in a browser, or from a trace: the failure as a regression test) | same |
-| VS Code extension | `editors/vscode`: Test Explorer, run, failures on their line, open the trace | partial: built and tested, not on the Marketplace |
+| VS Code extension | `editors/vscode`: Test Explorer, run, debug (breakpoints, under the Python Debugger), live view, failures on their line, open the trace | partial: built and tested, not on the Marketplace |
 | MCP server, test agents (`init-agents`) | `robowright mcp`; `robowright init-agents` writes a planner, a generator and a healer for Claude Code that use it | same |
 | `--repeat-each` to find flakes | see above; plus `robowright crosscheck` (the same calls on another engine) | robot |
 | bit-for-bit replay | `robowright replay trace.zip` | robot (Playwright has none) |

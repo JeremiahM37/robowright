@@ -43,6 +43,7 @@ Markers::
     @pytest.mark.only                            # run only the tests marked so (Playwright's test.only)
     @pytest.mark.fixme("why")                    # known broken: skipped, saying why (test.fixme)
     pytestmark = pytest.mark.serial              # a module (or class) whose tests depend on each other
+    pytestmark = pytest.mark.use(expect_timeout=5, trace="retain-on-failure")   # options (Playwright's test.use)
 """
 
 from __future__ import annotations
@@ -259,6 +260,11 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "only: run only the tests marked so (Playwright's test.only); --rw-forbid-only refuses it")
     config.addinivalue_line("markers", "rw_slow(factor=3): this test's time limit times factor (Playwright's test.slow)")
     config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
+    config.addinivalue_line(
+        "markers",
+        "use(**options): options for a module's, class's or test's worlds and runs (Playwright's test.use): "
+        + ", ".join(sorted(_USE_KEYS)),
+    )
     config.stash[_TRACES] = []
     config.stash[_REPORTS] = {}
     from . import github
@@ -396,6 +402,8 @@ def pytest_collection_modifyitems(config, items):
     result. Ordered and grouped, the tests that share a scene run one after another in one
     process and reuse it, instead of every robot's scene being built for every test.
     """
+    for i in items:
+        _use(i)  # a misspelt option fails the run now, not as each test starts
     focused = [i for i in items if i.get_closest_marker("only")]
     if focused:
         forbid = config.getoption("--rw-forbid-only", None)
@@ -490,17 +498,58 @@ def _scene_for(item, request) -> SceneSpec:
     return spec
 
 
-def _settings(config, attempt: int = 0) -> Settings:
+# pytest.mark.use's options: Settings' own fields (each world's), and these run options, each over its command-line flag
+_USE_RUN = {"trace": "--rw-trace", "video": "--rw-video", "timeout": "--rw-timeout", "retries": "--rw-retries"}
+_USE_SETTINGS = {
+    "expect_timeout",
+    "action_timeout",
+    "max_joint_speed",
+    "max_tcp_speed",
+    "frame_every",
+    "trace_cameras",
+    "image_size",
+    "realtime",
+    "fidelity",
+}
+_USE_KEYS = set(_USE_RUN) | _USE_SETTINGS
+
+
+def _use(item) -> dict:
+    """``pytest.mark.use(...)`` options for this test: the module's, then its class's, then its own, the closest
+    winning for each option (as Playwright's ``test.use`` in a file and a ``describe``)."""
+    if item is None:
+        return {}
+    out = {}
+    for m in reversed(list(item.iter_markers("use"))):  # iter_markers yields the closest first
+        if m.args:
+            raise pytest.UsageError(f"{item.nodeid}: pytest.mark.use takes options by name, as use(expect_timeout=5)")
+        out.update(m.kwargs)
+    unknown = sorted(set(out) - _USE_KEYS)
+    if unknown:
+        raise pytest.UsageError(f"{item.nodeid}: pytest.mark.use has no option {', '.join(unknown)}; it has {', '.join(sorted(_USE_KEYS))}")
+    return out
+
+
+def _opt(config, item, name: str, default=None):
+    """A run option for this test: its ``pytest.mark.use``, else the command line."""
+    use = _use(item)
+    return use[name] if name in use else config.getoption(_USE_RUN[name], default)
+
+
+def _settings(config, attempt: int = 0, item=None) -> Settings:
+    import dataclasses
+
     headed = config.getoption("--rw-headed")
-    trace = config.getoption("--rw-trace")
+    trace = _opt(config, item, "trace")
     if trace == "on-first-retry":  # the first run of a test is not recorded; its first retry is, whatever its outcome
         trace = "on" if attempt == 1 else "off"
-    video = config.getoption("--rw-video", "off")
+    video = _opt(config, item, "video", "off")
     if video == "on" or (video == "retain-on-failure" and trace == "off"):  # a video is drawn from the trace
         trace = "on" if video == "on" else "retain-on-failure"
+    own = {k: v for k, v in _use(item).items() if k in _USE_SETTINGS}
     if config.getoption("--rw-live", None) is not None:  # watchable: at real-time pace
-        return Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed, realtime=True)
-    return Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed)
+        own.setdefault("realtime", True)
+    return dataclasses.replace(Settings(trace=trace, trace_dir=config.getoption("--rw-trace-dir"), headed=headed), **own)
 
 
 def _plain(nodeid: str) -> str:
@@ -526,7 +575,7 @@ def _make_world(item, request, backend: str, seed: int, suffix: str = "") -> Wor
     if stack is not None:
         before = stack.restarts
         reset = {"seconds": round(stack.reset(), 3), "restarted": stack.restarts > before, "parts": dict(stack.last_reset)}
-    settings = _settings(item.config, _attempt(item))
+    settings = _settings(item.config, _attempt(item), item)
     scene = _scene_for(item, request)
     if backend == "ros2" and scene.robot is None:  # the robot the stack's own description publishes, as rw.launch takes it
         scene = rw.world.ros2_scene(scene, backend, None, {}, None)
@@ -633,10 +682,10 @@ def world(request, rw_backend, rw_robot):
     path = w.close(failed=failed, trace_path=_trace_path(item.config, item.nodeid, _attempt(item)))
     if path and failed:
         item.config.stash[_TRACES].append((_plain(item.nodeid), str(path)))
-    video = item.config.getoption("--rw-video", "off")
+    video = _opt(item.config, item, "video", "off")
     if path and (video == "on" or (video == "retain-on-failure" and failed)):
         _video(item, path)
-        mode = item.config.getoption("--rw-trace")
+        mode = _opt(item.config, item, "trace")
         if not failed and mode != "on" and not (mode == "on-first-retry" and _attempt(item) == 1):
             Path(path).unlink(missing_ok=True)  # recorded only to draw the video from
 
@@ -779,7 +828,7 @@ def _time_limit(item) -> float:
     if item.config.getoption("--rw-debug", False):  # a person is stepping through it
         return 0.0
     m = item.get_closest_marker("rw_timeout")
-    limit = float(m.args[0]) if m else float(item.config.getoption("--rw-timeout", 0.0) or 0.0)
+    limit = float(m.args[0]) if m else float(_opt(item.config, item, "timeout", 0.0) or 0.0)
     slow = item.get_closest_marker("rw_slow")
     return limit * float(slow.args[0] if slow and slow.args else 3.0) if slow else limit
 
@@ -932,7 +981,7 @@ def pytest_runtest_protocol(item, nextitem):
     A real robot or simulator can fail once for reasons outside the code under test (a stalled clock,
     a slow start), so a retry tells "fails" from "fails sometimes"; it never turns a failure into a pass."""
     m = item.get_closest_marker("rw_retries")  # one test's own (Playwright's per-test retries), over --rw-retries
-    retries = int(m.args[0]) if m else item.config.getoption("--rw-retries", 0)
+    retries = int(m.args[0]) if m else int(_opt(item.config, item, "retries", 0) or 0)
     if not retries:
         return None
     from _pytest.runner import runtestprotocol

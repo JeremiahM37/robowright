@@ -735,6 +735,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | `test.only`, `forbidOnly`, `globalTimeout` | `@pytest.mark.only`; `--rw-forbid-only` (on by itself when `CI` is set); `--rw-global-timeout 3600` |
 | `test.fixme`, serial mode, json reporter | `@pytest.mark.fixme("why")`; `pytestmark = pytest.mark.serial` (in order on one worker, the rest skipped once one fails); `--rw-json results.json` |
 | `expect.configure` | `expect.configure(timeout=10, soft=True)`: an `expect` with its own defaults |
+| `test.use` | `pytestmark = pytest.mark.use(expect_timeout=5, action_timeout=20, trace="retain-on-failure")`: options for a file's tests (a class's or a test's own win over it): waits, speeds, trace, video, time limit, retries; an option it does not have stops the run |
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
 | `github` reporter | on a GitHub Actions runner, each failed test is an error annotation at the line of your test that failed (the trace's `show-trace` command in it), each flaky one a warning, on the pull request's diff; `--rw-github off` to stop it, `on` to see them anywhere |
 | `--only-changed` | `pytest --rw-only-changed` (or `=main`): only the test files your uncommitted changes (or changes since `main`) can affect: changed tests, and tests importing a changed module, followed through the project's imports; a changed `conftest.py`, plugin, setting or robot model file runs everything |

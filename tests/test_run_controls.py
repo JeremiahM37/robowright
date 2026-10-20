@@ -178,3 +178,49 @@ def test_knows_its_attempt(rw_attempt):
     r = pytester.runpytest("-p", "no:cacheprovider", "--rw-retries", "1")
     assert _outcomes(r) == {"rerun": 1, "flaky": 1}
     assert (pytester.path / "attempt-0").exists() and (pytester.path / "attempt-1").exists()
+
+
+USE = """
+import time
+import pytest
+
+pytestmark = pytest.mark.use(expect_timeout=7.0, action_timeout=20.0, trace="off")
+
+def test_module_options(world):
+    assert (world.settings.expect_timeout, world.settings.action_timeout, world.settings.trace) == (7.0, 20.0, "off")
+
+class TestSlowArm:
+    pytestmark = pytest.mark.use(max_joint_speed=0.5, expect_timeout=9.0)
+
+    def test_class_over_module(self, world):
+        assert (world.settings.expect_timeout, world.settings.max_joint_speed, world.settings.action_timeout) == (9.0, 0.5, 20.0)
+
+    @pytest.mark.use(expect_timeout=1.0, trace="on")
+    def test_own_over_class(self, world):
+        assert (world.settings.expect_timeout, world.settings.trace) == (1.0, "on")
+
+@pytest.mark.use(timeout=0.5)
+def test_its_time_limit():
+    time.sleep(1.2)
+
+@pytest.mark.use(retries=1)
+def test_its_retries(rw_attempt):
+    assert rw_attempt == 1
+"""
+
+
+def test_use_sets_options_per_module_class_and_test(pytester):
+    """pytest.mark.use is Playwright's test.use: a module's options, a class's over them, a test's over both."""
+    pytester.makepyfile(test_u=USE)
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-trace", "on")
+    assert _outcomes(r) == {"passed": 3, "failed": 1, "rerun": 1, "flaky": 1}, r.stdout.str()
+    assert "FAILED test_u.py::test_its_time_limit - robowright.errors.TimeLimitErro" in r.stdout.str()
+    traces = sorted(p.name for p in (pytester.path / "robowright-traces").glob("*.zip"))
+    assert traces == ["test_u.py__TestSlowArm__test_own_over_class[mujoco].zip"], "use(trace=...) over --rw-trace"
+
+
+def test_use_refuses_an_option_it_does_not_have(pytester):
+    pytester.makepyfile(test_u="import pytest\n\npytestmark = pytest.mark.use(expect_timout=5)\n\ndef test_a():\n    pass\n")
+    r = pytester.runpytest("-p", "no:cacheprovider")
+    assert r.ret == pytest.ExitCode.USAGE_ERROR
+    assert "pytest.mark.use has no option expect_timout; it has action_timeout" in r.stderr.str()
