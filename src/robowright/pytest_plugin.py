@@ -26,6 +26,7 @@ Options::
     --rw-global-timeout SECONDS      stop the whole run after this long, wall clock
     --rw-only-changed [REF]          only the test files a change since REF (default HEAD) can affect, found from git
     --rw-timeout SECONDS             fail a test that runs longer than this, wall clock (0: no limit)
+    --rw-setup-timeout SECONDS       a budget of their own for each test's fixtures; --rw-timeout then starts with the body
     --rw-report report.html          an HTML report of the run, each failure with its trace
     --rw-blob shard-2.zip            the run's results and traces in one zip, for robowright merge-reports
     --rw-json results.json           the run's results as JSON
@@ -172,6 +173,14 @@ def pytest_addoption(parser):
         help="write this run's results, traces included, to one zip, for robowright merge-reports (a sharded CI run)",
     )
     g.addoption("--rw-json", metavar="PATH", help="write the run's results as JSON (Playwright's json reporter)")
+    g.addoption(
+        "--rw-setup-timeout",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="a time limit for each test's fixtures of their own (Playwright's fixture timeout); the test's --rw-timeout "
+        "then starts with its body (0: fixtures share the test's limit)",
+    )
     g.addoption(
         "--rw-timeout",
         type=float,
@@ -789,7 +798,13 @@ def _scene_for(item, request) -> SceneSpec:
 
 
 # pytest.mark.use's options: Settings' own fields (each world's), and these run options, each over its command-line flag
-_USE_RUN = {"trace": "--rw-trace", "video": "--rw-video", "timeout": "--rw-timeout", "retries": "--rw-retries"}
+_USE_RUN = {
+    "trace": "--rw-trace",
+    "video": "--rw-video",
+    "timeout": "--rw-timeout",
+    "retries": "--rw-retries",
+    "setup_timeout": "--rw-setup-timeout",
+}
 _USE_SETTINGS = {
     "expect_timeout",
     "action_timeout",
@@ -1276,40 +1291,66 @@ def pytest_runtest_setup(item):
 
     if logging_on():
         log_line(f"--- {item.nodeid}")
-    limit = _time_limit(item)
-    if limit > 0:
-        import faulthandler
-        import signal
-        import threading
+    setup = _setup_limit(item)
+    if setup > 0:  # fixtures on a budget of their own; the test's limit starts with its body (pytest_runtest_call)
+        _arm(item, setup, f"its setup's {setup:g} s time limit (fixtures)")
+    else:
+        limit = _time_limit(item)
+        if limit > 0:
+            _arm(item, limit, None)
+    return (yield)
 
+
+def _arm(item, limit: float, what: str | None) -> None:
+    """The time limit's alarm (and faulthandler's backstop) for ``limit`` seconds from now, again if already set."""
+    import faulthandler
+    import signal
+    import threading
+
+    if getattr(item, "_rw_hung", None) is None:
         name = _safe(_plain(item.nodeid).replace("::", "__").replace("/", "_"))
         hung = Path(item.config.getoption("--rw-trace-dir")) / f"hung-{name}.txt"
         try:
             hung.parent.mkdir(parents=True, exist_ok=True)
             item._rw_hung = hung.open("w")
-            grace = float(os.environ.get("ROBOWRIGHT_HANG_GRACE", HANG_GRACE))
-            faulthandler.dump_traceback_later(limit + grace, exit=True, file=item._rw_hung)
         except OSError:
             pass
+    if getattr(item, "_rw_hung", None) is not None:
+        grace = float(os.environ.get("ROBOWRIGHT_HANG_GRACE", HANG_GRACE))
+        faulthandler.dump_traceback_later(limit + grace, exit=True, file=item._rw_hung)
+    if not (hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread()):
+        warnings.warn(pytest.PytestWarning(f"{item.nodeid}: --rw-timeout needs SIGALRM in the main thread; no time limit"))
+        return
 
-        if hasattr(signal, "setitimer") and threading.current_thread() is threading.main_thread():
+    def expired(signum, frame):
+        from . import _current
+        from .errors import TimeLimitError
 
-            def expired(signum, frame):
-                from . import _current
-                from .errors import TimeLimitError
+        w = _current.get()
+        tr = getattr(w, "trace", None) if w is not None else None
+        running = [e for e in (tr.events if tr else []) if e.status == "running"]
+        where = f", while {running[-1].type} {running[-1].name!r} was running" if running else ""
+        said = what or ("the run's --rw-global-timeout" if getattr(item, "_rw_global_cap", False) else f"its {limit:g} s time limit")
+        raise TimeLimitError(f"the test ran past {said} (wall clock){where}\n{_other_threads()}")
 
-                w = _current.get()
-                tr = getattr(w, "trace", None) if w is not None else None
-                running = [e for e in (tr.events if tr else []) if e.status == "running"]
-                where = f", while {running[-1].type} {running[-1].name!r} was running" if running else ""
-                what = "the run's --rw-global-timeout" if getattr(item, "_rw_global_cap", False) else f"its {limit:g} s time limit"
-                raise TimeLimitError(f"the test ran past {what} (wall clock){where}\n{_other_threads()}")
+    previous = signal.signal(signal.SIGALRM, expired)
+    if not hasattr(item, "_rw_alarm"):
+        item._rw_alarm = previous  # what teardown puts back
+    signal.setitimer(signal.ITIMER_REAL, limit)
 
-            item._rw_alarm = signal.signal(signal.SIGALRM, expired)
-            signal.setitimer(signal.ITIMER_REAL, limit)
-        else:
-            warnings.warn(pytest.PytestWarning(f"{item.nodeid}: --rw-timeout needs SIGALRM in the main thread; no time limit"))
-    return (yield)
+
+def _setup_limit(item) -> float:
+    """``--rw-setup-timeout``, ``pytest.mark.use(setup_timeout=)`` or ``rw_timeout(..., setup=)``: a budget for the
+    test's fixtures of their own (Playwright's fixture timeout), 0 for none (they share the test's)."""
+    if item.config.getoption("--rw-debug", False):
+        return 0.0
+    m = item.get_closest_marker("rw_timeout")
+    if m and "setup" in m.kwargs:
+        return float(m.kwargs["setup"] or 0.0)
+    use = _use(item)
+    if "setup_timeout" in use:
+        return float(use["setup_timeout"] or 0.0)
+    return float(item.config.getoption("--rw-setup-timeout", 0.0) or 0.0)
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -1338,6 +1379,16 @@ def pytest_runtest_teardown(item, nextitem):
 def pytest_runtest_call(item):
     """A test asking a robot to pick up something wider than its gripper opens is skipped on that
     robot: the robot cannot do it, which is not a failure of the robot or of robowright."""
+    if _setup_limit(item) > 0:  # the setup had its own budget: the test's own starts now
+        limit = _time_limit(item)
+        if limit > 0:
+            _arm(item, limit, None)
+        elif hasattr(item, "_rw_alarm"):
+            import faulthandler
+            import signal
+
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            faulthandler.cancel_dump_traceback_later()
     try:
         return (yield)
     except TooWideError as e:

@@ -54,6 +54,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `globalTimeout` | `--rw-global-timeout 3600`: the run stops and fails once it has taken that long, a test still running then included | same |
 | `--grep`, `--list` | pytest's `-k`, `--collect-only` | same (pytest's) |
 | test timeout | `--rw-timeout 120`, `@pytest.mark.rw_timeout(300)`; a hung test says where it hung | same |
+| fixture timeout | `--rw-setup-timeout 600`, `rw_timeout(300, setup=600)` or `use(setup_timeout=600)`: fixtures (a stack coming up) on a budget of their own, the test's limit starting with its body | same |
 | `globalSetup` | session fixtures in `conftest.py`; the `[ros2]` stack | same (pytest's) |
 | `npm init playwright` | `robowright init`: a test, settings, a CI workflow, the MCP server | same |
 | clock control | everything runs in simulated time; nothing waits on the wall clock | robot |

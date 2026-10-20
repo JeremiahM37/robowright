@@ -139,3 +139,36 @@ def test_the_time_limit_hooks_wrap_each_test():
 
     for name in ("pytest_runtest_setup", "pytest_runtest_teardown"):
         assert getattr(getattr(pytest_plugin, name), "pytest_impl", {}).get("wrapper"), name
+
+
+SETUP = """
+import time
+import pytest
+
+@pytest.fixture
+def slow_stack():
+    time.sleep(1.0)  # a stack that takes its time to come up
+    yield
+
+def test_body_within_its_own_limit(slow_stack):
+    time.sleep(0.6)  # with the 1 s setup, past a shared 1.2 s; within its own once the setup has a budget
+
+def test_body_past_its_limit(slow_stack):
+    time.sleep(1.5)
+
+@pytest.mark.rw_timeout(1.2, setup=0.3)
+def test_setup_past_its_own(slow_stack):
+    pass
+"""
+
+
+def test_a_setup_budget_of_its_own_as_playwrights_fixture_timeout(pytester):
+    pytester.makepyfile(test_s=SETUP)
+    shared = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "1.2", "-k", "within")
+    shared.assert_outcomes(failed=1)  # setup and body share 1.2 s: 1.6 s is past it
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-timeout", "1.2", "--rw-setup-timeout", "5")
+    out = r.stdout.str()
+    assert r.parseoutcomes().get("passed") == 1 and r.parseoutcomes().get("failed") == 1, out  # body past, setup past
+    assert r.parseoutcomes().get("errors") == 1, out
+    assert "ran past its setup's 0.3 s time limit (fixtures)" in out
+    assert "test_body_past_its_limit" in out and "ran past its 1.2 s time limit" in out
