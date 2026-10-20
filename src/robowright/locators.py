@@ -151,6 +151,13 @@ class SceneLocator:
         """How many objects match ``filters`` now: ``scene.count(inside="bin")``."""
         return len(self.all(**filters))
 
+    def filter(self, **filters) -> Objects:
+        """The objects matching ``filters``, found again each time it is read, as a Playwright locator is:
+        ``expect(scene.filter(color="red", inside="bin")).to_have_count(3)`` waits until three red objects are in
+        the bin. ``.count()``, ``.all()``, ``.first``, ``.nth(i)`` and ``.get()`` read it now."""
+        self.all(**filters)  # a misspelt filter fails here, not at the first read
+        return Objects(self, filters)
+
     def get(self, **filters) -> ObjectHandle:
         """Exactly one object matching ``filters`` (strict, like Playwright's locators). What it is: ``name=``,
         ``color=``, ``kind=``, ``tag=``. Where it is now, as Playwright filters a locator by what it has: ``inside="bin"``
@@ -170,6 +177,48 @@ class SceneLocator:
         if not cands:
             raise LookupError(f"no movable object matches {filters}")
         return min(cands, key=lambda h: float(np.linalg.norm(h.position - p)))
+
+
+class Objects(Subject):
+    """``scene.filter(...)``: the objects matching some filters, found again whenever it is read."""
+
+    def __init__(self, scene: SceneLocator, filters: dict):
+        self.scene, self.filters, self.world = scene, filters, scene.world
+        shown = ", ".join(f"{k}={getattr(v, '__name__', None) or repr(v)}" for k, v in filters.items())
+        self.name = f"scene.filter({shown})"
+
+    def all(self) -> list[ObjectHandle]:
+        return self.scene.all(**self.filters)
+
+    def count(self) -> int:
+        return len(self.all())
+
+    def get(self) -> ObjectHandle:
+        return self.scene.get(**self.filters)
+
+    def nth(self, i: int) -> ObjectHandle:
+        found = self.all()
+        if not -len(found) <= i < len(found):
+            raise LookupError(f"{self.name}.nth({i}): {len(found)} match now: {[h.name for h in found]}")
+        return found[i]
+
+    @property
+    def first(self) -> ObjectHandle:
+        return self.nth(0)
+
+    @property
+    def last(self) -> ObjectHandle:
+        return self.nth(-1)
+
+    def __iter__(self):
+        return iter(self.all())
+
+    def __len__(self) -> int:
+        return self.count()
+
+    @property
+    def position(self) -> np.ndarray:
+        raise TypeError(f"expect({self.name}) takes to_have_count; for one object's position, use .get() or .first")
 
 
 _FILTERS = {"color", "kind", "tag", "name", "inside", "on", "touching", "near", "held", "graspable", "where"}

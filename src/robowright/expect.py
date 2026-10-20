@@ -108,7 +108,7 @@ class Expectation:
             rec["kwargs"]["timeout"] = self.timeout
         if hold:
             rec["kwargs"]["hold"] = hold
-        if isinstance(self.subject, _Polled) or name.startswith("to_satisfy") or name.split("(")[0] in _CUSTOM:
+        if isinstance(self.subject, _Polled) or name.startswith(("to_satisfy", "to_have_count")) or name.split("(")[0] in _CUSTOM:
             rec["code"] = True  # it runs the test's own code, which a trace does not keep: codegen cannot write it again
         if self.mode != "always" and not _ONCE.get():  # once per assertion: not each try of a to_pass block
             hooks = list(getattr(w, "_action_hooks", ()))  # a debugger (--rw-debug) pausing before it
@@ -528,6 +528,20 @@ class Expectation:
         return self._run(f"to_satisfy({description})", lambda: (bool(predicate(target)), description), timeout, hold)
 
     # value matchers (expect.poll, a joint) ------------------------------------------
+    def to_have_count(self, n: int, *, timeout=None, hold=0.0):
+        """As many objects match as ``n``: ``expect(scene.filter(inside="bin")).to_have_count(3)`` (Playwright's
+        ``toHaveCount``), the objects found again every control step."""
+        from .locators import Objects
+
+        if not isinstance(self.subject, Objects):
+            raise TypeError(f"to_have_count takes scene.filter(...), not {self.subject.name}")
+
+        def check():
+            found = [h.name for h in self.subject.all()]
+            return len(found) == n, f"{len(found)} match {found} (want {n})"
+
+        return self._run("to_have_count", check, timeout, hold, {"n": n})
+
     def to_equal(self, expected, *, timeout=None, hold=0.0):
         """The value equals ``expected`` (arrays: every element)."""
 

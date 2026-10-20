@@ -111,3 +111,37 @@ def test_graspable_is_what_this_robots_gripper_can_pick_up(quiet_world):
     assert [h.name for h in w.scene.all(graspable=False)] == ["slab", "bin"]
     with pytest.raises(rw.errors.TooWideError):
         w.robot.pick(w.scene["slab"])  # what graspable=False said
+
+
+def test_filter_is_found_again_each_time_and_waits_in_to_have_count(quiet_world):
+    w = quiet_world(
+        scene=tabletop(
+            ObjectSpec("a", color="red", pos=(0.2, 0.0, None)),
+            ObjectSpec("b", color="red", pos=(0.25, 0.08, None)),
+            ObjectSpec("bin", "bin", (0.05, 0.05, 0.02), (0.15, -0.12, 0.0)),
+        )
+    )
+    in_bin = w.scene.filter(color="red", inside="bin")
+    assert in_bin.count() == 0 and len(in_bin) == 0
+    rw.expect(in_bin).to_have_count(0)
+    w.move_object("a", (0.15, -0.12, 0.03))
+    assert [h.name for h in in_bin] == ["a"] and in_bin.first.name == "a" and in_bin.get().name == "a"
+    rw.expect(in_bin).to_have_count(1)
+    with pytest.raises(rw.errors.ExpectationError, match=r"(?s)to_have_count.*1 match \['a'\] \(want 2\)"):
+        rw.expect(in_bin, timeout=0.2).to_have_count(2)
+    rw.expect(w.scene.filter(color="red")).not_.to_have_count(1)
+    with pytest.raises(LookupError, match=r"nth\(3\): 1 match now"):
+        in_bin.nth(3)
+    with pytest.raises(TypeError, match="unknown scene filter"):
+        w.scene.filter(colour="red")
+
+
+def test_to_have_count_waits_for_objects_to_arrive(quiet_world):
+    bin_ = ObjectSpec("bin", "bin", (0.05, 0.05, 0.02), (0.15, -0.12, 0.0))
+    w = quiet_world(scene=tabletop(ObjectSpec("cube", pos=(0.2, 0.0, None)), bin_))
+    w.move_object("cube", (0.15, -0.12, 0.15))  # above the bin, falling in
+    in_bin = w.scene.filter(inside="bin")
+    assert in_bin.count() == 0
+    t0 = w.time
+    rw.expect(in_bin, timeout=2.0).to_have_count(1)
+    assert w.time > t0, "it waited, in simulated time"
