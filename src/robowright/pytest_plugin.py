@@ -857,7 +857,15 @@ def _time_limit(item) -> float:
     m = item.get_closest_marker("rw_timeout")
     limit = float(m.args[0]) if m else float(_opt(item.config, item, "timeout", 0.0) or 0.0)
     slow = item.get_closest_marker("rw_slow")
-    return limit * float(slow.args[0] if slow and slow.args else 3.0) if slow else limit
+    limit = limit * float(slow.args[0] if slow and slow.args else 3.0) if slow else limit
+    # --rw-global-timeout: a test still running when the run's time is up is stopped there, not let run on
+    budget = item.config.getoption("--rw-global-timeout", 0.0) or 0.0
+    started = item.config.stash.get(_STARTED, None)
+    if budget and started is not None:
+        left = max(0.01, budget - (time.monotonic() - started))
+        item._rw_global_cap = not limit or left < limit
+        limit = min(limit, left) if limit else left
+    return limit
 
 
 HANG_GRACE = 60.0  # seconds past --rw-timeout after which a test stuck in a C call ends the process (see below);
@@ -960,7 +968,8 @@ def pytest_runtest_setup(item):
                 tr = getattr(w, "trace", None) if w is not None else None
                 running = [e for e in (tr.events if tr else []) if e.status == "running"]
                 where = f", while {running[-1].type} {running[-1].name!r} was running" if running else ""
-                raise TimeLimitError(f"the test ran past its {limit:g} s time limit (wall clock){where}\n{_other_threads()}")
+                what = "the run's --rw-global-timeout" if getattr(item, "_rw_global_cap", False) else f"its {limit:g} s time limit"
+                raise TimeLimitError(f"the test ran past {what} (wall clock){where}\n{_other_threads()}")
 
             item._rw_alarm = signal.signal(signal.SIGALRM, expired)
             signal.setitimer(signal.ITIMER_REAL, limit)

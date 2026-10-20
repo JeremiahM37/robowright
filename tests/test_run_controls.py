@@ -54,7 +54,7 @@ def test_global_timeout_stops_the_run_and_fails_it(pytester):
 import time
 
 def test_1():
-    time.sleep(0.6)
+    time.sleep(0.2)
 
 def test_2():
     time.sleep(0.6)
@@ -66,7 +66,17 @@ def test_3():
     r = pytester.runpytest("-p", "no:cacheprovider", "--rw-global-timeout", "0.5")
     assert r.ret != 0
     assert "--rw-global-timeout: the run passed 0.5 s" in r.stdout.str()
-    assert r.parseoutcomes().get("passed") == 1  # the first finished; the rest never started
+    assert {k: v for k, v in r.parseoutcomes().items() if k in ("passed", "failed")} == {"passed": 1, "failed": 1}
+    assert "ran past the run's --rw-global-timeout" in r.stdout.str()  # the second, stopped; the third never started
+
+
+def test_global_timeout_stops_a_test_that_is_still_running(pytester):
+    pytester.makepyfile(test_hang="import time\n\ndef test_hangs():\n    time.sleep(30)\n\ndef test_after():\n    pass\n")
+    t0 = __import__("time").monotonic()
+    r = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--rw-global-timeout", "1")
+    assert __import__("time").monotonic() - t0 < 20, "the hanging test was stopped at the run's limit"
+    assert r.ret != 0
+    assert "TimeLimitError" in r.stdout.str() and "--rw-global-timeout: the run passed 1 s" in r.stdout.str()
 
 
 def test_expect_configure_sets_defaults():
