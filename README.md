@@ -732,7 +732,8 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
 | blob reporter, `merge-reports` | `pytest --rw-shard 2/4 --rw-blob shard-2.zip` on each machine, then `robowright merge-reports shard-*.zip -o report.html`: one report of the whole run, each failure's trace carried inside its shard's zip |
 | retries, `trace: 'on-first-retry'` | `pytest --rw-retries 2 --rw-trace on-first-retry`: a failed test runs again in a fresh world; one that then passes is reported *flaky*, with the failed attempt's trace kept |
-| `test.only`, `forbidOnly`, `globalTimeout` | `@pytest.mark.only`; `--rw-forbid-only` (on by itself when `CI` is set); `--rw-global-timeout 3600` |
+| `test.only`, `forbidOnly`, `globalTimeout` | `@pytest.mark.only`; `--rw-forbid-only` (on by itself when `CI` is set); `--rw-global-timeout 3600` (a test still running then is stopped too) |
+| tags, annotations | a test's own markers (`@pytest.mark.needs_gpu`) are its tags in the HTML report, each with a filter button; `@pytest.mark.annotate("issue", url)` and `rw_annotate("found", "...")` from inside the test note things shown with it, in the report and the JSON |
 | `test.fixme`, serial mode, json reporter | `@pytest.mark.fixme("why")`; `pytestmark = pytest.mark.serial` (in order on one worker, the rest skipped once one fails); `--rw-json results.json` |
 | `expect.configure` | `expect.configure(timeout=10, soft=True)`: an `expect` with its own defaults |
 | `test.use` | `pytestmark = pytest.mark.use(expect_timeout=5, action_timeout=20, trace="retain-on-failure")`: options for a file's tests (a class's or a test's own win over it): waits, speeds, trace, video, time limit, retries; an option it does not have stops the run |

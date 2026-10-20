@@ -33,7 +33,17 @@ class Run:
 
     def add(self, report) -> None:
         t = self.tests.setdefault(
-            report.nodeid, {"outcome": "passed", "duration": 0.0, "message": "", "traces": [], "trials": "", "attachments": []}
+            report.nodeid,
+            {
+                "outcome": "passed",
+                "duration": 0.0,
+                "message": "",
+                "traces": [],
+                "trials": "",
+                "attachments": [],
+                "tags": [],
+                "annotations": [],
+            },
         )
         t["duration"] += getattr(report, "duration", 0.0)
         retried = report.outcome == "rerun"  # an attempt that failed and was run again (--rw-retries)
@@ -45,6 +55,10 @@ class Run:
                 t["trials"] = v
             if k == "robowright_flaky":
                 t["outcome"] = "flaky"  # failed, then passed on a retry: as Playwright reports it
+            if k == "robowright_tags":
+                t["tags"] = json.loads(v)
+            if k == "robowright_annotation" and json.loads(v) not in t["annotations"]:
+                t["annotations"].append(json.loads(v))
             if k == "robowright_attachment":
                 a = json.loads(v)
                 if a not in t["attachments"]:
@@ -75,6 +89,11 @@ class Run:
         for nodeid, t in self.tests.items():
             counts[t["outcome"]] = counts.get(t["outcome"], 0) + 1
             details = ""
+            for a in t.get("annotations", []):
+                d = html.escape(a["description"])
+                if re.match(r"https?://", a["description"]):
+                    d = f'<a href="{d}">{d}</a>'
+                details += f'<div class="ann"><b>{html.escape(a["type"])}</b> {d}</div>'
             if t["message"] and t["outcome"] in ("failed", "xpassed", "flaky", "skipped", "xfailed"):
                 details += f"<pre>{html.escape(t['message'][-6000:])}</pre>"
             for path in t["traces"]:
@@ -108,12 +127,22 @@ class Run:
                 else:
                     details += f'<div class="att"><a href="{href}">{label}</a> <span class="trials">{kind}</span></div>'
             trials = f'<span class="trials">{html.escape(t["trials"])}</span>' if t["trials"] else ""
-            name = f"{html.escape(nodeid)}{trials}"
+            tags = "".join(f'<span class="tag">@{html.escape(g)}</span>' for g in t.get("tags", []))
+            name = f"{html.escape(nodeid)}{tags}{trials}"
             body = f"<details><summary>{name}</summary>{details}</details>" if details else f"<span>{name}</span>"
-            row = f'<tr class="{t["outcome"]}"><td class="o">{t["outcome"]}</td><td>{body}</td><td class="d">{t["duration"]:.1f}s</td></tr>'
+            data = html.escape(" ".join(t.get("tags", [])))
+            row = (
+                f'<tr class="{t["outcome"]}" data-tags="{data}"><td class="o">{t["outcome"]}</td><td>{body}</td>'
+                f'<td class="d">{t["duration"]:.1f}s</td></tr>'
+            )
             rows.append((_ORDER.index(t["outcome"]), row))
         order = _ORDER
         buttons = "".join(f'<button data-o="{o}">{o} {counts[o]}</button>' for o in order if counts.get(o))
+        tagged: dict[str, int] = {}
+        for t in self.tests.values():
+            for g in t.get("tags", []):
+                tagged[g] = tagged.get(g, 0) + 1
+        buttons += "".join(f'<button data-t="{html.escape(g)}">@{html.escape(g)} {n}</button>' for g, n in sorted(tagged.items()))
         out.write_text(
             _PAGE.format(
                 title="robowright report",
@@ -242,7 +271,8 @@ tr.failed td.o, tr.xpassed td.o {{
 }}
 summary {{ cursor:pointer; overflow-wrap:anywhere; }} .trials {{ color:var(--mut); margin-left:8px; }}
 pre {{ background:var(--code); padding:8px; border-radius:6px; overflow-x:auto; font-size:12px; white-space:pre-wrap; }}
-.trace {{ margin-top:8px; }} .att {{ margin-top:6px; }}
+.trace {{ margin-top:8px; }} .att {{ margin-top:6px; }} .ann {{ margin:6px 0; }}
+.tag {{ margin-left:8px; padding:0 6px; border-radius:4px; background:var(--code); color:var(--mut); font-size:12px; }}
 figure {{ margin:8px 0; }} figure img {{ max-width:100%; height:auto; border-radius:6px; border:1px solid var(--line); }}
 figcaption {{ color:var(--mut); font-size:12px; }}
 table {{ table-layout:fixed; }}
@@ -256,7 +286,9 @@ pre {{ max-width:100%; box-sizing:border-box; }}
 <script>
 for (const b of document.querySelectorAll("button")) b.onclick = () => {{
   for (const x of document.querySelectorAll("button")) x.classList.toggle("on", x === b);
-  for (const r of document.querySelectorAll("tr")) r.hidden = b.dataset.o && r.className !== b.dataset.o;
+  const o = b.dataset.o, t = b.dataset.t;
+  for (const r of document.querySelectorAll("tr"))
+    r.hidden = Boolean((o && r.className !== o) || (t && !r.dataset.tags.split(" ").includes(t)));
 }};
 </script></body></html>
 """

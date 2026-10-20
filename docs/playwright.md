@@ -26,7 +26,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | invariants | `expect(robot).always.to_have_no_collisions()`: checked every step for the rest of the test | robot (Playwright has none) |
 | `test.step` | `with rw.step("put the cube in the bin"):` in the trace, the viewer and the report | same |
 | `testInfo.attach` | `rw_attach("stack.log", path=...)`, `rw_attach.camera(world)` | same |
-| annotations: `skip`, `fail`, `fixme`, `slow`, tags | pytest markers: `skip`, `xfail(strict=True)`, custom markers with `-m` | same (pytest's) |
+| annotations: `skip`, `fail`, `fixme`, `slow`, tags | pytest markers: `skip`, `xfail(strict=True)`, `fixme`, `rw_slow`; a test's own markers are its tags, shown in the HTML report with a filter button each and selected with `-m`; `@pytest.mark.annotate("issue", url)` and the `rw_annotate` fixture (`testInfo.annotations`) note things shown with the test in the report and the JSON | same |
 | `test.only` | `@pytest.mark.only` runs only the marked tests | same |
 | `test.fixme` | `@pytest.mark.fixme("why")`: skipped, saying why | same |
 | `test.slow` | `@pytest.mark.rw_slow` (or `rw_slow(5)`): the test's time limit three (five) times over | same |
@@ -51,7 +51,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | `--only-changed` | `--rw-only-changed [REF]`, followed through imports | same |
 | `--last-failed` | pytest's `--lf` | same (pytest's) |
 | `forbidOnly` | `--rw-forbid-only` (on by itself when `CI` is set): a focus left in fails the run | same |
-| `globalTimeout` | `--rw-global-timeout 3600`: the run stops and fails once it has taken that long | same |
+| `globalTimeout` | `--rw-global-timeout 3600`: the run stops and fails once it has taken that long, a test still running then included | same |
 | `--grep`, `--list` | pytest's `-k`, `--collect-only` | same (pytest's) |
 | test timeout | `--rw-timeout 120`, `@pytest.mark.rw_timeout(300)`; a hung test says where it hung | same |
 | `globalSetup` | session fixtures in `conftest.py`; the `[ros2]` stack | same (pytest's) |

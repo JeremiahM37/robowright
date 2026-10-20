@@ -287,6 +287,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "only: run only the tests marked so (Playwright's test.only); --rw-forbid-only refuses it")
     config.addinivalue_line("markers", "rw_slow(factor=3): this test's time limit times factor (Playwright's test.slow)")
     config.addinivalue_line("markers", "rw_retries(n): run this test again up to n times if it fails (over --rw-retries)")
+    config.addinivalue_line("markers", "annotate(type, description): a note shown with the test in the report (Playwright's annotations)")
     config.addinivalue_line(
         "markers",
         "use(**options): options for a module's, class's or test's worlds and runs (Playwright's test.use): "
@@ -810,6 +811,14 @@ def pytest_runtest_makereport(item, call):
         group = _serial_group(item)
         if group is not None:
             item.config.stash.setdefault(_SERIAL_FAILED, set()).add(group)
+    if rep.when == "setup":  # what the report shows beside the test: its tags and annotations
+        import json
+
+        tags = sorted({m.name for m in item.iter_markers() if not m.name.startswith("rw_")} - _NOT_TAGS)
+        if tags:
+            rep.user_properties.append(("robowright_tags", json.dumps(tags)))
+        for m in item.iter_markers("annotate"):
+            rep.user_properties.append(("robowright_annotation", json.dumps(_annotation(*m.args, **m.kwargs))))
     if rep.when == "call":
         item._rw_call_report = rep
         retry = _attempt(item) > 0  # a retry's trace is kept whatever it shows (on-first-retry records it)
@@ -817,6 +826,30 @@ def pytest_runtest_makereport(item, call):
             rep.user_properties.append(("robowright_trace", str(_trace_path(item.config, item.nodeid, _attempt(item)))))
         if hasattr(item, "_rw_trials"):
             rep.user_properties.append(("robowright_trials", item._rw_trials.summary()))
+
+
+# markers that are pytest's own or robowright's settings, not a test's tags (Playwright's @tag): the rest are
+_NOT_TAGS = {
+    "parametrize", "usefixtures", "filterwarnings", "skip", "skipif", "xfail", "tryfirst", "trylast",
+    "scene", "seed", "backends", "robots", "trials", "only", "fixme", "serial", "xdist_group", "use", "annotate",
+}  # fmt: skip
+
+
+def _annotation(type: str, description: str = "") -> dict:
+    return {"type": str(type), "description": str(description)}
+
+
+@pytest.fixture
+def rw_annotate(request):
+    """Note something about this test in the report, as Playwright's ``testInfo.annotations``:
+    ``rw_annotate("issue", "https://github.com/me/robot/issues/12")``, ``rw_annotate("seed", "7")``. The same as
+    ``@pytest.mark.annotate("issue", url)``, but from inside the test, with what it found out."""
+    import json
+
+    def annotate(type: str, description: str = "") -> None:
+        request.node.user_properties.append(("robowright_annotation", json.dumps(_annotation(type, description))))
+
+    return annotate
 
 
 def _video(item, trace_path) -> None:

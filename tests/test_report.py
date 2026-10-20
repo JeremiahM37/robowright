@@ -209,3 +209,41 @@ def test_the_ci_workflow_installs_robowright_the_way_it_is_installed_here(monkey
     monkeypatch.setattr(metadata, "distribution", lambda name: Dist('{"url": "file:///src/robowright"}'))
     assert 'pip install "robowright @ git+https://github.com/JeremiahM37/robowright" pytest-xdist' in cli._init_ci()
     assert "__ROBOWRIGHT__" not in cli._init_ci()
+
+
+TAGGED = """
+import pytest
+
+@pytest.mark.needs_gpu
+@pytest.mark.annotate("issue", "https://github.com/me/robot/issues/12")
+def test_grasp(rw_annotate):
+    rw_annotate("found", "the left finger slips")
+
+@pytest.mark.smoke
+@pytest.mark.use(expect_timeout=3)
+def test_home():
+    pass
+
+def test_plain():
+    pass
+"""
+
+
+def test_tags_and_annotations_in_the_report(pytester):
+    """A test's own markers are its tags (Playwright's @tag), and annotate() and rw_annotate notes show with it."""
+    pytester.makeini("[pytest]\nmarkers =\n    needs_gpu: needs a GPU\n    smoke: quick ones\n")
+    pytester.makepyfile(test_tagged=TAGGED)
+    for workers in ((), ("-n", "2")):  # under xdist the notes come from the workers' reports
+        r = pytester.runpytest("-p", "no:cacheprovider", *workers, "--rw-report", "r.html", "--rw-json", "r.json")
+        r.assert_outcomes(passed=3)
+        tests = json.loads((pytester.path / "r.json").read_text())["tests"]
+        assert tests["test_tagged.py::test_grasp"]["tags"] == ["needs_gpu"]
+        assert tests["test_tagged.py::test_home"]["tags"] == ["smoke"], "settings markers (use) are not tags"
+        assert tests["test_tagged.py::test_plain"]["tags"] == []
+        assert tests["test_tagged.py::test_grasp"]["annotations"] == [
+            {"type": "issue", "description": "https://github.com/me/robot/issues/12"},
+            {"type": "found", "description": "the left finger slips"},
+        ]
+        page = (pytester.path / "r.html").read_text()
+        assert '<button data-t="needs_gpu">@needs_gpu 1</button>' in page and '<span class="tag">@smoke</span>' in page
+        assert '<a href="https://github.com/me/robot/issues/12">' in page and "the left finger slips" in page
