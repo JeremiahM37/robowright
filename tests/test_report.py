@@ -186,3 +186,26 @@ def test_init_agents_writes_a_planner_a_generator_and_a_healer(tmp_path):
     healer = tmp_path / ".claude" / "agents" / "robowright-healer.md"
     healer.write_text("mine\n")
     assert "kept     " in subprocess.run(cli, capture_output=True, text=True).stdout and healer.read_text() == "mine\n"
+
+
+def test_the_ci_workflow_installs_robowright_the_way_it_is_installed_here(monkeypatch):
+    """From PyPI at this version when it came from PyPI; from its repository otherwise (a CI machine cannot reach a
+    local checkout, and an unpublished name would 404)."""
+    from importlib import metadata
+
+    from robowright import cli
+
+    class Dist:
+        version = "0.2.0"
+
+        def __init__(self, direct):
+            self.direct = direct
+
+        def read_text(self, name):
+            return self.direct if name == "direct_url.json" else None
+
+    monkeypatch.setattr(metadata, "distribution", lambda name: Dist(None))
+    assert 'pip install "robowright==0.2.0" pytest-xdist' in cli._init_ci()
+    monkeypatch.setattr(metadata, "distribution", lambda name: Dist('{"url": "file:///src/robowright"}'))
+    assert 'pip install "robowright @ git+https://github.com/JeremiahM37/robowright" pytest-xdist' in cli._init_ci()
+    assert "__ROBOWRIGHT__" not in cli._init_ci()

@@ -175,10 +175,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # robowright is not on PyPI yet: install it from its repository until it is, e.g.
-      #   pip install "robowright @ git+https://github.com/JeremiahM37/robowright" pytest-xdist
-      - run: pip install robowright pytest-xdist
-      # Traces record state, not pictures: no GPU or display is needed to test. --rw-trace-text
+      # Rendering (image snapshots, videos) uses the CPU through Mesa's EGL: no GPU or display needed.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
+      - run: pip install __ROBOWRIGHT__ pytest-xdist
+      # Traces record state, not pictures: tests need no rendering of their own. --rw-trace-text
       # prints each failure's trace in the log. --rw-retries 2 runs a failed test again: one that
       # then passes is reported flaky, not passed. Each shard keeps its results, traces included,
       # in one zip (--rw-blob) for the report job.
@@ -197,7 +197,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install robowright
+      - run: pip install __ROBOWRIGHT__
       - uses: actions/download-artifact@v4
         with:
           pattern: robowright-blob-*
@@ -208,6 +208,27 @@ jobs:
           name: robowright-report
           path: report/
 """
+
+
+REPO = "https://github.com/JeremiahM37/robowright"
+
+
+def _install_spec() -> str:
+    """How CI installs robowright, the way it is installed here: from PyPI at this version when it came from PyPI,
+    else from its repository (a git or local install, which a CI machine cannot reach)."""
+    from importlib import metadata
+
+    try:
+        dist = metadata.distribution("robowright")
+    except metadata.PackageNotFoundError:
+        return f'"robowright @ git+{REPO}"'
+    if dist.read_text("direct_url.json"):  # installed from a URL or a path, not from an index
+        return f'"robowright @ git+{REPO}"'
+    return f'"robowright=={dist.version}"'
+
+
+def _init_ci() -> str:
+    return _INIT_CI.replace("__ROBOWRIGHT__", _install_spec())
 
 
 def _init_mcp() -> str:
@@ -331,7 +352,7 @@ def _init(args, rest):
             root / "tests" / "test_robot.py": _INIT_TEST,
             root / "robowright.toml": _INIT_TOML,
             root / "pytest.ini": _INIT_PYTEST.format(robot=args.robot, backend=args.backend),
-            root / ".github" / "workflows" / "robowright.yml": _INIT_CI,
+            root / ".github" / "workflows" / "robowright.yml": _init_ci(),
             root / ".mcp.json": _init_mcp(),
         }
     for path, text in files.items():

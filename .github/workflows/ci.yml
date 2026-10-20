@@ -76,6 +76,19 @@ jobs:
         env:
           ROBOWRIGHT_PYTHON: python
 
+  init-workflow:
+    # The CI workflow robowright init gives every new project, run step by step as GitHub runs it (both shards, then
+    # the merged report), with this commit installed in place of the published robowright.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install . pyyaml
+      - run: robowright init /tmp/proj
+      - run: python scripts/run_init_workflow.py /tmp/proj "$PWD"
+
   docker:
     # The Dockerfile's image, built and used as a newcomer would: a project made by robowright init, its tests run
     # inside the container, rendering on the CPU. Built only; nothing is published.
