@@ -319,3 +319,51 @@ def test_several_projects_run_every_test_in_each(pytester):
         assert f"{test_id} PASSED" in out
     assert "test_world[quick" not in out.replace("deselected", ""), "quick's mark keeps only its quick tests"
     assert _outcomes(pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "all")) == {"passed": 4}
+
+
+DEPENDS = """
+[projects.setup]
+match = "setup_*.py"
+
+[projects.arms]
+depends = ["setup"]
+ignore = "setup_*.py"
+
+[projects.nightly]
+depends = "arms"
+ignore = ["setup_*.py"]
+"""
+
+
+def test_a_project_runs_after_the_projects_it_depends_on(pytester):
+    """Playwright's project dependencies: --rw-project nightly brings in arms and setup, runs setup's tests first,
+    and once one of them fails, skips the projects that depend on it (and theirs)."""
+    (pytester.path / "robowright.toml").write_text(DEPENDS)
+    pytester.makeini("[pytest]\npython_files = test_*.py setup_*.py\n")
+    pytester.makepyfile(
+        setup_calibrate="import os\n\ndef test_calibrate():\n    assert not os.environ.get('BROKEN'), 'calibration failed'\n",
+        test_arm="def test_reach():\n    pass\n",
+    )
+    r = pytester.runpytest("-p", "no:cacheprovider", "-v", "--rw-project", "nightly")
+    out = r.stdout.str()
+    order = [line.split(" ")[0] for line in r.stdout.lines if " PASSED" in line or " SKIPPED" in line or " FAILED" in line]
+    assert order[0] == "setup_calibrate.py::test_calibrate[setup]", order
+    assert _outcomes(r) == {"passed": 3}, out  # setup runs its file; arms and nightly leave it out
+    assert "test_reach[setup]" not in out, "match keeps the setup project to its own files"
+    import os
+
+    os.environ["BROKEN"] = "1"
+    try:
+        r = pytester.runpytest("-p", "no:cacheprovider", "-rs", "--rw-project", "nightly")
+    finally:
+        del os.environ["BROKEN"]
+    assert _outcomes(r) == {"failed": 1, "skipped": 2}, r.stdout.str()
+    assert "project arms depends on setup, where a test failed" in r.stdout.str()
+    assert "project nightly depends on arms, where a test failed" in r.stdout.str()
+
+
+def test_a_dependency_cycle_is_a_usage_error(pytester):
+    (pytester.path / "robowright.toml").write_text('[projects.a]\ndepends = ["b"]\n[projects.b]\ndepends = ["a"]\n')
+    pytester.makepyfile(test_x="def test_x():\n    pass\n")
+    r = pytester.runpytest("-p", "no:cacheprovider", "--rw-project", "a")
+    assert r.ret == pytest.ExitCode.USAGE_ERROR and "depends on itself through a -> b -> a" in r.stderr.str()

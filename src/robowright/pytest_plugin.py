@@ -277,6 +277,39 @@ def _flat(value):
     return ",".join(value) if isinstance(value, list) else value
 
 
+_PROJECT_OWN = {"use", "mark", "depends", "match", "ignore"}  # project keys that are not flags
+_DEPS_FAILED = pytest.StashKey[set]()  # projects with a failed (or dependency-skipped) test
+
+
+def _with_dependencies(names: list, projects: dict, found) -> list:
+    """``names`` with the projects they depend on (``depends = ["setup"]``), each dependency before what needs it."""
+    out: list = []
+
+    def add(name, chain):
+        if name in chain:
+            raise pytest.UsageError(f"[projects.{name}]: depends on itself through {' -> '.join([*chain, name])}")
+        if name in out:
+            return
+        if name not in projects:
+            out.append(name)  # said by the caller, with what there is
+            return
+        deps = projects[name].get("depends") or []
+        for d in [deps] if isinstance(deps, str) else deps:
+            if d not in projects:
+                raise pytest.UsageError(f"[projects.{name}] in {found[0]}: depends on {d}, which is not a project")
+            add(d, [*chain, name])
+        out.append(name)
+
+    for n in names:
+        add(n, [])
+    return out
+
+
+def _deps_of(tables: dict, name: str) -> set:
+    deps = tables.get(name, {}).get("depends") or []
+    return set([deps] if isinstance(deps, str) else deps)
+
+
 def _apply_project(config) -> None:
     """``--rw-project NAME``: the project's settings, under the flags given on the command line (or in addopts).
     ``--rw-project a,b`` runs every test in each, as Playwright runs every project: see ``_PROJECTS``."""
@@ -288,17 +321,18 @@ def _apply_project(config) -> None:
     found = find_config(config.rootpath)
     projects = (found[1].get("projects") or {}) if found else {}
     names = list(projects) if raw == "all" else [n.strip() for n in raw.split(",") if n.strip()]
+    names = _with_dependencies(names, projects, found)
     tables = {}
     for name in names:
         if name not in projects:
             where = f"{found[0]} has {', '.join(sorted(projects)) or 'none'}" if found else "no robowright.toml was found"
             raise pytest.UsageError(f"--rw-project {name}: no [projects.{name}]; {where}")
         table = dict(projects[name])
-        unknown = sorted(set(table) - set(_PROJECT_FLAGS) - {"use", "mark"})
+        unknown = sorted(set(table) - set(_PROJECT_FLAGS) - _PROJECT_OWN)
         if unknown:
             raise pytest.UsageError(
                 f"[projects.{name}] in {found[0]}: unknown {', '.join(unknown)}; "
-                f"it takes {', '.join(sorted(_PROJECT_FLAGS) + ['mark', 'use'])}"
+                f"it takes {', '.join(sorted(_PROJECT_FLAGS) + sorted(_PROJECT_OWN))}"
             )
         tables[name] = table
     if len(tables) == 1:
@@ -594,6 +628,23 @@ def pytest_collection_modifyitems(config, items):
     for i in items:
         _use(i)  # a misspelt option fails the run now, not as each test starts
     tables = config.stash.get(_PROJECTS, None)
+    if tables and any("match" in t or "ignore" in t for t in tables.values()):  # Playwright's testMatch, testIgnore
+        import fnmatch
+
+        def globs(v):
+            return [v] if isinstance(v, str) else list(v or [])
+
+        keep, drop = [], []
+        for i in items:
+            p = getattr(i, "callspec", None)
+            table = tables.get(p.params.get("rw_project") if p is not None else None, {})
+            rel = Path(i.path).resolve().relative_to(config.rootpath.resolve()).as_posix()
+            ok = not globs(table.get("match")) or any(fnmatch.fnmatch(rel, g) for g in globs(table.get("match")))
+            ok = ok and not any(fnmatch.fnmatch(rel, g) for g in globs(table.get("ignore")))
+            (keep if ok else drop).append(i)
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+            items[:] = keep
     if tables and not config.option.markexpr and any("mark" in t for t in tables.values()):
         from _pytest.mark.expression import Expression
 
@@ -632,6 +683,15 @@ def pytest_collection_modifyitems(config, items):
             config.hook.pytest_deselected(items=dropped)
         items[:] = keep
     module = {}
+    order = {name: i for i, name in enumerate(tables or {})} if tables and any("depends" in t for t in tables.values()) else {}
+    if order and getattr(config.option, "numprocesses", None):
+        warnings.warn(
+            pytest.PytestWarning(
+                "--rw-project with depends: dependencies run first in one process; under -n a "
+                "dependent project's tests may start before its dependencies have finished"
+            ),
+            stacklevel=1,
+        )
 
     def key(item):
         p = getattr(item, "callspec", None)
@@ -639,7 +699,8 @@ def pytest_collection_modifyitems(config, items):
         # Trials tests first: they are the longest, and handed out last they were the tail of
         # every parallel run.
         first = item.get_closest_marker("trials") is None
-        return (first, module.setdefault(item.path, len(module)), params.get("rw_backend", ""), params.get("rw_robot", ""))
+        rank = order.get(params.get("rw_project"), 0)  # a project's dependencies run before it
+        return (rank, first, module.setdefault(item.path, len(module)), params.get("rw_backend", ""), params.get("rw_robot", ""))
 
     items[:] = sorted(items, key=key)
     for item in items:
@@ -986,6 +1047,9 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
     if rep.failed and rep.outcome != "rerun":
+        p = getattr(item, "callspec", None)
+        if p is not None and p.params.get("rw_project"):
+            item.config.stash.setdefault(_DEPS_FAILED, set()).add(p.params["rw_project"])
         group = _serial_group(item)
         if group is not None:
             item.config.stash.setdefault(_SERIAL_FAILED, set()).add(group)
@@ -1109,6 +1173,14 @@ class _Skips:
         fixme = item.get_closest_marker("fixme")
         if fixme:
             pytest.skip(f"fixme: {fixme.args[0] if fixme.args else 'known to be broken'}")
+        p = getattr(item, "callspec", None)
+        tables = item.config.stash.get(_PROJECTS, None)
+        if tables and p is not None and p.params.get("rw_project"):
+            name = p.params["rw_project"]
+            failed = _deps_of(tables, name) & item.config.stash.setdefault(_DEPS_FAILED, set())
+            if failed:
+                item.config.stash[_DEPS_FAILED].add(name)  # and so what depends on this project is skipped too
+                pytest.skip(f"project {name} depends on {', '.join(sorted(failed))}, where a test failed")
         group = _serial_group(item)
         if group is not None and group in item.config.stash.setdefault(_SERIAL_FAILED, set()):
             pytest.skip(f"an earlier test in {group} failed, and its tests depend on each other (serial)")
