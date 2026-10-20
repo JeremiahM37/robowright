@@ -145,3 +145,25 @@ def test_to_have_count_waits_for_objects_to_arrive(quiet_world):
     t0 = w.time
     rw.expect(in_bin, timeout=2.0).to_have_count(1)
     assert w.time > t0, "it waited, in simulated time"
+
+
+def test_containing_or_and_compose_as_playwrights_has_or_and(quiet_world):
+    w = quiet_world(
+        scene=tabletop(
+            ObjectSpec("a", color="red", pos=(0.2, 0.0, None)),
+            ObjectSpec("b", color="green", pos=(0.25, 0.08, None)),
+            ObjectSpec("left", "bin", (0.05, 0.05, 0.02), (0.15, -0.12, 0.0)),
+            ObjectSpec("right", "bin", (0.05, 0.05, 0.02), (0.3, -0.12, 0.0)),
+        )
+    )
+    w.move_object("a", (0.15, -0.12, 0.03))
+    assert w.scene.get(containing="a").name == "left"  # the bin the red one is in
+    assert w.scene.count(containing="b") == 0
+    reds_or_bins = w.scene.filter(color="red").or_(kind="bin")
+    assert [h.name for h in reds_or_bins] == ["a", "left", "right"]
+    assert w.scene.filter(kind="bin").and_(containing="a").get().name == "left"
+    rw.expect(w.scene.filter(kind="bin").and_(w.scene.filter(containing="b"))).to_have_count(0)
+    w.move_object("b", (0.3, -0.12, 0.03))
+    rw.expect(w.scene.filter(kind="bin").and_(containing="b")).to_have_count(1)
+    with pytest.raises(TypeError, match="not both and not neither"):
+        w.scene.filter(color="red").or_()

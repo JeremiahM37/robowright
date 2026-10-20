@@ -161,7 +161,8 @@ class SceneLocator:
     def get(self, **filters) -> ObjectHandle:
         """Exactly one object matching ``filters`` (strict, like Playwright's locators). What it is: ``name=``,
         ``color=``, ``kind=``, ``tag=``. Where it is now, as Playwright filters a locator by what it has: ``inside="bin"``
-        (its centre within the bin), ``on="tray"`` (resting on top of it), ``touching="floor"``, ``near=(point or
+        (its centre within the bin), ``containing="cube"`` (the bin it is in, Playwright's ``has``), ``on="tray"``
+        (resting on top of it), ``touching="floor"``, ``near=(point or
         object, radius)``, ``held=True`` (between the gripper's fingers). What this robot can do with it, as
         Playwright finds an element by its role: ``graspable=True`` (not a bin, and narrower than its gripper opens).
         And ``where=fn`` for anything else (``fn(handle) -> bool``). ``scene.get(color="red", inside="bin")`` is the red
@@ -180,21 +181,47 @@ class SceneLocator:
 
 
 class Objects(Subject):
-    """``scene.filter(...)``: the objects matching some filters, found again whenever it is read."""
+    """``scene.filter(...)``: the objects matching some filters, found again whenever it is read. ``a.or_(b)`` is what
+    either matches, ``a.and_(b)`` what both do (Playwright's ``or`` and ``and``); either side may be a ``scene.filter``
+    or keyword filters: ``scene.filter(color="red").or_(kind="sphere")``."""
 
-    def __init__(self, scene: SceneLocator, filters: dict):
+    def __init__(self, scene: SceneLocator, filters: dict, parts: tuple = (), how: str = ""):
         self.scene, self.filters, self.world = scene, filters, scene.world
-        shown = ", ".join(f"{k}={getattr(v, '__name__', None) or repr(v)}" for k, v in filters.items())
-        self.name = f"scene.filter({shown})"
+        self._parts, self._how = parts, how
+        if parts:
+            self.name = f"{parts[0].name}.{how}_({parts[1].name})"
+        else:
+            shown = ", ".join(f"{k}={getattr(v, '__name__', None) or repr(v)}" for k, v in filters.items())
+            self.name = f"scene.filter({shown})"
+
+    def _other(self, other, filters) -> Objects:
+        if (other is None) == (not filters):
+            raise TypeError("give another scene.filter(...) or filters by keyword, not both and not neither")
+        return other if other is not None else self.scene.filter(**filters)
+
+    def or_(self, other: Objects | None = None, **filters) -> Objects:
+        return Objects(self.scene, {}, (self, self._other(other, filters)), "or")
+
+    def and_(self, other: Objects | None = None, **filters) -> Objects:
+        return Objects(self.scene, {}, (self, self._other(other, filters)), "and")
 
     def all(self) -> list[ObjectHandle]:
+        if self._parts:
+            a, b = (p.all() for p in self._parts)
+            names = {h.name for h in b}
+            keep = [h for h in a if h.name in names] if self._how == "and" else a + [h for h in b if h.name not in {x.name for x in a}]
+            order = {n: i for i, n in enumerate(self.world.object_names)}
+            return sorted(keep, key=lambda h: order.get(h.name, 0))
         return self.scene.all(**self.filters)
 
     def count(self) -> int:
         return len(self.all())
 
     def get(self) -> ObjectHandle:
-        return self.scene.get(**self.filters)
+        found = self.all()
+        if len(found) != 1:
+            raise LookupError(f"expected exactly one object matching {self.name}, found {[h.name for h in found]}")
+        return found[0]
 
     def nth(self, i: int) -> ObjectHandle:
         found = self.all()
@@ -221,7 +248,7 @@ class Objects(Subject):
         raise TypeError(f"expect({self.name}) takes to_have_count; for one object's position, use .get() or .first")
 
 
-_FILTERS = {"color", "kind", "tag", "name", "inside", "on", "touching", "near", "held", "graspable", "where"}
+_FILTERS = {"color", "kind", "tag", "name", "inside", "on", "touching", "near", "held", "graspable", "containing", "where"}
 _ON_GAP = 0.01  # m between an object's bottom and the top it rests on
 
 
@@ -254,6 +281,13 @@ def _match_state(world, h, f) -> bool:
         gripper = getattr(world.robot, "gripper", None)
         held = gripper is not None and gripper.holding() == h.name
         if held != bool(f["held"]):
+            return False
+    if "containing" in f:  # Playwright's has=: the container holding that object now (its centre inside this one)
+        inner = as_subject(world, f["containing"])
+        if inner.name == h.name or h.spec.kind != "bin":
+            return False
+        lo, hi = h.bounds()
+        if not (np.all(inner.position >= lo) and np.all(inner.position <= hi)):
             return False
     if "graspable" in f:
         from .robot import grasp_width, widest_gap
