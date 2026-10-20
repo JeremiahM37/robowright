@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes robowright to PyPI when a version tag is pushed (git tag v0.1.0 && git push origin v0.1.0).
+# Publishes robowright to PyPI when a version tag is pushed (git tag v0.2.0 && git push origin v0.2.0).
 # PyPI trusts this workflow directly (trusted publishing, OpenID Connect): no token or password is stored anywhere.
 # The tag must match the version in pyproject.toml, and CI must pass on the tagged commit first.
 
