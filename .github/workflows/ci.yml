@@ -71,6 +71,12 @@ jobs:
       - run: pip install -e .
       - run: npm ci
         working-directory: editors/vscode
+      - uses: actions/cache@v4  # VS Code and the Python Debugger, so a run rarely needs the Marketplace
+        with:
+          path: |
+            editors/vscode/.vscode-test/vscode-linux-x64-*
+            editors/vscode/.vscode-test/extensions-debugpy
+          key: vscode-test-1.95.3-debugpy-${{ hashFiles('editors/vscode/test/run.js') }}
       - run: xvfb-run -a npm test
         working-directory: editors/vscode
         env:

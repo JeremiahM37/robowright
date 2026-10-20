@@ -24,7 +24,17 @@ async function main() {
   const installed = fs.existsSync(exts) && fs.readdirSync(exts).some(d => d.startsWith("ms-python.debugpy"));
   if (!process.env.ROBOWRIGHT_TEST_NO_DEBUGPY && !installed) {
     const [cli, ...cliArgs] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
-    cp.execFileSync(cli, [...cliArgs, "--extensions-dir", exts, "--install-extension", "ms-python.debugpy"], { stdio: "inherit" });
+    // the Marketplace answers 503 now and then: tried again, a little later each time
+    for (let attempt = 1; ; attempt++) {
+      try {
+        cp.execFileSync(cli, [...cliArgs, "--extensions-dir", exts, "--install-extension", "ms-python.debugpy"], { stdio: "inherit" });
+        break;
+      } catch (e) {
+        if (attempt === 4) throw e;
+        console.log(`installing ms-python.debugpy failed (attempt ${attempt}); trying again in ${attempt * 15} s`);
+        cp.execFileSync("sleep", [String(attempt * 15)]);
+      }
+    }
   }
   const extArgs = process.env.ROBOWRIGHT_TEST_NO_DEBUGPY ? ["--disable-extensions"] : ["--extensions-dir", exts];
   try {
