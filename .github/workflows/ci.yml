@@ -86,8 +86,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install . pyyaml
-      - run: robowright init /tmp/proj
-      - run: python scripts/run_init_workflow.py /tmp/proj "$PWD"
+      # A newcomer's machine: no MUJOCO_GL (set for the other jobs above), no EGL installed until the workflow does it.
+      - run: unset MUJOCO_GL && robowright init /tmp/proj
+      - run: unset MUJOCO_GL && python scripts/run_init_workflow.py /tmp/proj "$PWD"
 
   docker:
     # The Dockerfile's image, built and used as a newcomer would: a project made by robowright init, its tests run
