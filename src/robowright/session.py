@@ -55,6 +55,76 @@ _MATCHERS = (
 )
 
 
+class _ContactLog:
+    """The scene objects' contacts at each step of one call, kept as when each pair touched (see ``Session._act``)."""
+
+    def __init__(self, world):
+        from .backends.base import CONTACTS
+
+        self.world, self.on = world, None
+        if CONTACTS not in world.backend.capabilities or not world.object_names:
+            return
+        self.objects = set(world.object_names)
+        self.fixed = {n for n in world.object_names if world.spec.object(n).static}  # bins: said second, as what is touched
+        self.start = self._pairs()
+        self.on: dict[tuple, list] = {}  # pair -> the times it touched, as spans [t0, t1]
+        self.hook = lambda w: self._record(w.time)
+        world._step_hooks.append(self.hook)
+
+    def _pairs(self) -> set:
+        out = set()
+        for c in self.world.backend.contacts():
+            for obj, other in ((c.a, c.b), (c.b, c.a)):
+                if obj in self.objects and (other not in self.objects or (obj in self.fixed, obj) < (other in self.fixed, other)):
+                    out.add((obj, other))
+        return out
+
+    def _record(self, t: float) -> None:
+        now = self._pairs()
+        for pair in now | set(self.on):
+            spans = self.on.setdefault(pair, [])
+            if pair in now:
+                if spans and spans[-1][1] is None:
+                    continue
+                spans.append([t, None])
+            elif spans and spans[-1][1] is None:
+                spans[-1][1] = t
+
+    def stop(self) -> None:
+        if self.on is not None and self.hook in self.world._step_hooks:
+            self.world._step_hooks.remove(self.hook)
+
+    def lines(self, limit: int = 12) -> list[str]:
+        if not self.on:
+            return []
+        end = self._pairs()
+        events = []  # (when, what), in the order they happened
+        for (obj, other), spans in self.on.items():
+            was, now = (obj, other) in self.start, (obj, other) in end
+            if not spans or (was and now and len(spans) == 1):  # touching throughout
+                continue
+            first, last = spans[0][0], spans[-1][1]
+            if not was and now:
+                events.append((first, f"{obj} began touching {other} at {first:.2f} s"))
+            elif was and not now:
+                t = last if last is not None else first
+                events.append((t, f"{obj} stopped touching {other} at {t:.2f} s"))
+            elif not was and not now:
+                events.append((first, f"{obj} touched {other} from {first:.2f} to {last:.2f} s, and no longer does"))
+            elif len(spans) > 1:
+                gap, back = spans[0][1], spans[-1][0]
+                events.append((gap, f"{obj} lost touch with {other} at {gap:.2f} s, and touched it again by {back:.2f} s"))
+        out = [what for _, what in sorted(events)]
+        if len(out) > limit:
+            out = out[:limit] + [f"... and {len(out) - limit} more"]
+        return out
+
+
+def _during(watch) -> str:
+    lines = watch.lines() if watch is not None else []
+    return "during this call:\n" + "".join(f"  - {x}\n" for x in lines) + "\n" if lines else ""
+
+
 def _f(x, n=3) -> str:
     return "[" + ", ".join(f"{float(v):.{n}f}" for v in np.ravel(x)) + "]"
 
@@ -492,12 +562,17 @@ class Session:
 
     # --- actions -----------------------------------------------------------------
     def _act(self, fn, *args, **kwargs) -> str:
-        """Run an action; on failure say why, and still show where things ended up."""
+        """Run an action; on failure say why, and still show where things ended up, with what happened on the way
+        (contacts that began, ended or came and went during it, which the end state alone does not show)."""
+        watch = _ContactLog(self._w()) if self.env is None else None
         try:
             self._attempt(fn, *args, **kwargs)
         except RobowrightError as e:
-            return f"FAILED: {type(e).__name__}: {e}\n\n{self.snapshot()}"
-        return self.snapshot()
+            return f"FAILED: {type(e).__name__}: {e}\n{_during(watch)}\n{self.snapshot()}"
+        finally:
+            if watch is not None:
+                watch.stop()
+        return _during(watch) + self.snapshot()
 
     def _attempt(self, fn, *args, **kwargs):
         """Call ``fn``; if it fails, keep the session going and keep the recording reproducible.

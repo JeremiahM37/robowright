@@ -384,3 +384,15 @@ def test_the_backend_list_says_what_is_installed_and_how_to_get_the_rest():
     assert "mujoco: installed" in out
     if "isaac" not in available():
         assert "isaac: not installed (Isaac Sim is not a pip extra" in out
+
+
+def test_an_action_says_what_touched_what_on_the_way(session):
+    """Contacts that began, ended or came and went during a call, which the state it ends in does not show."""
+    session.launch("so101")
+    out = session.pick("cube")
+    during = out.split("\n\n", 1)[0]
+    assert during.startswith("during this call:")
+    assert "cube began touching robot:left_finger at" in during and "cube stopped touching floor at" in during
+    out = session.place("bin")
+    assert "cube stopped touching robot:left_finger at" in out and "cube began touching bin at" in out
+    assert "during this call" not in session.wait(0.2)  # nothing changed: nothing said
