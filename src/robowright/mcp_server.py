@@ -90,6 +90,16 @@ def build_server(session: Session | None = None):
         return server.tool(name=fn.__name__)(fn)
 
     @tool
+    async def robot_list_backends() -> str:
+        """The simulation engines robowright can run here, and how to install the others: what robot_launch's backend
+        can be."""
+        from .backends.base import _INSTALL, available
+
+        have = available()
+        lines = [f"{b}: installed" for b in have] + [f"{b}: not installed ({how})" for b, how in _INSTALL.items() if b not in have]
+        return "\n".join(lines)
+
+    @tool
     async def robot_list_robots(family: str | None = None) -> str:
         """List the robots available. family: 'arm' or 'legged' (default: all)."""
         from . import robots
@@ -140,6 +150,12 @@ def build_server(session: Session | None = None):
         joints, its controllers and how each is driven, whether it runs on simulation time,
         whether Gazebo is there, and the ros2 settings to give robot_launch(backend="ros2")."""
         return await run(s.ros2_inspect, namespace, timeout)
+
+    @tool
+    async def ros2_list(kind: str = "topics", filter: str = "") -> str:
+        """What the ROS 2 graph has now: kind is topics (with publisher and subscriber counts), services or actions;
+        filter keeps names containing it. Then read one with ros2_topic, call with ros2_call, or ros2_send_goal."""
+        return await run(s.ros_list, kind, filter)
 
     @tool
     async def ros2_topic(name: str, timeout: float = 2.0) -> str:
@@ -270,6 +286,12 @@ def build_server(session: Session | None = None):
         return await run(s.start_process, command, cwd)
 
     @tool
+    async def robot_process_output(lines: int = 50) -> str:
+        """Whether the process robot_start_process started is still running, and its newest output, without
+        stopping it: watch a stack come up, or see why it died."""
+        return await run(s.process_output, lines)
+
+    @tool
     async def robot_stop_process() -> str:
         """Stop the process robot_start_process started, and return the end of its output."""
         return await run(s.stop_process)
@@ -369,6 +391,12 @@ def build_server(session: Session | None = None):
         jitter {object, xy_std, yaw_std}, camera_dropout {p}.
         """
         return await run(s.fault, kind, **(params or {}))
+
+    @tool
+    async def robot_wait_until(subject: str, matcher: str, args: dict | None = None, negate: bool = False, timeout: float = 10.0) -> str:
+        """Let simulated time pass until a condition holds, and say how long it took (or what it was when the
+        timeout passed). The same subjects and matchers as robot_expect: wait for a condition, not a duration."""
+        return await run(s.wait_until, subject, matcher, args, negate, timeout)
 
     @tool
     async def robot_expect(subject: str, matcher: str, args: dict | None = None, negate: bool = False, timeout: float | None = None) -> str:

@@ -622,6 +622,13 @@ class Session:
             return f"{h.name} ({h.type}): no message within {timeout} s"
         return f"{h.name} ({h.type}), {h.count} received, {h.hz:.1f} Hz:\n{_yaml(h.latest)}"
 
+    def ros_list(self, kind: str = "topics", filter: str = "") -> str:
+        """The graph's topics, services or actions now (``filter``: part of the name), with types and, for topics,
+        publisher and subscriber counts: what there is to read, call or send a goal to."""
+        lines = self._w().ros.listing(kind, filter)
+        what = f"{kind} matching {filter!r}" if filter else kind
+        return f"{len(lines)} {what}:\n" + "\n".join(lines) if lines else f"no {what} in the ROS graph"
+
     def ros_call(self, service: str, request: dict | None = None, timeout: float = 10.0) -> str:
         return f"{service} answered:\n{_yaml(self._w().ros.call(service, request, timeout=timeout))}"
 
@@ -895,6 +902,17 @@ class Session:
             w.trace.event("edit", "start_process", {"command": command})
         return f"started pid {proc.pid}: {command} (output in {log})"
 
+    def process_output(self, lines: int = 50) -> str:
+        """Whether the process ``start_process`` started is running, and its newest output (``lines`` of it), without
+        stopping it: what a stack says as it comes up, or why it died."""
+        if self.process is None:
+            return "no process is running"
+        proc, log = self.process
+        code = proc.poll()
+        state = "running" if code is None else f"exited with code {code}"
+        tail = log.read_text(errors="replace").splitlines()[-lines:] if log.exists() else []
+        return f"pid {proc.pid} {state}; its last {len(tail)} lines:\n" + "\n".join(tail)
+
     def stop_process(self) -> str:
         if self.process is None:
             return "no process is running"
@@ -949,6 +967,16 @@ class Session:
             return f"FAIL: expect({subject}).{matcher} was not checked: {err}"
         shown = ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
         return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({shown}){note}"
+
+    def wait_until(self, subject: str, matcher: str, args: dict | None = None, negate: bool = False, timeout: float = 10.0) -> str:
+        """Let simulated time pass until a matcher holds (the same matchers as ``expect``), and say how long it took:
+        waiting for a condition rather than for a time, as Playwright's wait_for waits for text."""
+        w = self._w()
+        t0 = w.time
+        out = self.expect(subject, matcher, args, negate, timeout)
+        if out.startswith("PASS"):
+            return f"held after {w.time - t0:.2f} s of simulated time: {out.removeprefix('PASS: ')}"
+        return f"did not hold within {timeout:g} s of simulated time: {out.removeprefix('FAIL: ')}"
 
     def _subject(self, name: str):
         if self.env is not None:  # an attached simulation: its named bodies and joints are the only subjects

@@ -203,6 +203,32 @@ def test_the_code_under_test_runs_as_a_process(session, tmp_path):
     assert "stack up" in session.stop_process()
 
 
+def test_a_running_process_can_be_read_without_stopping_it(session, tmp_path):
+    import sys
+    import time
+
+    session.launch("so101")
+    stack = tmp_path / "stack.py"
+    stack.write_text("import time\nfor i in range(3):\n    print('line', i, flush=True)\ntime.sleep(30)\n")
+    session.start_process(f"{sys.executable} {stack}")
+    deadline = time.monotonic() + 10
+    while "line 2" not in (out := session.process_output()) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert " running; its last 3 lines:" in out and "line 0" in out and "line 2" in out
+    assert session.process_output(lines=1).endswith("line 2")
+    session.stop_process()
+    assert session.process_output() == "no process is running"
+
+
+def test_wait_until_says_how_long_a_condition_took(session):
+    session.launch("so101")
+    session.gripper("close")
+    out = session.wait_until("gripper", "to_be_closed", timeout=3)
+    assert out.startswith("held after ") and "to_be_closed" in out
+    out = session.wait_until("cube", "to_be_inside", {"container": "bin"}, timeout=0.2)
+    assert out.startswith("did not hold within 0.2 s of simulated time:") and "bin spans" in out
+
+
 def test_watch_serves_the_session_live(session):
     import json
     import urllib.request
@@ -252,6 +278,7 @@ def test_mcp_lists_the_code_under_test_tools():
     if not names:
         pytest.skip("this mcp version keeps its tools elsewhere")
     assert {"robot_run_policy", "robot_set_targets", "robot_step", "robot_serve_ros2", "robot_start_process", "robot_watch"} <= names
+    assert {"robot_process_output", "robot_wait_until", "robot_list_backends", "ros2_list"} <= names
     assert "code under test is the user's" in INSTRUCTIONS
 
 
@@ -338,3 +365,22 @@ def test_sim_state_says_whose_clock_is_whose(session, monkeypatch):
     text = session.sim_state()
     assert "its clock t=139.900 s" in text
     assert f"robowright's world time (the t in snapshots) is {session.world.time:.3f} s, counted from launch" in text
+
+
+def test_the_backend_list_says_what_is_installed_and_how_to_get_the_rest():
+    pytest.importorskip("mcp")
+    from robowright.backends.base import available
+    from robowright.mcp_server import build_server
+
+    server = build_server()
+    for attr in ("_tool_manager", "tool_manager"):
+        tm = getattr(server, attr, None)
+        if tm is not None:
+            tool = {t.name: t for t in tm.list_tools()}["robot_list_backends"]
+            break
+    else:
+        pytest.skip("this mcp version keeps its tools elsewhere")
+    out = asyncio.run(tool.fn())
+    assert "mujoco: installed" in out
+    if "isaac" not in available():
+        assert "isaac: not installed (Isaac Sim is not a pip extra" in out

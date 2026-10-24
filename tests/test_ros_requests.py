@@ -149,6 +149,12 @@ def test_an_agent_reads_calls_and_sends_goals_through_the_session(tmp_path):
         s.serve_ros2()
         out = s.ros_topic("/joint_states")
         assert "sensor_msgs/msg/JointState" in out and "shoulder_pan" in out
+        topics = s.ros_list()
+        assert "/joint_states (sensor_msgs/msg/JointState): 1 publishing" in topics, topics
+        assert "/_action/" not in topics  # an action's own topics are listed as the action
+        assert "/arm_controller/follow_joint_trajectory (control_msgs/action/FollowJointTrajectory)" in s.ros_list("actions")
+        assert "list_parameters (rcl_interfaces/srv/ListParameters)" in s.ros_list("services", "list_parameters")
+        assert s.ros_list("topics", "no_such_thing") == "no topics matching 'no_such_thing' in the ROS graph"
         out = s.ros_call(f"/{s.bridge.node.get_name()}/list_parameters", {}, timeout=5)
         assert "use_sim_time" in out
         q = [float(v) + 0.1 for v in s.world.robot.qpos()[: s.world.robot.n_arm]]

@@ -36,6 +36,8 @@ partial.
 
 ### Tools
 
+- MCP: `robot_wait_until` (a condition, not a duration), `robot_process_output` (a running stack's output),
+  `ros2_list` (the graph's topics, services and actions), `robot_list_backends`.
 - `robowright test --ui` (UI mode) and `robowright test --watch`.
 - `pytest --rw-debug` and `world.pause()`: a debugger in the live view, with a locator picker.
 - `robowright codegen` with no trace: write a test by doing it in a browser page, with a locator picker.

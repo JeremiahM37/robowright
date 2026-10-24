@@ -108,6 +108,29 @@ class RosGraph:
         """Every topic in the graph, with its type."""
         return {n: t[0] for n, t in self.node.get_topic_names_and_types() if t}
 
+    def listing(self, kind: str = "topics", filter: str = "") -> list[str]:
+        """What the graph has of ``kind`` (topics, services or actions) whose name contains ``filter``, one line each:
+        the name, its type and, for a topic, how many publish and subscribe to it."""
+        if kind == "topics":
+            found = self.node.get_topic_names_and_types()
+        elif kind == "services":
+            found = self.node.get_service_names_and_types()
+        elif kind == "actions":
+            from rclpy.action import get_action_names_and_types
+
+            found = get_action_names_and_types(self.node)
+        else:
+            raise ValueError(f"kind is topics, services or actions, not {kind!r}")
+        lines = []
+        for name, types in sorted(found):
+            if filter not in name or (kind != "actions" and "/_action/" in name):
+                continue  # an action's own topics and services are listed as the action
+            line = f"{name} ({', '.join(types)})"
+            if kind == "topics":
+                line += f": {self.node.count_publishers(name)} publishing, {self.node.count_subscribers(name)} subscribed"
+            lines.append(line)
+        return lines
+
     def topic(self, name: str) -> TopicHandle:
         """The topic ``name`` (absolute, or under the ``[ros2] namespace``), subscribed on first use."""
         full = self.backend.topic_name(name)
