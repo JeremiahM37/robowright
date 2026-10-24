@@ -32,6 +32,15 @@ def test_a_failure_reads_as_text_and_in_the_report(pytester):
     assert "test_wrong_spot[mujoco]" in page and "at the failure" in page
     viewer = pytester.path / "out" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].html"
     assert viewer.exists() and 'href="report-traces/' in page
+    # What the camera saw when it failed, redrawn from the trace: the cube on the table, beside the bin.
+    seen = pytester.path / "out" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].png"
+    assert seen.exists() and 'src="report-traces/test_robots.py__test_wrong_spot[mujoco].png"' in page
+    import numpy as np
+    from PIL import Image
+
+    img = np.asarray(Image.open(seen).convert("RGB")).astype(int)
+    assert ((img[..., 0] > 150) & (img[..., 1] < 80) & (img[..., 2] < 80)).sum() > 20  # the red cube is in it
+    assert "test_pass[mujoco].png" not in page  # a test that passed has none
 
 
 def test_init_sets_up_a_project_whose_tests_pass(tmp_path):
@@ -125,6 +134,7 @@ def test_a_sharded_run_merges_into_one_report(pytester):
     assert "test_wrong_spot[mujoco]" in page and "at the failure" in page  # the trace, read from the blob
     viewer = pytester.path / "merged" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].html"
     assert viewer.exists() and 'href="report-traces/' in page
+    assert (pytester.path / "merged" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].png").exists()  # its picture too
 
 
 def test_merge_reports_refuses_what_is_not_a_blob(tmp_path):

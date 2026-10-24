@@ -18,7 +18,7 @@ import numpy as np
 from ..errors import CapabilityError
 from .attached_engine import AttachedEngine
 from .base import CONTACTS, FORCES, GROUND_TRUTH, RENDER, STATE, Contact
-from .mujoco_backend import renderer
+from .mujoco_backend import renderer, visible_pixels
 
 _FREE = mujoco.mjtJoint.mjJNT_FREE
 _HINGE = mujoco.mjtJoint.mjJNT_HINGE
@@ -252,6 +252,12 @@ class AttachedBackend(AttachedEngine):
             cams = ", ".join(self.names_of_cameras()) or "none"
             raise CapabilityError(f"no camera {camera!r} in this simulation; its cameras: {cams}") from e
         return r.render()
+
+    def visible_pixels(self, name, camera, width, height):
+        if mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera) < 0:
+            cams = ", ".join(self.names_of_cameras()) or "none"
+            raise CapabilityError(f"no camera {camera!r} in this simulation; its cameras: {cams}")
+        return visible_pixels(self.model, self.data, self._renderers, self._body_id(name), camera, width, height)
 
     def names_of_cameras(self) -> list[str]:
         return [n for n in (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_CAMERA, i) for i in range(self.model.ncam)) if n]

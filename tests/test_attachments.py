@@ -22,7 +22,7 @@ def test_attachments_are_in_the_report(pytester):
     assert (att / "start.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     page = (pytester.path / "out" / "report.html").read_text()
     # The report keeps its own copy beside it (report-traces/attachments), so it is shared as one folder.
-    src = page.split('<img src="', 1)[1].split('"', 1)[0]
-    assert src.startswith("report-traces/attachments/") and src.endswith("start.png")
+    (src,) = [s.split('"', 1)[0] for s in page.split('<img src="')[1:] if s.split('"', 1)[0].endswith("start.png")]
+    assert src.startswith("report-traces/attachments/")
     assert (pytester.path / "out" / src).read_bytes() == (att / "start.png").read_bytes()
     assert ">notes.txt</a>" in page and ">stack.log</a>" in page

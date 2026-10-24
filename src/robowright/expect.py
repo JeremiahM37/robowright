@@ -88,7 +88,7 @@ class Expectation:
         t = timeout if timeout is not None else self.timeout
         return self.world.run_until(lambda: check()[0], self.world.settings.expect_timeout if t is None else t, 0.0)
 
-    def _run(self, name: str, check, timeout=None, hold: float = 0.0, args=None):
+    def _run(self, name: str, check, timeout=None, hold: float = 0.0, args=None, intervals=None):
         w = self.world
         label = f"expect({self.subject.name}){'.not_' if self.negate else ''}.{name}"
 
@@ -138,7 +138,7 @@ class Expectation:
             return ok
 
         t0 = w.time
-        ok = w.run_until(p, t, hold)
+        ok = w.run_until(p, t, hold, intervals if intervals is not None else getattr(self.subject, "intervals", None))
         tr = w.trace
         if ok:
             if tr:
@@ -433,6 +433,32 @@ class Expectation:
 
         return self._run("to_be_touching", check, timeout, hold, {"other": o})
 
+    def to_be_visible(self, camera: str = "front", min_pixels: int = 20, *, size=(320, 240), timeout=None, hold=0.0):
+        """At least ``min_pixels`` of it show in ``camera``'s image (Playwright's ``toBeVisible``): in the frame and
+        not hidden behind something else, such as the arm reaching in front of it. Needs MuJoCo."""
+        return self._visible("to_be_visible", camera, size, lambda n: (n >= min_pixels, f"needs {min_pixels}"), timeout, hold)
+
+    def to_be_hidden(self, camera: str = "front", *, size=(320, 240), timeout=None, hold=0.0):
+        """None of it shows in ``camera``'s image (Playwright's ``toBeHidden``): out of the frame, or behind something."""
+        return self._visible("to_be_hidden", camera, size, lambda n: (n == 0, "needs none"), timeout, hold)
+
+    def _visible(self, matcher, camera, size, verdict, timeout, hold):
+        if not hasattr(self.subject, "bounds"):
+            raise TypeError(f"{matcher} takes a scene object, not {self.subject.name}")
+        w = self.world
+        w.require("render", matcher)
+        names = [c.name for c in getattr(w.spec, "cameras", None) or ()]
+        if names and camera not in names:  # (an attached simulation's own cameras are its backend's to check)
+            raise ValueError(f"unknown camera {camera!r}; this world has: {', '.join(names)}")
+        width, height = size
+
+        def check():
+            n = w.backend.visible_pixels(self.subject.name, camera, width, height)
+            ok, want = verdict(n)
+            return ok, f"{n} pixels of {self.subject.name} show in the {camera} camera ({want})"
+
+        return self._run(matcher, check, timeout, hold, {"camera": camera})
+
     # gripper / robot matchers ------------------------------------------------------
     def to_be_holding(self, obj=None, *, timeout=None, hold=0.0):
         """Both jaws in contact with ``obj`` (or with anything, if omitted)."""
@@ -589,11 +615,12 @@ class Expectation:
 
         return self._run("to_be_truthy", check, timeout, hold)
 
-    def to_pass(self, *, timeout=None):
+    def to_pass(self, *, timeout=None, intervals=None):
         """``expect(block).to_pass()``: run ``block()`` every control step until it raises no ExpectationError or
         AssertionError (Playwright's ``toPass``). Each expectation in it checks once, as things are at that step, and
         the failure says which one failed last. ``.always.to_pass()`` makes the block an invariant, run after every step.
-        A block should check, not act: what it moves, it moves again at every try."""
+        A block should check, not act: what it moves, it moves again at every try. ``intervals=[0.1, 0.5]`` tries it
+        that many seconds of simulated time apart instead (the last repeating), for a block that costs a lot."""
         if not isinstance(self.subject, _Polled):
             raise TypeError("to_pass takes a block: expect(lambda: ...).to_pass()")
         if self.negate:
@@ -611,7 +638,7 @@ class Expectation:
             finally:
                 _ONCE.reset(token)
 
-        return self._run("to_pass", check, timeout)
+        return self._run("to_pass", check, timeout, intervals=intervals)
 
     # helpers -----------------------------------------------------------------------
     def _value(self):
@@ -642,8 +669,9 @@ class Expectation:
 class _Polled(Subject):
     """A value the test computes, read again every control step: ``expect.poll(fn)``, or the block of ``to_pass``."""
 
-    def __init__(self, fn, name: str | None = None):
+    def __init__(self, fn, name: str | None = None, intervals=None):
         self.fn = fn
+        self.intervals = intervals
         fn_name = getattr(fn, "__name__", "")
         self.name = name or (f"{fn_name}()" if fn_name and fn_name != "<lambda>" else "value")
 
@@ -703,10 +731,11 @@ def _soft(subject, *, timeout=None, message=None, world=None) -> Expectation:
 expect.soft = _soft
 
 
-def _poll(fn, *, name: str | None = None, timeout=None, message=None, world=None) -> Expectation:
+def _poll(fn, *, name: str | None = None, timeout=None, message=None, world=None, intervals=None) -> Expectation:
     """``expect.poll(fn).to_equal(3)``: ``fn()`` read again every control step until the matcher holds, in simulated
-    time (Playwright's ``expect.poll``). The failure says the last value it read; ``name`` is what it calls the value."""
-    return Expectation(_Polled(fn, name), world, timeout, message=message)
+    time (Playwright's ``expect.poll``). The failure says the last value it read; ``name`` is what it calls the value.
+    ``intervals=[0.1, 0.5, 1.0]`` reads it that many seconds apart instead (the last repeating): for a costly read."""
+    return Expectation(_Polled(fn, name, intervals), world, timeout, message=message)
 
 
 expect.poll = _poll

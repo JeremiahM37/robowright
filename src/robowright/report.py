@@ -105,7 +105,13 @@ class Run:
                     pages.mkdir(exist_ok=True)
                     page = write_html(p, pages / (p.stem + ".html"))
                     link = f'<a href="{html.escape(str(page.relative_to(out.parent)))}">open the trace</a> · '
-                    text = Trace(p).summary()
+                    tr = Trace(p)
+                    text = tr.summary()
+                    seen = _failure_frame(tr, pages / (p.stem + ".png"))
+                    if seen is not None:
+                        href = html.escape(seen.relative_to(out.parent).as_posix())
+                        caption = "the moment it failed"
+                        link += f'<figure><img src="{href}" alt="{caption}"><figcaption>{caption}</figcaption></figure>'
                 except Exception as e:  # noqa: BLE001 - one unreadable trace leaves the report whole
                     text = f"(could not read the trace: {e})"
                 details += f'<div class="trace">{link}<code>{html.escape(str(p))}</code><pre>{html.escape(text)}</pre></div>'
@@ -292,6 +298,32 @@ for (const b of document.querySelectorAll("button")) b.onclick = () => {{
 }};
 </script></body></html>
 """
+
+
+def _failure_frame(tr, out: Path) -> Path | None:
+    """What the first camera saw at the step the test failed (or its last), redrawn from the trace as the viewer draws
+    it, so it cost the run nothing: Playwright's screenshot on failure. None where it cannot be drawn."""
+    from .render import renderer_for
+
+    if not len(tr) or not tr.failed:
+        return None
+    failed = [e for e in tr.events if e["status"] == "failed"]
+    at = min(failed[0]["step"], len(tr) - 1) if failed else len(tr) - 1
+    try:
+        r = renderer_for(tr)
+        try:
+            image = r.frame(at, r.cameras[0], (480, 360)) if r.cameras else None
+        finally:
+            r.close()
+    except Exception:  # noqa: BLE001 - no OpenGL here, or an engine whose traces cannot be redrawn
+        return None
+    if image is None:
+        return None
+    from PIL import Image
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(image[..., :3]).save(out)
+    return out
 
 
 def _slug(nodeid: str) -> str:

@@ -114,8 +114,9 @@ def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1
         n = len(a["t"])
         qerr = np.zeros(n)
         oerr = np.zeros(n)
+        exact = restored and b.name == meta["backend"]  # a restore puts back the run's own state on its own engine
         for i in range(1, n):
-            _apply(b, edits.get(i - 1, []))
+            _apply(b, edits.get(i - 1, []), exact)
             b.set_ctrl(a["ctrl"][i])
             if "led" in a:  # the servos were led along this step's move, as the run's backend did
                 b.feedforward = bool(a["led"][i])
@@ -134,9 +135,16 @@ def replay(trace: str | Path | Trace, backend: str | None = None, tol: float = 1
         b.close()
 
 
-def _apply(b, events):
+def _apply(b, events, exact: bool = False):
     for e in events:
-        if e["type"] == "fault":
+        if e["name"] == "restore":  # world.restore: the saved state on the same engine; on another, where things were
+            if exact:
+                b.set_state(np.asarray(e["args"]["state"], float))
+            else:
+                b.set_joint_positions(np.array(e["args"]["q"]))
+                for name, (pos, quat) in e["args"]["objects"].items():
+                    b.set_object_pose(name, pos, quat)
+        elif e["type"] == "fault":
             b.set_gain_scale(e["args"]["joint"], e["args"]["scale"])
         elif e["name"] == "move_object":
             b.set_object_pose(e["args"]["object"], e["args"]["pos"], e["args"]["quat"])

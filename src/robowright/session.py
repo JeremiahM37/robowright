@@ -50,6 +50,8 @@ _MATCHERS = (
     "to_be_closed",
     "to_have_joint",
     "to_have_no_collisions",
+    "to_be_visible",
+    "to_be_hidden",
 )
 
 

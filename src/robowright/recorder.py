@@ -29,6 +29,7 @@ MATCHERS = (
     ("to_be_holding", "obj"),
     ("to_be_upright", None),
     ("to_be_at_rest", None),
+    ("to_be_visible", None),
 )
 
 

@@ -105,3 +105,34 @@ def test_codegen_says_it_cannot_write_the_tests_own_code_again(world):
     assert code.count("# not written again (it ran the original test's own code)") == 2, code
     assert "expect(scene['cube']).to_be_above(" in code or 'expect(scene["cube"]).to_be_above(' in code, code
     compile(code, "test_again.py", "exec")
+
+
+def test_poll_intervals_read_the_value_that_far_apart(world):
+    reads = []
+
+    def elapsed():
+        reads.append(world.time)
+        return world.time - reads[0]
+
+    expect.poll(elapsed, intervals=[0.1, 0.2]).to_be_greater_than(0.5, timeout=2)
+    gaps = [round(b - a, 2) for a, b in zip(reads, reads[1:])]
+    assert gaps[:2] == [0.1, 0.2] and set(gaps[2:]) == {0.2}  # the last one repeats
+    assert len(reads) < 0.5 / world.dt  # fewer reads than steps
+
+
+def test_to_pass_intervals_try_the_block_that_far_apart(world):
+    tries = []
+
+    def block():
+        tries.append(world.time)
+        assert world.time - tries[0] > 0.3
+
+    expect(block).to_pass(timeout=2, intervals=[0.25])
+    assert len(tries) == 3  # at 0, 0.25 and 0.5
+
+
+def test_intervals_still_stop_at_the_timeout(world):
+    start = world.time
+    with pytest.raises(ExpectationError):
+        expect.poll(lambda: 0, intervals=[10]).to_equal(1, timeout=0.3)
+    assert world.time - start == pytest.approx(0.3, abs=world.dt)

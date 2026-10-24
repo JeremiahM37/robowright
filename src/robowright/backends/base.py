@@ -215,6 +215,13 @@ class Backend(ABC):
     def render(self, camera: str, width: int, height: int) -> np.ndarray:
         raise NotImplementedError(f"{self.name} cannot render")
 
+    def visible_pixels(self, name: str, camera: str, width: int, height: int) -> int:
+        """How many pixels of ``camera``'s image show the object ``name``: what is in front of it, and the edges of the
+        image, hide the rest (``expect(obj).to_be_visible``)."""
+        from ..errors import CapabilityError
+
+        raise CapabilityError(f"{self.name} cannot tell which object each pixel shows: to_be_visible runs on MuJoCo")
+
     def get_state(self) -> np.ndarray:
         raise NotImplementedError(f"{self.name} cannot save state")
 

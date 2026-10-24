@@ -326,7 +326,7 @@ class AttachedWorld(World):
         for _ in range(n):
             self._advance()
 
-    def run_until(self, predicate: Callable[[], bool], timeout: float, hold: float = 0.0) -> bool:
+    def run_until(self, predicate: Callable[[], bool], timeout: float, hold: float = 0.0, intervals=None) -> bool:
         """World.run_until, except that without an advance callable nothing can pass: the state is checked once."""
         if self._advance is None:
             if hold > 1e-9:
@@ -335,7 +335,16 @@ class AttachedWorld(World):
                     "pass advance=... to attach(), or check without a hold after your own steps"
                 )
             return bool(predicate())
-        return super().run_until(predicate, timeout, hold)
+        return super().run_until(predicate, timeout, hold, intervals)
+
+    def checkpoint(self, name=None):
+        raise CapabilityError(
+            "world.checkpoint: an attached simulation's environment keeps state of its own (its episode, its "
+            "observations) that robowright cannot put back; start each case with the environment's own reset"
+        )
+
+    def restore(self, checkpoint):
+        self.checkpoint()
 
     @property
     def can_wait(self) -> bool:

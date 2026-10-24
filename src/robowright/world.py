@@ -52,6 +52,24 @@ class Settings:
     fidelity: str | None = None
 
 
+# What a robot keeps in Python between steps, besides the simulator's own state: its targets, the integral term, and
+# what it has picked up (see Robot). A checkpoint carries these too, or a restored arm would drive to where it was
+# last told to go, not where it was.
+_ROBOT_STATE = ("_target", "_held", "_still", "_bias", "_held_from", "_picked", "_grasped", "_grip_open", "_policy")
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    """A world as it was, to go back to (``World.checkpoint``, ``World.restore``)."""
+
+    name: str
+    backend: str
+    scene: str
+    state: np.ndarray
+    robot: dict
+    step: int
+
+
 class World:
     """A simulated world for one test: the scene, the robot in it, the engine underneath, and its trace.
 
@@ -203,25 +221,32 @@ class World:
             self.trace.event("wait", "world.wait", {"seconds": float(seconds)})
         self.step(max(1, round(seconds / self.dt)))
 
-    def run_until(self, predicate: Callable[[], bool], timeout: float, hold: float = 0.0) -> bool:
+    def run_until(self, predicate: Callable[[], bool], timeout: float, hold: float = 0.0, intervals=None) -> bool:
         """Step until ``predicate()`` has been true for ``hold`` seconds, or ``timeout`` passes.
 
         The predicate is checked before the first step, so a condition that is
-        already true costs no simulated time.
+        already true costs no simulated time. It is checked again every step, or, given
+        ``intervals`` (seconds of simulated time, the last one repeating, as Playwright's), that
+        long after each check that fails: for a check that costs more than a step does.
         """
         self._begin()
         deadline = self.time + timeout
         held_since = None
+        waits = list(intervals or ())
         while True:
             if predicate():
                 held_since = self.time if held_since is None else held_since
                 if self.time - held_since >= hold - 1e-9:
                     return True
+                next_check = self.time
             else:
                 held_since = None
+                next_check = self.time + (waits.pop(0) if len(waits) > 1 else waits[0] if waits else 0.0)
             if self.time >= deadline - 1e-9:
                 return False
             self.step()
+            while self.time < min(next_check, deadline) - 1e-9:
+                self.step()
 
     # --- invariants ------------------------------------------------------------
     def add_invariant(self, check, description: str, record: dict | None = None):
@@ -251,6 +276,60 @@ class World:
                 "move_object",
                 {"object": name, "pos": list(map(float, pos)), "quat": None if quat is None else list(map(float, quat))},
             )
+
+    def checkpoint(self, name: str | None = None) -> Checkpoint:
+        """The world as it is now, to come back to with :meth:`restore`: Playwright's ``storageState``. Set up once
+        (a pick, a stack brought to a pose) and start each case from there, in this world or in another world of the
+        same scene on the same engine, as a module-scoped fixture would::
+
+            ready = world.checkpoint("cube in hand")
+            ...                       # one case
+            world.restore(ready)      # and the next from the same moment
+
+        Needs an engine that saves its state. A trace records both, so a replay goes back to the same moment."""
+        import copy
+
+        self.require(backends.STATE, "world.checkpoint")
+        self._begin()
+        self._checkpoints = getattr(self, "_checkpoints", 0) + 1
+        name = name or f"checkpoint {self._checkpoints}"
+        robot = {k: copy.deepcopy(getattr(self.robot, k)) for k in _ROBOT_STATE if hasattr(self.robot, k)}
+        state = self.backend.get_state().copy()
+        # Put back at once, as a restore will: the poses read now are then those a restore gives (MuJoCo's lag a step
+        # behind its joints until it recomputes them), and the next step is the same either way.
+        self.backend.set_state(state)
+        cp = Checkpoint(name, self.backend.name, self._scene_key(), state, robot, self.step_count)
+        if self.trace:
+            self.trace.event("edit", "checkpoint", {"name": name})
+        return cp
+
+    def restore(self, checkpoint: Checkpoint) -> None:
+        """Put the world back as it was at ``checkpoint`` (see :meth:`checkpoint`): the simulation, the robot's targets
+        and what it holds. Simulated time goes back with it; the trace's step count does not, and it records the
+        restore, so the run reads and replays in the order it happened."""
+        import copy
+
+        self.require(backends.STATE, "world.restore")
+        if checkpoint.backend != self.backend.name or checkpoint.scene != self._scene_key():
+            raise RobowrightError(
+                f"checkpoint {checkpoint.name!r} is of another world ({checkpoint.backend}, scene {checkpoint.scene}); "
+                f"this one is {self.backend.name}, scene {self._scene_key()}"
+            )
+        self._begin()
+        self.backend.set_state(checkpoint.state)
+        for k, v in checkpoint.robot.items():
+            setattr(self.robot, k, copy.deepcopy(v))
+        if self.trace:
+            b = self.backend
+            objects = {n: [list(map(float, x)) for x in b.object_pose(n)] for n in self.object_names if not self.spec.object(n).static}
+            self.trace.event(
+                "edit",
+                "restore",
+                {"name": checkpoint.name, "state": checkpoint.state.tolist(), "q": b.qpos().tolist(), "objects": objects},
+            )
+
+    def _scene_key(self) -> str:
+        return hashlib.sha1(repr(self.spec).encode()).hexdigest()[:12]
 
     def log(self, message: str):
         """Add ``message`` to the trace's timeline at the current time."""

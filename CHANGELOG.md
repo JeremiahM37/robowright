@@ -20,10 +20,15 @@ partial.
   dependents skipped when they fail), `match` and `ignore`.
 - `--rw-shard K/N`, `--rw-blob` and `robowright merge-reports`; `--rw-only-changed [REF]`.
 - `rw_attempt`, `rw_repeat` and `rw_project` fixtures.
+- `world.checkpoint()` and `world.restore()` (Playwright's `storageState`): set up once and start each case from
+  that moment, in this world or a fresh one of the same scene; traces replay through it and codegen writes it.
 
 ### Assertions and locators
 
-- `expect.poll`, `expect(block).to_pass()`, `expect.extend` (custom matchers), `expect.configure`.
+- `expect(obj).to_be_visible(camera=...)` and `to_be_hidden()` (Playwright's `toBeVisible`, `toBeHidden`): whether it
+  shows in a camera's image, in the frame and not behind anything (MuJoCo).
+- `expect.poll`, `expect(block).to_pass()` (both with `intervals=`), `expect.extend` (custom matchers),
+  `expect.configure`.
 - `expect(world).to_match_snapshot` (whole view or one object's window, `mask=`), `to_match_state_snapshot`
   (positions and joints as editable text), `--rw-update-snapshots [all|changed|missing|none]`.
 - Locators by where things are now (`inside=`, `on=`, `touching=`, `near=`, `held=`, `where=`), by what the robot can
@@ -43,6 +48,7 @@ partial.
 
 ### Reports
 
+- Each failure in the HTML report shows what the camera saw at the step it failed, redrawn from its trace.
 - The HTML report keeps its own copies of traces, videos and attachments; tags and annotations
   (`@pytest.mark.annotate`, `rw_annotate`); `--rw-json`; GitHub annotations on the failing line; JUnit properties
   for each test's robot, engine, seed, project and trace.

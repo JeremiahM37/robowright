@@ -718,7 +718,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | HTML reporter, `show-report` | `pytest --rw-report report.html`: every test, each failure with its trace as text and in the viewer; `robowright show-report` opens it (`--port 0` serves it, for a report on CI or another machine) |
 | `toHaveScreenshot` | `expect(world).to_match_snapshot("tidy.png")`: a camera's view against an image kept beside the test, per engine and robot; `--rw-update-snapshots` writes again the ones that changed (`=all`, `=missing`, `=none` as Playwright's) |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: object positions, joints and a mobile robot's base, against text kept beside the test, each within a tolerance; delete a line to stop checking it |
-| `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time |
+| `expect.poll`, `toPass` | `expect.poll(lambda: node.state).to_equal("DONE")` waits on a value of yours, and `expect(block).to_pass()` retries a block of expectations, both in simulated time; `intervals=[0.1, 0.5]` spaces out a costly check |
 | `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`: `fn(subject, ...)` returns `(passed, detail)`; the matcher then retries every control step, takes `timeout`/`hold`, `.not_`, `.always`, `expect.soft`, `expect.poll` and `condition()`, and shows in the trace and the debugger |
 | `test.step` | `with rw.step("put the cube in the bin"):` names a part of a test: the trace and the viewer show what ran inside it, nested, and an error raised in it says `in step 'put the cube in the bin > check it landed'` |
 | `webServer`, browser contexts | `[ros2] stack = "ros2 launch ..."`: the ROS 2 / Gazebo stack started once per worker and put back before each test in about half a second (`rw.ros2_stack` in Python) |
@@ -727,6 +727,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | `page.route` | `ros2.run(cmd, route={"/scan": rw.route.cut(at=5.0, duration=2.0)})`: what your stack receives or sends on a topic dropped, delayed, cut, throttled or edited on the way, in sim time |
 | trace network log, console | a trace of a ROS 2 run keeps every topic's publishers, readers, message counts over time and last message (the viewer's Topics tab), and every node's log lines at their simulated time (its Log tab) |
 | `recordHar`, `routeFromHAR` | `rw.route.record("scan_bag")` writes a topic to a rosbag as it passes; `rw.route.from_bag("scan_bag")` plays it to your stack instead of the live topic, at its recorded pace (a bag from `ros2 bag record` on the real robot too) |
+| `storageState` | `ready = world.checkpoint("cube in hand")` once, `world.restore(ready)` before each case: the simulation, the robot's targets and what it holds, in this world or a fresh one of the same scene; a trace replays through a restore, and codegen writes both (engines that save state: MuJoCo, Drake, Genesis) |
 | `testInfo.attach` | the `rw_attach` fixture: `rw_attach("stack.log", path=log)`, `rw_attach("notes.txt", text)`, `rw_attach.camera(world)`; images show in the HTML report, other files are linked |
 | test timeout | `pytest --rw-timeout 120` (or `@pytest.mark.rw_timeout(300)` on one test): a test that runs longer fails, fixtures included (a ROS stack that never comes up), saying what was running when time ran out and where its other threads were, and keeps its trace; a test stuck inside a C call (where Python cannot see the limit pass) ends the run a minute later, every thread's stack left in `hung-<test>.txt` |
 | `--shard 2/4` | `pytest --rw-shard 2/4`: the second of four parts of the suite, for a CI matrix; every test is in exactly one part, the same one on every machine |
@@ -740,6 +741,7 @@ what is partial or missing, are in [Coming from Playwright](docs/playwright.md))
 | `--repeat-each`, `--fail-on-flaky-tests` | `pytest --rw-repeat-each 10`, `pytest --rw-fail-on-flaky` |
 | `github` reporter | on a GitHub Actions runner, each failed test is an error annotation at the line of your test that failed (the trace's `show-trace` command in it), each flaky one a warning, on the pull request's diff; `--rw-github off` to stop it, `on` to see them anywhere |
 | `--only-changed` | `pytest --rw-only-changed` (or `=main`): only the test files your uncommitted changes (or changes since `main`) can affect: changed tests, and tests importing a changed module, followed through the project's imports; a changed `conftest.py`, plugin, setting or robot model file runs everything |
+| `screenshot: 'only-on-failure'` | each failure in the HTML report shows what the first camera saw at the step it failed, redrawn from its trace when the report is written, so it costs the run nothing |
 | `video: 'on' / 'retain-on-failure'` | `pytest --rw-video retain-on-failure` (or `on`): each failed test's run as an MP4 beside its trace, drawn from the trace after the test, and played in the HTML report (needs `robowright[video]`) |
 | `--debug`, `page.pause()`, Inspector | `pytest --rw-debug`: each test held before its first action in the live view, with what runs next and its line; Step, Resume, Pause. `world.pause()` stops a test there (not on CI) |
 | `DEBUG=pw:api` | `pytest --rw-log`: each step, action and expectation printed as it runs, with simulated and wall time and its line |
@@ -1145,7 +1147,8 @@ wall time, and a condition that is already true costs nothing.
 
 Matchers: `to_be_near`, `to_be_inside`, `to_be_above`, `to_have_position`, `to_be_at_rest`,
 `to_be_upright`, `to_be_touching`, `to_be_holding`, `to_be_open`, `to_be_closed`,
-`to_have_joint`, `to_have_no_collisions`, `to_satisfy(fn)`.
+`to_have_joint`, `to_have_no_collisions`, `to_satisfy(fn)`; and on what a camera sees,
+`to_be_visible(camera="front")` (in the frame and not behind anything) and `to_be_hidden()` (MuJoCo).
 
 Your own values wait the same way. `expect.poll` reads a function every control step, and
 `expect(block).to_pass()` tries a block of expectations every step until all of them hold at once:

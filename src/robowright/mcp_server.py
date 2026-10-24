@@ -378,7 +378,8 @@ def build_server(session: Session | None = None):
         to_be_inside {container}, to_be_holding {obj}, to_be_near {target, tol},
         to_be_above {target, by}, to_be_at_rest {}, to_be_upright {tol_deg},
         to_be_touching {other}, to_be_open {}, to_be_closed {}, to_have_joint {joint, value, tol},
-        to_have_no_collisions {}. Object names in args are resolved.
+        to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}. Object names in args
+        are resolved.
         """
         return await run(s.expect, subject, matcher, args, negate, timeout)
 

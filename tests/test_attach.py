@@ -424,3 +424,17 @@ def test_an_engine_without_render_or_state_says_so_in_one_line():
         eng.render("cam", 64, 48)
     with pytest.raises(CapabilityError, match="saving and restoring state is not available for the fake engine"):
         eng.get_state()
+
+
+def test_visibility_on_their_own_camera(toy):
+    env, w = toy()
+    env.reset()
+    expect(w.body("box")).to_be_visible(camera="cam")
+    with pytest.raises(CapabilityError, match="no camera 'front' in this simulation; its cameras: cam"):
+        expect(w.body("box")).to_be_visible()
+
+
+def test_a_checkpoint_is_refused_with_the_reason(toy):
+    env, w = toy()
+    with pytest.raises(CapabilityError, match="keeps state of its own"):
+        w.checkpoint()

@@ -18,7 +18,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | web-first assertions (auto-retry) | `expect(cube).to_be_inside(bin)` re-checks every control step, in simulated time | same |
 | locators, `filter({has})` | `scene["cube"]`, `scene.get(color="red")`, `scene.nearest(to=robot.tcp)`, and by where things are now: `scene.get(inside="bin")`, `on="tray"`, `touching="floor"`, `near=(p, r)`, `held=True`, `where=fn`; by what the robot can do with it, as `getByRole` finds by role: `graspable=True`; `scene.count(...)`; lazy as Playwright's: `scene.filter(...)` with `.count()`, `.first`, `.nth(i)`, `expect(...).to_have_count(n)`; `containing="cube"` (`has`), `.or_(...)` and `.and_(...)` | robot |
 | `expect.soft` | `expect.soft(cube)...`: recorded, the test carries on and fails at the end | same |
-| `expect.poll`, `toPass` | `expect.poll(fn).to_equal(...)`, `expect(block).to_pass()` | same |
+| `expect.poll`, `toPass`, `intervals` | `expect.poll(fn).to_equal(...)`, `expect(block).to_pass()`, `intervals=[0.1, 0.5]` (simulated seconds, the last repeating) | same |
 | `expect.extend` (custom matchers) | `expect.extend(to_be_level=fn)`, retried, with `.not_`, `.always`, soft, poll | same |
 | `.not` | `.not_` | same |
 | `expect.configure` | `expect.configure(timeout=10, soft=True)` | same |
@@ -56,6 +56,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | test timeout | `--rw-timeout 120`, `@pytest.mark.rw_timeout(300)`; a hung test says where it hung | same |
 | fixture timeout | `--rw-setup-timeout 600`, `rw_timeout(300, setup=600)` or `use(setup_timeout=600)`: fixtures (a stack coming up) on a budget of their own, the test's limit starting with its body | same |
 | `globalSetup` | session fixtures in `conftest.py`; the `[ros2]` stack | same (pytest's) |
+| `storageState` (set up once, start every test from there) | `ready = world.checkpoint("cube in hand")`, then `world.restore(ready)` in this world or a fresh one of the same scene; traces replay through it and codegen writes it (MuJoCo, Drake, Genesis) | robot |
 | `npm init playwright` | `robowright init`: a test, settings, a CI workflow, the MCP server | same |
 | clock control | everything runs in simulated time; nothing waits on the wall clock | robot |
 
@@ -90,6 +91,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | line, dot, list reporters | pytest's `-q`, `-v` | same (pytest's) |
 | custom reporters | pytest plugins and hooks | same (pytest's) |
 | `video` | `--rw-video retain-on-failure`, played in the HTML report | same |
+| `screenshot: 'only-on-failure'` | every failure in the HTML report shows what the camera saw at the step it failed, redrawn from its trace (no cost to the run) | same |
 | screenshots | `rw_attach.camera(world)`, `robowright render` | same |
 
 ## Assertions on what is seen
@@ -97,6 +99,7 @@ Test features that apply to robots, counting partial ones as half; its gaps are 
 | Playwright | robowright | Status |
 |---|---|---|
 | `toHaveScreenshot`, element screenshots | `expect(world).to_match_snapshot("tidy.png")` (the whole view) or `expect(cube).to_match_snapshot("cube.png")` (the window around one object, following it), per engine and robot, with a diff | same |
+| `toBeVisible`, `toBeHidden` | `expect(cube).to_be_visible(camera="front")`: enough of it shows in that camera's image, in the frame and not behind anything (the arm reaching in front of it); `to_be_hidden()` (MuJoCo) | robot |
 | `toMatchAriaSnapshot` | `expect(world).to_match_state_snapshot("tidy")`: positions and joints as editable text | robot |
 | `snapshotPathTemplate` | `[snapshots] path = "baselines/{robot}/{engine}/{test_file_path}/{name}{ext}"` in robowright.toml | same |
 | `--update-snapshots`, `=all/changed/missing/none` | `--rw-update-snapshots` (changed), `=all`, `=missing` (without the flag), `=none`; a state snapshot keeps the lines you deleted | same |

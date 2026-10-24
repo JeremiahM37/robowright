@@ -16,6 +16,22 @@ from ..robots.model import add_ground_friction, joint_followers, reset_data
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 
+
+def visible_pixels(model, data, renderers: dict, body: int, camera, width: int, height: int) -> int:
+    """How many pixels of ``camera``'s image show ``body`` or a body fixed to it (its subtree in the same free
+    root), from a segmentation render: what is in front of it hides it. ``renderers`` caches the renderer."""
+    key = ("segmentation", width, height)
+    r = renderers.get(key)
+    if r is None:
+        r = renderers[key] = renderer(model, height, width)
+        r.enable_segmentation_rendering()
+    r.update_scene(data, camera=camera)
+    ids, types = np.moveaxis(r.render(), -1, 0)  # per pixel: what it shows, and what kind of thing that is
+    geoms = types == mujoco.mjtObj.mjOBJ_GEOM
+    root = model.body_rootid[body]
+    return int(np.count_nonzero(model.body_rootid[model.geom_bodyid[ids[geoms]]] == root))
+
+
 _Renderer = None
 
 
@@ -533,6 +549,9 @@ class MujocoBackend(Backend):
             r = self._renderers[(width, height)] = renderer(self.model, height, width)
         r.update_scene(self.data, camera=camera)
         return r.render()
+
+    def visible_pixels(self, name, camera, width, height):
+        return visible_pixels(self.model, self.data, self._renderers, self._body[name], camera, width, height)
 
     def get_state(self):
         spec = mujoco.mjtState.mjSTATE_INTEGRATION

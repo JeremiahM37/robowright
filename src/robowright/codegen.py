@@ -35,6 +35,12 @@ def _subject(name: str) -> str:
     return named.get(name, f"scene[{name!r}]")
 
 
+def _checkpoint_var(name: str) -> str:
+    """A Python name for a checkpoint in generated code: ``world.checkpoint("cube in hand")`` -> ``cp_cube_in_hand``
+    (prefixed, so no name can be ``world``, ``robot`` or a keyword)."""
+    return "cp_" + (re.sub(r"\W+", "_", name).strip("_").lower() or "checkpoint")
+
+
 def _value(v) -> str:
     if isinstance(v, dict):
         if "$ref" in v:
@@ -171,6 +177,10 @@ def generate(
                 body.append(f"robot.reset_to({_value(q[:-1])}, gripper={_value(q[-1])})")
         elif t == "wait":
             body.append(f"world.wait({_value(a['seconds'])})")
+        elif t == "edit" and e["name"] == "checkpoint":
+            body.append(f"{_checkpoint_var(a['name'])} = world.checkpoint({a['name']!r})")
+        elif t == "edit" and e["name"] == "restore":
+            body.append(f"world.restore({_checkpoint_var(a['name'])})")
         elif t == "edit" and e["name"] == "move_object":
             body.append(f"world.move_object({a['object']!r}, {_value(a['pos'])}, {_value(a['quat'])})")
         elif t == "edit" and e["name"] in ("ros_publish", "ros_call", "ros_send_goal") and "fields" in a:
