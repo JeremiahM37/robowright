@@ -119,8 +119,10 @@ def build_server(session: Session | None = None):
         fidelity: str | None = None,
         ros2: dict | None = None,
         robot_options: dict | None = None,
+        keep_open: bool = False,
     ) -> str:
-        """Start a fresh world, closing any open one, and return its snapshot.
+        """Start a fresh world, closing any open one (keep_open: true keeps it open beside the new one, as a tab;
+        see robot_worlds and robot_switch), and return its snapshot.
 
         robot: a name from robot_list_robots, or a model file (default: the SO-101). backend:
         mujoco (default, fastest), pybullet, drake, genesis or isaac, whichever are installed; or
@@ -141,8 +143,28 @@ def build_server(session: Session | None = None):
         objects names some, and the robot is not moved to a start pose.
         """
         return await run(
-            s.launch, robot=robot, backend=backend, seed=seed, objects=objects, fidelity=fidelity, ros2=ros2, robot_options=robot_options
+            s.launch,
+            robot=robot,
+            backend=backend,
+            seed=seed,
+            objects=objects,
+            fidelity=fidelity,
+            ros2=ros2,
+            robot_options=robot_options,
+            keep_open=keep_open,
         )
+
+    @tool
+    async def robot_worlds() -> str:
+        """The worlds open in this session: the current one (marked *) and those kept open beside it with
+        robot_launch keep_open=true. Every other tool acts on the current one."""
+        return await run(s.worlds)
+
+    @tool
+    async def robot_switch(name: str) -> str:
+        """Make the world name (from robot_worlds) the current one, keeping the one before it open, and return its
+        snapshot: compare two engines, robots or seeds side by side."""
+        return await run(s.switch, name)
 
     @tool
     async def ros2_inspect(namespace: str = "", timeout: float = 5.0) -> str:
@@ -473,7 +495,7 @@ def build_server(session: Session | None = None):
 
     @tool
     async def robot_close() -> str:
-        """Close the world and keep its trace."""
+        """Close the current world and keep its trace (worlds kept open beside it stay open: robot_worlds)."""
         return await run(s.close)
 
     return server

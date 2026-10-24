@@ -1505,7 +1505,8 @@ robot the same way, with your code driving it: it runs your policy (`robot_run_p
 stack (`robot_start_process "ros2 launch my_robot pick.launch.py"`, read as it runs with
 `robot_process_output`), lets time pass or waits for a condition (`robot_wait_until`), and checks
 what happened (`robot_expect`). It lists what there is: engines (`robot_list_backends`), robots, and the
-ROS 2 graph's topics, services and actions (`ros2_list`). It can send raw joint targets and step time
+ROS 2 graph's topics, services and actions (`ros2_list`). As a browser keeps tabs, it keeps worlds open
+side by side (`robot_launch keep_open=true`, `robot_worlds`, `robot_switch`) to compare engines, robots or seeds. It can send raw joint targets and step time
 (`robot_set_targets`, `robot_step`), connect to Gazebo or a real arm (`robot_launch
 backend="ros2"`), and give you a URL to watch it live (`robot_watch`). With a robot in Gazebo
 (`ros2={"gazebo": true}`) it drives the simulator itself: `sim_pause`, `sim_play`, `sim_step`

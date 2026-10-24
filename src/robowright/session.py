@@ -253,6 +253,7 @@ class Session:
         self.last_trace: Path | None = None
         self.env = None  # the environment someone else built, once sim_attach() has attached to it
         self.env_label = ""
+        self.parked: dict[str, World] = {}  # worlds kept open beside the current one (launch keep_open=True)
 
     # --- lifecycle -------------------------------------------------------------
     def launch(
@@ -264,8 +265,10 @@ class Session:
         fidelity: str | None = None,
         ros2: dict | None = None,
         robot_options: dict | None = None,
+        keep_open: bool = False,
     ) -> str:
-        """Start a fresh world (closing any open one) and return its snapshot.
+        """Start a fresh world (closing any open one, or with ``keep_open`` keeping it beside the new one, as a
+        browser keeps a tab: see :meth:`worlds` and :meth:`switch`) and return its snapshot.
 
         ``backend="ros2"`` connects to a robot behind ROS 2 instead (a real arm, Gazebo, Isaac
         Sim's bridge), with ``ros2`` its settings (topics, controllers, TF frames, ``gazebo``: see
@@ -274,7 +277,10 @@ class Session:
         ``robot_options``: for a robot given as a model
         file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``)."""
         if self.world is not None:
-            self.close()
+            if keep_open:
+                self._park()
+            else:
+                self.close()
         if backend != "ros2":
             robot = robot or "so101"
         if backend == "ros2":
@@ -337,6 +343,40 @@ class Session:
         self.last_trace = w.close(failed=w.status == "failed")
         _close_env(env)
         return f"closed; trace saved to {self.last_trace}"
+
+    def _park(self) -> None:
+        if self.env is not None or self.bridge is not None or self.process is not None:
+            raise RobowrightError(
+                "keep_open keeps a world robowright built and nothing else is attached to: this one has "
+                + ("an attached environment" if self.env is not None else "a ROS 2 bridge or a running process")
+                + ", which the next world would take over; close it first"
+            )
+        self.parked[self.world.name] = self.world
+        self.world = None
+
+    def worlds(self) -> str:
+        """The open worlds: the current one (marked) and those kept beside it."""
+        rows = [(self.world, True)] if self.world is not None else []
+        rows += [(w, False) for w in self.parked.values()]
+        if not rows:
+            return "no world is open: call launch first"
+        return "\n".join(
+            f"{'* ' if current else '  '}{w.name}: {w.spec.robot or 'robot'} on {w.backend.name}, t={w.time:.2f}s, {w.status}"
+            for w, current in rows
+        )
+
+    def switch(self, name: str) -> str:
+        """Make the world ``name`` the current one (the one before it stays open) and return its snapshot."""
+        if self.world is not None and self.world.name == name:
+            return self.snapshot()
+        if name not in self.parked:
+            raise RobowrightError(f"no world named {name!r}; open ones:\n{self.worlds()}")
+        if self.world is not None:
+            self._park()
+        self.world = self.parked.pop(name)
+        if self.view is not None:
+            self.view.watch(self.world)
+        return self.snapshot()
 
     def _w(self) -> World:
         if self.world is None:

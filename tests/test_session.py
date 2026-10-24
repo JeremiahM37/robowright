@@ -7,6 +7,7 @@ import pytest
 
 import robowright as rw
 from robowright.backends.base import RENDER
+from robowright.errors import RobowrightError
 from robowright.session import Session
 
 
@@ -278,7 +279,7 @@ def test_mcp_lists_the_code_under_test_tools():
     if not names:
         pytest.skip("this mcp version keeps its tools elsewhere")
     assert {"robot_run_policy", "robot_set_targets", "robot_step", "robot_serve_ros2", "robot_start_process", "robot_watch"} <= names
-    assert {"robot_process_output", "robot_wait_until", "robot_list_backends", "ros2_list"} <= names
+    assert {"robot_process_output", "robot_wait_until", "robot_list_backends", "ros2_list", "robot_worlds", "robot_switch"} <= names
     assert "code under test is the user's" in INSTRUCTIONS
 
 
@@ -396,3 +397,31 @@ def test_an_action_says_what_touched_what_on_the_way(session):
     out = session.place("bin")
     assert "cube stopped touching robot:left_finger at" in out and "cube began touching bin at" in out
     assert "during this call" not in session.wait(0.2)  # nothing changed: nothing said
+
+
+def test_worlds_kept_open_side_by_side_as_tabs(session, tmp_path):
+    pytest.importorskip("pybullet")
+    session.launch("so101")
+    first = session.world.name
+    session.pick("cube")
+    session.launch("so101", backend="pybullet", keep_open=True)
+    second = session.world.name
+    listing = session.worlds()
+    assert f"* {second}: so101 on pybullet" in listing and f"  {first}: so101 on mujoco" in listing
+    assert "holding nothing" in session.snapshot()  # a fresh world: the pick was in the other
+    snap = session.switch(first)
+    assert "on mujoco" in snap and "holding cube" in snap  # the first world as it was left
+    assert session.worlds().startswith(f"* {first}")
+    session.close()  # the current one; the other stays open
+    assert session.worlds() == f"  {second}: so101 on pybullet, t=0.00s, running"
+    session.switch(second)
+
+
+def test_a_world_with_a_process_is_not_kept_open(session, tmp_path):
+    import sys
+
+    session.launch("so101")
+    session.start_process(f'{sys.executable} -c "import time; time.sleep(30)"')
+    with pytest.raises(RobowrightError, match="a ROS 2 bridge or a running process"):
+        session.launch("so101", keep_open=True)
+    session.stop_process()
