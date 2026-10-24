@@ -279,7 +279,8 @@ def test_mcp_lists_the_code_under_test_tools():
     if not names:
         pytest.skip("this mcp version keeps its tools elsewhere")
     assert {"robot_run_policy", "robot_set_targets", "robot_step", "robot_serve_ros2", "robot_start_process", "robot_watch"} <= names
-    assert {"robot_process_output", "robot_wait_until", "robot_list_backends", "ros2_list", "robot_worlds", "robot_switch"} <= names
+    assert {"robot_process_output", "robot_wait_until", "robot_list_backends", "robot_worlds", "robot_switch"} <= names
+    assert {"ros2_list", "ros2_traffic", "ros2_logs"} <= names
     assert "code under test is the user's" in INSTRUCTIONS
 
 

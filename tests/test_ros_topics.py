@@ -102,3 +102,41 @@ def test_a_log_line_keeps_its_own_stamp():
     assert log_time(0.0, now=0.4) == 0.0
     assert log_time(1_792_502_428.6, now=12.5) == 12.5  # wall clock
     assert log_time(14.0, now=12.5) == 12.5  # ahead of the simulation by more than a second
+
+
+@ros
+def test_an_agent_reads_the_traffic_and_the_logs_while_the_world_runs(tmp_path):
+    """The MCP tools ros2_traffic and ros2_logs, through the session they call: the network log and the console,
+    read while the stack runs."""
+    from robowright.session import Session
+
+    s = Session(trace_dir=tmp_path)
+    try:
+        s.launch(robot="so101")
+        s.serve_ros2()
+        s.start_process(f"{sys.executable} {NODE} talk {tmp_path / 'seen.json'}")
+        s.wait(4.0)
+        traffic = s.ros_traffic()
+        assert traffic.startswith("ros 2 topics:") and "/joint_states [sensor_msgs/msg/JointState]" in traffic, traffic
+        warnings = s.ros_logs("WARN", node="route_node")
+        assert "WARN  [route_node]" in warnings and "timed out" in warnings and "ERROR [route_node] failed to configure" in warnings
+        assert "tick " not in warnings  # INFO lines are below WARN
+        newest = s.ros_logs(node="route_node", lines=1)
+        assert ", the last 1:" in newest and len(newest.splitlines()) == 2  # the head, and one line
+        assert s.ros_logs("ERROR", node="no_such_node").startswith("no log lines at ERROR or above")
+    finally:
+        s.stop_process()
+        s.close()
+
+
+def test_traffic_without_a_ros_graph_says_how_to_get_one(tmp_path):
+    from robowright.errors import RobowrightError
+    from robowright.session import Session
+
+    s = Session(trace_dir=tmp_path)
+    try:
+        s.launch(robot="so101")
+        with pytest.raises(RobowrightError, match="no ROS 2 graph is being watched"):
+            s.ros_traffic()
+    finally:
+        s.close()

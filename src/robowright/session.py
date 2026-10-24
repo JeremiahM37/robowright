@@ -744,6 +744,41 @@ class Session:
         what = f"{kind} matching {filter!r}" if filter else kind
         return f"{len(lines)} {what}:\n" + "\n".join(lines) if lines else f"no {what} in the ROS graph"
 
+    def _ros_seen(self) -> dict:
+        tr = self._w().trace
+        source = getattr(tr, "ros_source", None)
+        if source is None:
+            raise RobowrightError("no ROS 2 graph is being watched: launch with backend='ros2', or serve the world with serve_ros2 first")
+        return source()
+
+    def ros_traffic(self, limit: int = 20) -> str:
+        """What went over the ROS 2 graph so far (Playwright MCP's network requests): each topic's type, publishers
+        and subscribers, how many messages and at what rate, busiest first; and topics subscribed to that nobody
+        published on."""
+        from .ros2_topics import summary_lines
+
+        lines = summary_lines(self._ros_seen().get("ros_topics", []), limit=limit)
+        return "\n".join(lines) if lines else "no topic traffic seen yet"
+
+    def ros_logs(self, level: str = "INFO", node: str = "", lines: int = 30) -> str:
+        """The nodes' log lines so far (/rosout, the console's counterpart), at ``level`` or above, from nodes whose name
+        contains ``node``: the newest ``lines`` of them, each at the simulated time it was logged."""
+        from .ros2_topics import LEVELS
+
+        order = list(LEVELS.values())
+        if level.upper() not in order:
+            raise RobowrightError(f"level is one of {', '.join(order)}, not {level!r}")
+        floor = order.index(level.upper())
+        seen = self._ros_seen()
+        log = [e for e in seen.get("ros_log", []) if e["level"] in order and order.index(e["level"]) >= floor and node in e["node"]]
+        if not log:
+            return f"no log lines at {level.upper()} or above" + (f" from nodes matching {node!r}" if node else "")
+        shown = log[-lines:]
+        head = f"{len(log)} lines at {level.upper()} or above" + (f", the last {len(shown)}" if len(shown) < len(log) else "")
+        dropped = seen.get("ros_log_dropped")
+        body = "\n".join(f"{e['t']:8.3f}s {e['level']:5s} [{e['node']}] {e['msg']}" for e in shown)
+        return f"{head}{f' ({dropped} more were not kept)' if dropped else ''}:\n{body}"
+
     def ros_call(self, service: str, request: dict | None = None, timeout: float = 10.0) -> str:
         return f"{service} answered:\n{_yaml(self._w().ros.call(service, request, timeout=timeout))}"
 

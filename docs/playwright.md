@@ -3,8 +3,9 @@
 Playwright Test's features, by the sections of its own documentation, and what robowright has in its place. A
 robot is not a web page, so some features become something else (a browser becomes a physics engine, the network
 becomes ROS 2 topics) and a few have no counterpart. The gaps are listed as plainly as the matches. An independent
-audit against playwright.dev (by an agent that did not see this page) put robowright at about 70 % of the Playwright
-Test features that apply to robots, counting partial ones as half; its gaps are the partial and missing rows below.
+audit (by an agent that did not see this page, on 2026-10-23, after the ones before it had found gaps that were then
+filled) put robowright at about 92 % of the Playwright Test and Playwright MCP features that apply to robots: 64.5 of
+70, counting partial ones as half. Its gaps are the partial and missing rows below.
 
 **Status**: **same** works the way Playwright's does; **robot** is the robot counterpart of a web feature;
 **partial** covers part of it; **missing** is not there yet; **n/a** has no meaning for robots.

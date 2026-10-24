@@ -38,6 +38,8 @@ partial.
 
 - MCP: `robot_wait_until` (a condition, not a duration), `robot_process_output` (a running stack's output),
   `ros2_list` (the graph's topics, services and actions), `robot_list_backends`.
+- MCP: `ros2_traffic` (what went over the graph: Playwright MCP's network requests) and `ros2_logs` (the nodes'
+  /rosout lines by level and node: its console).
 - MCP: worlds open side by side, as tabs (`robot_launch keep_open=true`, `robot_worlds`, `robot_switch`).
 - MCP actions say what touched what on the way ("during this call: cube stopped touching floor at 1.36 s"),
   which the state they end in does not show.

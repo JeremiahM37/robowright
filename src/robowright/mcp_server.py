@@ -180,6 +180,19 @@ def build_server(session: Session | None = None):
         return await run(s.ros_list, kind, filter)
 
     @tool
+    async def ros2_traffic(limit: int = 20) -> str:
+        """What has gone over the ROS 2 graph since the world started (the network log): each topic's type, who
+        publishes and subscribes, how many messages at what rate and when; and topics subscribed to that nobody
+        publishes, which is where a stack waiting for something says so."""
+        return await run(s.ros_traffic, limit)
+
+    @tool
+    async def ros2_logs(level: str = "INFO", node: str = "", lines: int = 30) -> str:
+        """The ROS 2 nodes' log lines (/rosout, the console) since the world started: level DEBUG, INFO, WARN, ERROR
+        or FATAL and above; node: part of a node's name; the newest lines of them, at their simulated time."""
+        return await run(s.ros_logs, level, node, lines)
+
+    @tool
     async def ros2_topic(name: str, timeout: float = 2.0) -> str:
         """The newest message on a ROS 2 topic, with its rate and how many have arrived. Works on a
         robot behind ROS 2 (robot_launch backend="ros2") or a world served with robot_serve_ros2."""
