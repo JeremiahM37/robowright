@@ -61,6 +61,9 @@ partial.
 - `import robowright` no longer fails on a machine without EGL.
 - The CI workflow `robowright init` writes installs robowright the way it is installed here.
 - Closing a ROS 2 world never hangs, and nothing a test started outlives a killed run.
+- Genesis 1.4.5 works (it renamed the arrays a saved state carries, and every Genesis world failed to start).
+- On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
+  is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).
 
 ## 0.1.0 (2026-10-15, tagged, not published)

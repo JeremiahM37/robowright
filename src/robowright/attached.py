@@ -48,6 +48,7 @@ from . import _current
 from .backends import base as backends
 from .backends.attached_backend import AttachedBackend, PendingBackend
 from .backends.attached_engine import AttachedEngine
+from .backends.mujoco_backend import renderer
 from .errors import CapabilityError, ExpectationError, InvariantViolation
 from .faults import Faults
 from .locators import Subject
@@ -1183,7 +1184,7 @@ class AttachedRenderer:
     def frame(self, step: int, camera: str | None = None, size=(640, 480)) -> np.ndarray:
         self.pose(step)
         if self._renderer is None or self._renderer_size != tuple(size):
-            self._renderer = mujoco.Renderer(self.model, int(size[1]), int(size[0]))
+            self._renderer = renderer(self.model, int(size[1]), int(size[0]))
             self._renderer_size = tuple(size)
         if camera is None:  # a model with no cameras is drawn from the free camera (id -1)
             camera = self.cameras[0] if self.cameras else -1

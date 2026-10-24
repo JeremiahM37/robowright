@@ -16,6 +16,35 @@ from ..robots.model import add_ground_friction, joint_followers, reset_data
 from ..scene import SceneSpec
 from .base import CONTACTS, DETERMINISTIC, FORCES, GROUND_TRUTH, RENDER, STATE, Backend, Contact, TargetRamp, register
 
+_Renderer = None
+
+
+def renderer(model, height: int, width: int):
+    """A mujoco.Renderer that is freed in its own GL context.
+
+    From MuJoCo 3.17 a renderer frees its MjrContext before its GL context, and so in whatever context is current: a
+    renderer closed, or collected, while another's context was current deleted that one's textures and buffers, and it
+    drew wrong frames from then on. Its own context is made current first; where it is still current on another thread
+    (the live view's), the GL context goes first instead, as before 3.17, which leaves no context current here.
+    (The class is made on first use: without OpenGL, mujoco has no Renderer.)
+    """
+    global _Renderer
+    if _Renderer is None:
+
+        class _Own(mujoco.Renderer):
+            def close(self):
+                gl = getattr(self, "_gl_context", None)
+                if gl is not None and getattr(self, "_mjr_context", None):
+                    try:
+                        gl.make_current()
+                    except Exception:  # noqa: BLE001 - current on another thread
+                        self._gl_context = None
+                        gl.free()
+                super().close()
+
+        _Renderer = _Own
+    return _Renderer(model, height, width)
+
 
 def _lookat_xyaxes(pos, lookat):
     pos, lookat = np.asarray(pos, float), np.asarray(lookat, float)
@@ -501,7 +530,7 @@ class MujocoBackend(Backend):
     def render(self, camera, width, height):
         r = self._renderers.get((width, height))
         if r is None:
-            r = self._renderers[(width, height)] = mujoco.Renderer(self.model, height, width)
+            r = self._renderers[(width, height)] = renderer(self.model, height, width)
         r.update_scene(self.data, camera=camera)
         return r.render()
 

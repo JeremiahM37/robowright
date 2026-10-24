@@ -180,6 +180,15 @@ def _np(t) -> np.ndarray:
     return t.detach().cpu().numpy().astype(float) if hasattr(t, "detach") else np.asarray(t, float)
 
 
+def _array(a) -> np.ndarray:
+    """A Genesis array (quadrants, or a torch tensor) as numpy, its dtype kept."""
+    if hasattr(a, "detach"):
+        return a.detach().cpu().numpy()
+    from genesis.utils.misc import qd_to_numpy
+
+    return qd_to_numpy(a, copy=True)
+
+
 def _rotate(quat, v) -> np.ndarray:
     R = np.empty(9)
     mujoco.mju_quat2Mat(R, np.asarray(quat, float))
@@ -564,13 +573,20 @@ class GenesisBackend(WheeledDrive, Backend):
         """
         from genesis.utils.array_class import DataKind
 
-        return [item for item in self.scene.sim.rigid_solver.data if item.kind == DataKind.WARMSTART]
+        data = self.scene.sim.rigid_solver.data
+        if hasattr(DataKind, "WARMSTART"):  # Genesis 1.4.4 and before
+            return [(item, item.value) for item in data if item.kind == DataKind.WARMSTART]
+        # 1.4.5 counts the warm starts as STATE, beside the positions and velocities set above: carry all of it, as its
+        # own checkpoints do (an unused feature's 0-d placeholder stays as built)
+        return [
+            (item, item.array)
+            for item in data
+            if getattr(item, "kind", None) == DataKind.STATE and hasattr(item, "array") and len(item.array.shape)
+        ]
 
     def get_state(self):
-        from genesis.utils.misc import qd_to_numpy
-
         s = self.scene.sim.rigid_solver
-        ws = [qd_to_numpy(item.value, copy=True).astype(float).ravel() for item in self._warmstart()]
+        ws = [_array(a).astype(float).ravel() for _, a in self._warmstart()]
         # ctrl(), not _ctrl: a wheeled base's command is its wheel speeds, which the restore below would otherwise zero
         state = np.concatenate([[self._t], _np(s.get_qpos()), _np(s.get_dofs_velocity()), self.ctrl(), *ws])
         # A restore recomputes the kinematics from qpos, which can differ in the last bit from what the
@@ -580,7 +596,6 @@ class GenesisBackend(WheeledDrive, Backend):
 
     def set_state(self, state):
         from genesis.utils.array_class import fill_data
-        from genesis.utils.misc import qd_to_numpy
 
         s = self.scene.sim.rigid_solver
         state = np.asarray(state, float)
@@ -596,11 +611,13 @@ class GenesisBackend(WheeledDrive, Backend):
         if i == len(state):
             return  # a state saved before it carried the warm start: restores approximately
         items, values = self._warmstart(), {}
-        for item in items:
-            like = qd_to_numpy(item.value, copy=False)
+        likes = [_array(a) for _, a in items]
+        if len(state) - i != sum(like.size for like in likes):
+            return  # saved by another Genesis, which carries other arrays: restores approximately
+        for (item, _), like in zip(items, likes):
             values[item.name] = state[i : i + like.size].reshape(like.shape).astype(like.dtype)
             i += like.size
-        fill_data(items, values)
+        fill_data([item for item, _ in items], values)
 
     def close(self):
         """Destroy the scene and drop every handle into it.

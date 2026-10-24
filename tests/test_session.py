@@ -5,6 +5,7 @@ import asyncio
 import numpy as np
 import pytest
 
+import robowright as rw
 from robowright.backends.base import RENDER
 from robowright.session import Session
 
@@ -214,6 +215,28 @@ def test_watch_serves_the_session_live(session):
     session.wait(0.1)
     assert json.loads(urllib.request.urlopen(url + "/state").read())["robot"] == "panda"
     session.view.close()
+
+
+def test_worlds_after_a_watched_session_draw_alike(tmp_path):
+    """MuJoCo 3.17 frees a renderer's GL objects in whichever context is current: after the live view's world (drawn
+    on its thread, closed on this one), closing a world broke the next one's drawing, so the same view drew
+    differently from one world to the next and each snapshot test in the rest of the process failed."""
+    import urllib.request
+
+    session = Session(trace_dir=tmp_path)
+    session.launch("so101")
+    url = session.watch(port=0).split()[-1]
+    urllib.request.urlopen(url + "/state").read()
+    session.launch("panda")
+    session.wait(0.1)
+    session.view.close()
+    session.close()
+    images = []
+    for _ in range(2):
+        w = rw.launch(backend="mujoco")
+        images.append(w.backend.render("front", 320, 240).copy())
+        w.close()
+    assert np.array_equal(*images)
 
 
 def test_mcp_lists_the_code_under_test_tools():

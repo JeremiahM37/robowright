@@ -18,6 +18,7 @@ import numpy as np
 from ..errors import CapabilityError
 from .attached_engine import AttachedEngine
 from .base import CONTACTS, FORCES, GROUND_TRUTH, RENDER, STATE, Contact
+from .mujoco_backend import renderer
 
 _FREE = mujoco.mjtJoint.mjJNT_FREE
 _HINGE = mujoco.mjtJoint.mjJNT_HINGE
@@ -244,7 +245,7 @@ class AttachedBackend(AttachedEngine):
         width, height = max(1, int(width * fit)), max(1, int(height * fit))
         r = self._renderers.get((width, height))
         if r is None:
-            r = self._renderers[(width, height)] = mujoco.Renderer(self.model, height, width)
+            r = self._renderers[(width, height)] = renderer(self.model, height, width)
         try:
             r.update_scene(self.data, camera=camera)
         except Exception as e:
