@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, with nothing pushed: the engines are not pinned, so this runs against their newest releases and a release
+  # that breaks robowright (as mujoco 3.17 and Genesis 1.4.5 did, on 2026-10-22) fails here before a user meets it.
+  # GitHub mails the repository's owner when a scheduled run fails.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 env:
   MUJOCO_GL: egl
@@ -27,6 +33,8 @@ jobs:
       - name: Lint
         run: ruff check . && ruff format --check .
       - run: robowright info
+      - name: Engine versions (which release a failure came with)
+        run: pip list 2>/dev/null | grep -iE "^(mujoco|pybullet|genesis-world|drake|torch|numpy) " || true
       - name: Tests (MuJoCo + PyBullet, SO-101)
         run: pytest tests examples -n auto --rw-backend mujoco,pybullet --rw-robot so101
       - name: Upload traces of failed tests
@@ -133,6 +141,8 @@ jobs:
       - if: matrix.backend == 'genesis'
         # CPU torch: Genesis runs on its CPU backend by default.
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install -e ".[genesis]"
+      - name: Engine versions (which release a failure came with)
+        run: pip list 2>/dev/null | grep -iE "^(mujoco|pybullet|genesis-world|drake|torch|numpy) " || true
       - name: Robot models (MuJoCo Menagerie, sparse checkout) and exported URDFs
         uses: actions/cache@v4
         with:
