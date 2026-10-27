@@ -6,6 +6,13 @@ The first release on PyPI (0.1.0 was tagged but never published). 121 changes si
 of Playwright Test that a robot test needs; [Coming from Playwright](docs/playwright.md) lists each, with what is
 partial.
 
+### JavaScript and TypeScript
+
+- `clients/js`: drive robowright from Node. It starts `robowright mcp` and makes every tool a typed method
+  (`rw.robot.pick`, `rw.ros2.inspect`, ...), with `expect(subject).toBeInside("bin")` and `.not`, throwing on a
+  failure as Playwright does. No dependencies; the tool table and types are generated from the server's tool
+  list, and a test fails when they fall behind.
+
 ### Running tests
 
 - `--rw-retries`, `@pytest.mark.rw_retries(n)` and the flaky outcome; `--rw-fail-on-flaky`; `--rw-repeat-each N`.
