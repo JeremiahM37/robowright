@@ -87,6 +87,9 @@ partial.
 - The CI workflow `robowright init` writes installs robowright the way it is installed here.
 - Closing a ROS 2 world never hangs, and nothing a test started outlives a killed run.
 - Genesis 1.4.5 works (it renamed the arrays a saved state carries, and every Genesis world failed to start).
+- On pytest 9.2, `--dist loadgroup` keeps a robot's tests on one worker again. pytest-xdist 3.8 adds the group to a
+  test's id in a field pytest 9.2 no longer reads, so every group was silently spread over all workers (and serial
+  modules ran in parallel); robowright now writes it where pytest reads it.
 - On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
   is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).

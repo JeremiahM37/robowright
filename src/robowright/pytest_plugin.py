@@ -406,6 +406,8 @@ def _project_value(item, key: str, default=None):
 
 def pytest_configure(config):
     _apply_project(config)
+    if hasattr(config, "workerinput") and getattr(config.option, "loadgroup", False):
+        config.pluginmanager.register(_LoadGroupIds(), "robowright-loadgroup-ids")
     if config.getoption("--rw-robot", "so101") != "so101":
         # Named here, not when a test first asks for the robot: a test that builds its own world never
         # does, and a misspelt name then ran nothing on the robot meant and passed.
@@ -763,6 +765,27 @@ def pytest_collection_modifyitems(config, items):
             ),
             stacklevel=1,
         )
+
+
+class _LoadGroupIds:
+    """Append ``@group`` to each grouped test's node id, as pytest-xdist does for ``--dist loadgroup``, where it did not.
+
+    xdist 3.8 writes ``item._nodeid``; pytest 9.2 reads node ids from ``item._id`` instead, so the write is lost and
+    loadgroup silently spreads one robot's tests over every worker (found 2026-10-29, when CI picked up pytest 9.2.0).
+    This writes the same string to the field pytest reads; on a pytest or xdist that already did it, it does nothing.
+    Registered on xdist workers run with ``--dist loadgroup`` only.
+    """
+
+    @pytest.hookimpl(trylast=True)  # after xdist's own attempt
+    def pytest_collection_modifyitems(self, items):
+        try:
+            from _pytest.nodeid import NodeId
+        except ImportError:  # pytest before 9.2: xdist's own write works
+            return
+        for item in items:
+            names = {str(m.args[0] if m.args else m.kwargs.get("name", "default")) for m in item.iter_markers("xdist_group")}
+            if names and "@" not in item.nodeid and hasattr(item, "_id"):
+                item._id = NodeId.parse(f"{item.nodeid}@{'_'.join(sorted(names))}")
 
 
 @pytest.fixture
