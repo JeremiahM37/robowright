@@ -47,3 +47,64 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@v1.12.4
+
+  # The clients and the editor extension, each published only once its registry is set up and switched on with a
+  # repository variable (Settings > Secrets and variables > Actions > Variables), so a tag never publishes anywhere
+  # half-configured. Each takes its version from the tag. CONTRIBUTING.md lists what each registry needs.
+  npm:
+    needs: build
+    if: vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/robowright
+    permissions:
+      id-token: write  # npm trusted publishing: no token stored
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - working-directory: clients/js
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}" && npm publish --provenance --access public
+
+  nuget:
+    needs: build
+    if: vars.PUBLISH_NUGET == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: nuget
+      url: https://www.nuget.org/packages/Robowright
+    permissions:
+      id-token: write  # NuGet trusted publishing: a short-lived key, nothing stored
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - run: dotnet pack clients/dotnet/Robowright -c Release -p:Version="${GITHUB_REF_NAME#v}" -o out
+      - uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - run: dotnet nuget push out/*.nupkg --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json
+
+  vscode:
+    needs: build
+    if: vars.PUBLISH_VSCODE == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: vscode-marketplace
+      url: https://marketplace.visualstudio.com/items?itemName=jeremiahm37.robowright
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - working-directory: editors/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npm ci && npm version --no-git-tag-version "${GITHUB_REF_NAME#v}" && npx --yes @vscode/vsce@3.2.1 publish

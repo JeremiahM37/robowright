@@ -58,3 +58,20 @@ are README.md, cut at its `## ` headings (`docs/hooks/readme_pages.py` says whic
 each page takes), so a guide is edited in the README; the reference pages are the
 docstrings, and the command-line page is the commands' own `--help`. CI builds it with
 `--strict`, so a broken link or anchor fails.
+
+**Releasing:** set the version in `pyproject.toml`, add it to CHANGELOG.md, push, and when CI
+is green on that commit, tag it (`git tag v0.2.0 && git push origin v0.2.0`). The Release
+workflow builds the wheel, installs it into a fresh environment, runs `robowright init`'s
+test with it, and publishes to PyPI. The clients and the editor extension go out from the
+same tag, each with the tag's version, but only once its registry is set up and switched on
+with a repository variable, so a tag never publishes anywhere half-configured:
+
+| Registry | Set up once | Switch on |
+|---|---|---|
+| PyPI | a trusted publisher on pypi.org for this repository, workflow `release.yml`, environment `pypi` | always on |
+| npm (`clients/js`) | a trusted publisher on npmjs.com for package `robowright`, workflow `release.yml`, environment `npm` | variable `PUBLISH_NPM` = `true` |
+| NuGet (`clients/dotnet`) | a trusted publishing policy on nuget.org for this repository, workflow `release.yml`, environment `nuget`; variable `NUGET_USER` = the nuget.org account name | variable `PUBLISH_NUGET` = `true` |
+| VS Code Marketplace (`editors/vscode`) | the `jeremiahm37` publisher, and a personal access token (scope Marketplace: Manage) stored as secret `VSCE_PAT` in environment `vscode-marketplace` | variable `PUBLISH_VSCODE` = `true` |
+
+Maven Central (`clients/java`) is not automated yet: it needs a namespace on
+central.sonatype.com and a GPG signing key, and the client a build file to publish from.
