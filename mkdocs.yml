@@ -78,6 +78,7 @@ nav:
       - Install: install.md
       - Coming from Playwright: playwright.md
       - JavaScript and TypeScript: javascript.md
+      - Java: java.md
   - Guides:
       - A tour: tour.md
       - Robots: robots.md
