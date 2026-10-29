@@ -17,3 +17,5 @@ site/
 editors/vscode/node_modules/
 editors/vscode/.vscode-test/
 editors/vscode/*.vsix
+clients/dotnet/**/bin/
+clients/dotnet/**/obj/

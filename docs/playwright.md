@@ -125,7 +125,7 @@ filled) put robowright at about 92 % of the Playwright Test and Playwright MCP f
 | your app under test | your controller, learned policy or ROS 2 stack; `rw.attach(env)` tests someone else's simulation as they built it | robot |
 | real devices | a real arm behind ROS 2 (`--rw-backend ros2`) | partial: never yet run on a physical robot |
 | installing with one command | `pip install robowright` | missing: not yet on PyPI (it installs from GitHub) |
-| JavaScript, Python, Java, .NET | Python, and JavaScript/TypeScript ([clients/js](javascript.md)) and Java ([clients/java](java.md)) through the MCP server: every tool, `expect` with its negation; not yet on npm or Maven Central | partial: no .NET; pytest is the only full runner |
+| JavaScript, Python, Java, .NET | Python, and JavaScript/TypeScript ([clients/js](javascript.md)), Java ([clients/java](java.md)) and .NET ([clients/dotnet](dotnet.md)) through the MCP server: every tool, `expect` with its negation | partial: pytest is the only full runner; the clients are not yet on npm, Maven Central or NuGet |
 | years of use by many teams | new, with no outside users yet | missing |
 
 ## Not applicable to robots

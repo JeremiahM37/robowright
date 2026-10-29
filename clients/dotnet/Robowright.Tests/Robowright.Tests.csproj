@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The client's tests, with no test framework so they need nothing from NuGet: dotnet run prints one line per test
+       and "# pass N" / "# fail N", and exits 1 on any failure. Run with "fake-server" it is the stand-in server. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Robowright/Robowright.csproj" />
+  </ItemGroup>
+
+</Project>

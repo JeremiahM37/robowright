@@ -6,7 +6,7 @@ The first release on PyPI (0.1.0 was tagged but never published). 121 changes si
 of Playwright Test that a robot test needs; [Coming from Playwright](docs/playwright.md) lists each, with what is
 partial.
 
-### JavaScript, TypeScript and Java
+### JavaScript, TypeScript, Java and .NET
 
 - `clients/js`: drive robowright from Node. It starts `robowright mcp` and makes every tool a typed method
   (`rw.robot.pick`, `rw.ros2.inspect`, ...), with `expect(subject).toBeInside("bin")` and `.not`, throwing on a
@@ -15,6 +15,8 @@ partial.
 - `clients/java`: the same for Java 17 or later, in Playwright for Java's style (required arguments as
   parameters, the rest in an options class; `rw.expect("cube").not().toBeInside("bin")` throws an `AssertionError`
   subclass, so JUnit reports it). No dependencies; generated from the tool list the same way.
+- `clients/dotnet`: the same for .NET 8, in Playwright for .NET's style (`await rw.Robot.PickAsync("cube")`,
+  options objects, `rw.Expect("cube").Not.ToBeInsideAsync("bin")`). No dependencies; generated the same way.
 
 ### Running tests
 

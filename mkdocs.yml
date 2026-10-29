@@ -79,6 +79,7 @@ nav:
       - Coming from Playwright: playwright.md
       - JavaScript and TypeScript: javascript.md
       - Java: java.md
+      - .NET: dotnet.md
   - Guides:
       - A tour: tour.md
       - Robots: robots.md

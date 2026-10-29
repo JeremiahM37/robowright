@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>CS1591</NoWarn>
+    <RootNamespace>Robowright</RootNamespace>
+    <PackageId>Robowright</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Playwright-style testing for robot software, from .NET: simulated robots, matchers and traces, driven through the robowright MCP server.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/JeremiahM37/robowright</RepositoryUrl>
+    <PackageTags>robotics;testing;simulation;mujoco;ros2;playwright;mcp</PackageTags>
+  </PropertyGroup>
+
+</Project>
