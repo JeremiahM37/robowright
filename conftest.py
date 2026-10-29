@@ -145,6 +145,21 @@ KNOWN[("test_cube_survives_a_shove_when_held", "pybullet", "so101")] = (
     _SQUEEZED + "; whether a 1.5 N shove dislodges it varies by PyBullet build"
 )
 UNSETTLED = {("test_cube_survives_a_shove_when_held", "pybullet", "so101")}
+# The xArm Gripper on PyBullet, likewise: on Ubuntu 26.04's x86-64-v3 builds (GitHub's ubuntu-latest
+# since 2026-10) the linkage closes evenly enough to pick, but in the second-object scene it pushes the
+# first cube aside instead. Reproduced in an ubuntu:26.04 container with APT's amd64v3 variant; the
+# plain amd64 variant, and PyBullet built with -march=x86-64-v3 on Debian 13, behave as described above.
+_XARM_BUILD = "; on x86-64-v3 builds (Ubuntu 26.04) it picks in these, and pushes the first cube aside in the second-object scene"
+KNOWN[("test_places_a_second_object_beside_the_first", "pybullet", "xarm7")] = KNOWN[("test_pick_and_place", "pybullet", "xarm7")]
+for test in (
+    "test_deterministic",
+    "test_grasp_is_seen_by_both_fingers",
+    "test_no_arm_collisions_during_a_pick",
+    "test_pick_and_place",
+    "test_places_a_second_object_beside_the_first",
+):
+    KNOWN[(test, "pybullet", "xarm7")] += _XARM_BUILD
+    UNSETTLED.add((test, "pybullet", "xarm7"))
 
 # --- adjusted mode -----------------------------------------------------------------------------
 # Genesis's friction with the elliptic cone the backend uses (see its comment for every setting
