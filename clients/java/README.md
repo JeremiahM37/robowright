@@ -40,7 +40,8 @@ try (Robowright rw = Robowright.launch()) {
 - **`Robowright.launch(new Robowright.LaunchOptions().setCommand(...))`** picks the server command; default
   `robowright mcp`, or `ROBOWRIGHT_COMMAND`.
 
-It is not on Maven Central yet. Build a jar from a checkout:
+It is not on Maven Central yet (it will be `io.github.jeremiahm37:robowright`). Build the jar from a checkout,
+with Maven (`mvn -f clients/java package`, the jar in `clients/java/target/`) or with the JDK alone:
 
 ```sh
 javac -d out clients/java/src/robowright/*.java && jar cf robowright.jar -C out .

@@ -35,3 +35,16 @@ def test_the_java_clients_own_tests_pass_against_this_server(tmp_path):
     )
     assert r.returncode == 0, r.stdout[-4000:] + r.stderr[-2000:]
     assert "# fail 0" in r.stdout
+
+
+@pytest.mark.skipif(shutil.which("mvn") is None, reason="no Maven installed")
+def test_the_java_client_builds_with_maven(tmp_path):
+    """The build Maven Central gets the client from: clients/java/pom.xml compiles it with -Werror and packages the jar."""
+    r = subprocess.run(
+        ["mvn", "-q", "-B", "-f", str(JAVA / "pom.xml"), "package", f"-Dmaven.repo.local={tmp_path / 'repo'}"],
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert r.returncode == 0, r.stdout[-4000:] + r.stderr[-2000:]
+    assert list((JAVA / "target").glob("robowright-*.jar"))

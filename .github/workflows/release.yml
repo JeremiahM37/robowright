@@ -108,3 +108,28 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npm ci && npm version --no-git-tag-version "${GITHUB_REF_NAME#v}" && npx --yes @vscode/vsce@3.2.1 publish
+
+  maven:
+    needs: build
+    if: vars.PUBLISH_MAVEN == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: maven-central
+      url: https://central.sonatype.com/artifact/io.github.jeremiahm37/robowright
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - working-directory: clients/java
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: mvn -B org.codehaus.mojo:versions-maven-plugin:2.17.1:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false && mvn -B -Prelease deploy

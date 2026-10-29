@@ -72,6 +72,4 @@ with a repository variable, so a tag never publishes anywhere half-configured:
 | npm (`clients/js`) | a trusted publisher on npmjs.com for package `robowright`, workflow `release.yml`, environment `npm` | variable `PUBLISH_NPM` = `true` |
 | NuGet (`clients/dotnet`) | a trusted publishing policy on nuget.org for this repository, workflow `release.yml`, environment `nuget`; variable `NUGET_USER` = the nuget.org account name | variable `PUBLISH_NUGET` = `true` |
 | VS Code Marketplace (`editors/vscode`) | the `jeremiahm37` publisher, and a personal access token (scope Marketplace: Manage) stored as secret `VSCE_PAT` in environment `vscode-marketplace` | variable `PUBLISH_VSCODE` = `true` |
-
-Maven Central (`clients/java`) is not automated yet: it needs a namespace on
-central.sonatype.com and a GPG signing key, and the client a build file to publish from.
+| Maven Central (`clients/java`, `io.github.jeremiahm37:robowright`) | the `io.github.jeremiahm37` namespace on central.sonatype.com and a user token for it, and a GPG key published to a keyserver; in environment `maven-central`, secrets `MAVEN_CENTRAL_USERNAME`, `MAVEN_CENTRAL_PASSWORD` (the token), `MAVEN_GPG_PRIVATE_KEY` (armored) and `MAVEN_GPG_PASSPHRASE` | variable `PUBLISH_MAVEN` = `true` |

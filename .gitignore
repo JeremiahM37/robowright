@@ -19,3 +19,4 @@ editors/vscode/.vscode-test/
 editors/vscode/*.vsix
 clients/dotnet/**/bin/
 clients/dotnet/**/obj/
+clients/java/target/
