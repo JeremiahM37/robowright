@@ -90,6 +90,11 @@ partial.
 - On pytest 9.2, `--dist loadgroup` keeps a robot's tests on one worker again. pytest-xdist 3.8 adds the group to a
   test's id in a field pytest 9.2 no longer reads, so every group was silently spread over all workers (and serial
   modules ran in parallel); robowright now writes it where pytest reads it.
+- `place()` fails with a `GraspError` when the object slipped out of the hand on the way, instead of opening the jaws
+  over the target and passing wherever the object happened to fall. The SO-101 on PyBullet, whose published squeeze
+  pushes the cube out of its jaws within a second, passed its plain pick-and-place that way on one PyBullet build and
+  failed it on another; it is now listed with that robot's other known PyBullet divergences.
+- `robowright.GraspError` is importable (it was listed in `robowright.__all__`, so `from robowright import *` failed).
 - On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
   is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).

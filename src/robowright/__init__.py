@@ -91,6 +91,7 @@ from .errors import (  # noqa: E402
     ActionTimeoutError,
     CapabilityError,
     ExpectationError,
+    GraspError,
     InvariantViolation,
     RobowrightError,
     SafetyLimitError,

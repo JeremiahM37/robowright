@@ -961,6 +961,17 @@ class Robot:
             # No contacts to ask (a robot in Gazebo): what was picked, if it is still at the hand
             near = np.linalg.norm(self.world.scene[self._picked].position - self.tcp.position) < 0.06
             held = self._picked if near else None
+        if held is None and self._grasped and self.world.has_contacts and self.world.has_ground_truth:
+            # Picked, and gone from the hand on the way: say so here. Going on to open the jaws over
+            # the target made place() succeed wherever the object happened to fall (an SO-101 on
+            # PyBullet squeezed its cube out mid-swing; it fell in the bin on one build, beside it on another).
+            o = self.world.scene[self._grasped]
+            if np.linalg.norm(o.position - self.tcp.position) > 0.05:
+                raise GraspError(
+                    f"place: {o.name} slipped out of the hand on the way to {t.name}: it is at "
+                    f"{np.round(o.position, 3).tolist()}, the tool at {np.round(self.tcp.position, 3).tolist()}, "
+                    f"the jaws at opening {self.gripper.opening:.2f}"
+                )
         if held is not None:
             off = (self.world.scene[held].position - self.tcp.position)[:2]
             if np.linalg.norm(off) > 0.003:

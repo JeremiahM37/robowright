@@ -15,7 +15,10 @@ def _pick_and_place(w):
     w.faults.push("cube", (0.0, 0.3, 0.0), duration=0.04)
     w.robot.pick(w.scene["cube"])
     w.faults.weak_joint(w.robot.model.arm_joints[-1], 0.7)
-    w.robot.place(on=w.scene["bin"])
+    try:
+        w.robot.place(on=w.scene["bin"])
+    except rw.GraspError:
+        pass  # the SO-101 on PyBullet loses its cube on the way (conftest.py's _SQUEEZED): still a run to compare
     return w
 
 

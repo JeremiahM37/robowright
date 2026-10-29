@@ -78,11 +78,15 @@ for test in ("test_gripper_opens_and_closes", "test_holds_the_home_pose"):
 # it). The URDF SO-100 and SO-101 lose it while closing: the jaws shut on nothing, the cube 2-4 cm
 # away. Genesis does the same to the URDF ones.
 _SQUEEZED = "the SO-arm's modelled ~65 N squeeze, on rigid contacts, pushes the cube out of the jaws"
+# Its plain pick and place too: held still, the cube is pushed out of the jaws within a second of the pick.
+# It used to pass where the cube happened to fall into the bin on the way (on one PyBullet build, not
+# another); place() now says the object slipped out of the hand instead.
 for test in (
     "test_learned_policy_puts_the_cube_in_the_bin",
     "test_policy_with_randomized_cube",
     "test_policy_with_sensor_noise_and_latency",
     "test_places_a_second_object_beside_the_first",
+    "test_pick_and_place",
 ):
     KNOWN[(test, "pybullet", "so101")] = _SQUEEZED
 for robot in ("so100", "so101_new_calib"):

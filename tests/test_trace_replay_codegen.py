@@ -27,11 +27,11 @@ def _run(tmp_path, name="run", backend="mujoco", fail=False, faults=True):
     if faults:
         w.faults.push("cube", (0.0, 0.5, 0.0), duration=0.05)
         w.faults.weak_joint("wrist_roll", 0.8)
-    w.robot.place(on=w.scene["bin"] if not fail else (0.26, -0.1, 0.0))
     try:
+        w.robot.place(on=w.scene["bin"] if not fail else (0.26, -0.1, 0.0))
         expect(w.scene["cube"]).to_be_inside(w.scene["bin"], timeout=0.5)
-    except rw.ExpectationError:
-        pass
+    except (rw.ExpectationError, rw.GraspError):
+        pass  # a run that fails is still one to record and replay (the SO-101 on PyBullet loses its cube on the way)
     return w.close(), w
 
 

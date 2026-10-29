@@ -14,7 +14,9 @@ BACKENDS = ["mujoco", "pybullet", *(b for b, mod in (("drake", "pydrake"), ("gen
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_same_test_passes_on_every_backend(quiet_world, backend):
-    w = quiet_world(backend=backend)
+    # The Panda: the SO-101's published squeeze pushes the cube out of its jaws on PyBullet (conftest.py's
+    # _SQUEEZED), which is that robot on that engine, not what this test is about.
+    w = quiet_world(scene=tabletop(robot="panda"), backend=backend)
     cube, bin = w.scene["cube"], w.scene["bin"]
     w.robot.pick(cube)
     expect(w.robot.gripper).to_be_holding(cube)

@@ -6,6 +6,11 @@ from robowright import expect
 from robowright.errors import GraspError
 
 
+def test_every_public_name_is_importable():
+    """``from robowright import *`` and each name in ``robowright.__all__`` resolve (GraspError was listed, not imported)."""
+    assert [n for n in rw.__all__ if not hasattr(rw, n)] == []
+
+
 def test_move_to_reaches_target(quiet_world):
     w = quiet_world()
     target = np.array([0.24, 0.05, 0.05])
