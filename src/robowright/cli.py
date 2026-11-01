@@ -455,6 +455,28 @@ def _show(args, rest):
     return 0
 
 
+def _projects(args, rest):
+    """The project's named settings (``[projects.NAME]``): what ``--rw-project`` applies, here for reading."""
+    import json as _json
+
+    from .plugins import find_config
+
+    found = find_config()
+    projects = (found[1].get("projects") or {}) if found else {}
+    if args.json:
+        print(_json.dumps({"config": str(found[0]) if found else None, "projects": projects}))
+        return 0
+    if not found:
+        print("no robowright.toml (or [tool.robowright] in pyproject.toml) here or above", file=sys.stderr)
+        return 1
+    print(f"{found[0]}:")
+    for name, table in projects.items():
+        print(f"  {name}: " + ", ".join(f"{k} = {v!r}" for k, v in table.items()))
+    if not projects:
+        print("  no [projects.*]")
+    return 0
+
+
 def _show_report(args, rest):
     """Playwright's ``show-report``: open the HTML report a run wrote (``pytest --rw-report``)."""
     path = Path(args.report)
@@ -832,6 +854,8 @@ def main(argv=None) -> int:
         "--ros2", metavar="COMMAND", help='a ROS 2 project: the command that starts your stack ("ros2 launch my_robot sim.launch.py")'
     )
     i.add_argument("--gazebo", action="store_true", help="with --ros2: the stack runs Gazebo (simulated time, Gazebo's ground truth)")
+    pj = sub.add_parser("projects", help="the [projects.*] in robowright.toml, as --rw-project and robowright/test read them")
+    pj.add_argument("--json", action="store_true", help="as JSON, for a runner in another language")
     ia = sub.add_parser("init-agents", help="AI agents that plan, write and repair robot tests (Claude Code), as playwright init-agents")
     ia.add_argument("dir", nargs="?", default=".")
     sub.add_parser("test", help="run tests (arguments go to pytest; --watch: again on every change; --ui: in a browser)", add_help=False)
@@ -938,6 +962,7 @@ def main(argv=None) -> int:
         "mcp": _mcp,
         "init": _init,
         "init-agents": _init_agents,
+        "projects": _projects,
         "ros2": _ros2,
     }
     return commands[args.cmd](args, [])

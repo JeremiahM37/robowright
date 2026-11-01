@@ -13,9 +13,11 @@
 // test saves its trace and says how to open it; ROBOWRIGHT_RETRIES (or `retries`) runs it again, and a test that
 // passes on a retry is reported flaky. `trials: 20, minSuccess: 0.9` judges a test as a rate over seeds, each with
 // the scene randomized, as @pytest.mark.trials does. ROBOWRIGHT_RESULTS=dir writes each file's results there, which
-// `robowright merge-reports dir/*.json` makes into the HTML report. Run with `node --test`.
+// `robowright merge-reports dir/*.json` makes into the HTML report. ROBOWRIGHT_PROJECT=nightly (or a,b or all) runs
+// in robowright.toml's [projects.nightly], as --rw-project does. Run with `node --test`.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { after, describe, test as nodeTest } from "node:test";
@@ -70,11 +72,40 @@ function trialSummary(passed, runs, n, min, lowerBound) {
 
 const slug = (s) => s.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
 
-function settings(own) {
-  const o = { ...fileOptions, ...own };
+// [projects.NAME] in robowright.toml, read through `robowright projects --json` (ROBOWRIGHT_CLI, or the server
+// command without its `mcp`). A project's keys are those --rw-project applies that mean something here.
+const PROJECT_KEYS = { robot: "robot", backend: "backend", retries: "retries", seed: "seed", fidelity: "fidelity" };
+let projectTables = null;
+
+function projects() {
+  const raw = process.env.ROBOWRIGHT_PROJECT;
+  if (!raw) return [null];
+  if (!projectTables) {
+    const server = (process.env.ROBOWRIGHT_COMMAND ?? "").split(" ").filter(Boolean);
+    const cli = (process.env.ROBOWRIGHT_CLI ?? "").split(" ").filter(Boolean);
+    const command = cli.length ? cli : server.at(-1) === "mcp" ? server.slice(0, -1) : ["robowright"];
+    const found = JSON.parse(execFileSync(command[0], [...command.slice(1), "projects", "--json"], { encoding: "utf8" }));
+    projectTables = { config: found.config, tables: found.projects ?? {} };
+  }
+  const { config, tables } = projectTables;
+  const names = raw === "all" ? Object.keys(tables) : list(raw);
+  return names.map((name) => {
+    const table = tables[name];
+    if (!table) throw new Error(`ROBOWRIGHT_PROJECT ${name}: no [projects.${name}] in ${config ?? "any robowright.toml"}; it has ${Object.keys(tables).join(", ") || "none"}`);
+    const options = {};
+    for (const [k, v] of Object.entries(table)) if (PROJECT_KEYS[k]) options[PROJECT_KEYS[k]] = v;
+    if (table.timeout !== undefined) options.timeout = Number(table.timeout) * 1000; // seconds there, ms in node:test
+    return { name, options };
+  });
+}
+
+// Precedence, as in pytest: the environment (its flags), then the test's own options, then test.use, then the
+// project, then the defaults.
+function settings(own, project) {
+  const o = { ...(project?.options ?? {}), ...fileOptions, ...own };
   const robots = list(process.env.ROBOWRIGHT_ROBOT || o.robot || "so101");
   const backends = list(process.env.ROBOWRIGHT_BACKEND || o.backend || "mujoco");
-  const retries = Number(o.retries ?? process.env.ROBOWRIGHT_RETRIES ?? 0);
+  const retries = Number(process.env.ROBOWRIGHT_RETRIES ?? o.retries ?? 0);
   const traceDir = o.traceDir ?? process.env.ROBOWRIGHT_TRACE_DIR ?? "robowright-traces";
   return { o, robots, backends, retries, traceDir };
 }
@@ -86,11 +117,16 @@ async function attempt(rw, launchArgs, fn) {
 }
 
 function register(name, own, fn) {
-  const { o, robots, backends, retries, traceDir } = settings(own);
+  for (const project of projects()) registerIn(name, own, fn, project);
+}
+
+function registerIn(name, own, fn, project) {
+  const { o, robots, backends, retries, traceDir } = settings(own, project);
   const many = robots.length * backends.length > 1;
   for (const backend of backends) {
     for (const robot of robots) {
-      const full = many ? `${name} [${backend}-${robot}]` : name;
+      const tag = [project?.name, ...(many ? [backend, robot] : [])].filter(Boolean).join("-");
+      const full = tag ? `${name} [${tag}]` : name;
       const nodeOpts = {};
       for (const k of ["timeout", "skip", "todo", "only"]) if (o[k] !== undefined) nodeOpts[k] = o[k];
       const id = `${relative(process.cwd(), process.argv[1] ?? "") || "tests"}::${full}`;

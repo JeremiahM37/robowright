@@ -25,6 +25,8 @@ partial.
   seeds as `@pytest.mark.trials` does, and `ROBOWRIGHT_RESULTS=dir` writes results that `robowright merge-reports
   dir/*.json` makes into the HTML report. TypeScript types in `test.d.ts`.
 - MCP `robot_launch(randomize=true)` moves the free objects to places drawn from the seed, as each trial does.
+- `ROBOWRIGHT_PROJECT=nightly` runs robowright/test in `robowright.toml`'s `[projects.nightly]`; `robowright projects
+  [--json]` prints the projects, for reading and for runners in other languages.
 
 ### Running tests
 

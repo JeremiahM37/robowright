@@ -422,3 +422,23 @@ def test_a_setup_projects_teardown_runs_last_whatever_happened(pytester):
     ran = [line.split(" ")[0] for line in r.stdout.lines if " PASSED" in line or " FAILED" in line]
     assert ran == ["setup_calibrate.py::test_calibrate[setup]", "test_arm.py::test_reach[arms]", "cleanup_park.py::test_park[cleanup]"], ran
     assert _outcomes(r) == {"passed": 2, "failed": 1}
+
+
+def test_robowright_projects_prints_the_tables_for_other_runners(tmp_path):
+    """robowright/test (Node) reads [projects.*] through `robowright projects --json`, having no TOML parser."""
+    import json
+    import subprocess
+    import sys
+
+    toml = '[projects.nightly]\nrobot = ["panda", "ur5e"]\nretries = 1\n\n[projects.smoke]\nrobot = "so101"\n'
+    (tmp_path / "robowright.toml").write_text(toml)
+    cli = [sys.executable, "-m", "robowright.cli", "projects"]
+    r = subprocess.run([*cli, "--json"], cwd=tmp_path, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["projects"] == {"nightly": {"robot": ["panda", "ur5e"], "retries": 1}, "smoke": {"robot": "so101"}}
+    assert out["config"].endswith("robowright.toml")
+    text = subprocess.run(cli, cwd=tmp_path, capture_output=True, text=True).stdout
+    assert "nightly: robot = ['panda', 'ur5e'], retries = 1" in text
+    empty = subprocess.run([*cli, "--json"], cwd="/", capture_output=True, text=True)  # no robowright.toml up from /
+    assert json.loads(empty.stdout)["projects"] == {}

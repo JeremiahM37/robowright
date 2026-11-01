@@ -43,6 +43,9 @@ test("the arm puts the cube in the bin", async ({ rw }) => {
   change the verdict, unless `ROBOWRIGHT_ALL_TRIALS=1`).
 - **The HTML report**: `ROBOWRIGHT_RESULTS=results node --test`, then `robowright merge-reports results/*.json -o
   report.html`: robowright's own report, each failure with its trace.
+- **Projects**: `ROBOWRIGHT_PROJECT=nightly` (or `nightly,smoke`, or `all`) runs each test in `robowright.toml`'s
+  `[projects.nightly]` (its robot, backend, retries, seed, fidelity and timeout), named `name [nightly]`, as
+  `--rw-project` does; `robowright projects` lists them.
 - **Shards**: Node's `--test-shard=1/3`.
 - `test.only`, `test.skip`, `test.fixme`, `test.describe`, and Node's own reporters (`--test-reporter=junit`,
   `spec`, `tap`) and `--test-name-pattern`.

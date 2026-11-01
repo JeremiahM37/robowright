@@ -38,6 +38,7 @@ test("puts the cube in the bin", async ({ rw }) => {
 
 `trials: 20, minSuccess: 0.9` judges a test as a success rate over seeds with the scene randomized, as
 `@pytest.mark.trials` does; `ROBOWRIGHT_RESULTS=results` writes the results that `robowright merge-reports
-results/*.json` makes into robowright's HTML report; Node's `--test-shard=1/3` shards. What it does not have yet, of
-the pytest plugin's runner: projects from `robowright.toml`, snapshots, and the HTML report's live view.
+results/*.json` makes into robowright's HTML report; `ROBOWRIGHT_PROJECT=nightly` runs in `robowright.toml`'s
+`[projects.nightly]`; Node's `--test-shard=1/3` shards. What it does not have yet, of the pytest plugin's runner:
+image and state snapshots, project dependencies, and the live view and debugger.
 `rw.robot.generateTest()` writes a session as a pytest test when you want it in that suite.

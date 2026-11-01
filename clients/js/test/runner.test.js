@@ -56,6 +56,18 @@ test("one robot and engine: test names are as written", () => {
   assert.match(r.out, /^ok \d+ - flaky$/m);
 });
 
+test("ROBOWRIGHT_PROJECT runs in robowright.toml's projects, each test in each", () => {
+  const cli = `${process.execPath} ${join(here, "fake-projects.mjs")}`;
+  const r = run({ ROBOWRIGHT_PROJECT: "nightly,smoke", ROBOWRIGHT_CLI: cli, ROBOWRIGHT_ROBOT: "", ROBOWRIGHT_BACKEND: "" }, "projects.test.mjs");
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /^ok \d+ - launches \[nightly-mujoco-panda\]$/m);
+  assert.match(r.out, /^ok \d+ - launches \[nightly-mujoco-ur5e\]$/m);
+  assert.match(r.out, /^ok \d+ - launches \[smoke\]$/m);
+  const bad = run({ ROBOWRIGHT_PROJECT: "weekly", ROBOWRIGHT_CLI: cli }, "projects.test.mjs");
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.out, /ROBOWRIGHT_PROJECT weekly: no \[projects.weekly\] in robowright.toml; it has nightly, smoke/);
+});
+
 // The real server, when there is one (as in client.test.js).
 const venv = join(here, "..", "..", "..", ".venv", "bin", "robowright");
 const real = process.env.ROBOWRIGHT_COMMAND || (existsSync(venv) ? `${venv} mcp` : null);
