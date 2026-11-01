@@ -18,6 +18,14 @@ export interface TestOptions {
   timeout?: number;
   /** Where a failed test's trace is saved (ROBOWRIGHT_TRACE_DIR). Default robowright-traces. */
   traceDir?: string;
+  /** Run it on up to this many seeds and judge the success rate (as @pytest.mark.trials). */
+  trials?: number;
+  /** The share of trials that must pass (default 1). */
+  minSuccess?: number;
+  /** Judge the rate's 95% lower bound instead of the rate. */
+  lowerBound?: boolean;
+  /** Move the free objects to places drawn from each trial's seed (default true). */
+  randomize?: boolean;
   skip?: boolean | string;
   todo?: boolean | string;
   only?: boolean;

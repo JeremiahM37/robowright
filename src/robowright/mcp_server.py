@@ -120,6 +120,7 @@ def build_server(session: Session | None = None):
         ros2: dict | None = None,
         robot_options: dict | None = None,
         keep_open: bool = False,
+        randomize: bool = False,
     ) -> str:
         """Start a fresh world, closing any open one (keep_open: true keeps it open beside the new one, as a tab;
         see robot_worlds and robot_switch), and return its snapshot.
@@ -140,7 +141,8 @@ def build_server(session: Session | None = None):
         cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
         floor, or [x, y, z] (z is a free object's centre, a bin's base),
         "color": red|green|blue|yellow|..., "mass": kg}. On ros2 there are no objects unless
-        objects names some, and the robot is not moved to a start pose.
+        objects names some, and the robot is not moved to a start pose. randomize: true moves the free objects
+        to places drawn from seed, as each trial of a pytest trials test does (a success rate over seeds).
         """
         return await run(
             s.launch,
@@ -152,6 +154,7 @@ def build_server(session: Session | None = None):
             ros2=ros2,
             robot_options=robot_options,
             keep_open=keep_open,
+            randomize=randomize,
         )
 
     @tool

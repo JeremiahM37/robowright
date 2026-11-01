@@ -426,3 +426,15 @@ def test_a_world_with_a_process_is_not_kept_open(session, tmp_path):
     with pytest.raises(RobowrightError, match="a ROS 2 bridge or a running process"):
         session.launch("so101", keep_open=True)
     session.stop_process()
+
+
+def test_launch_randomize_draws_the_scene_from_the_seed(session):
+    def cube_at(**kw):
+        session.launch(**kw)
+        return session.world.backend.object_pose("cube")[0].copy()
+
+    plain = cube_at(seed=3)
+    once, again = cube_at(seed=3, randomize=True), cube_at(seed=3, randomize=True)
+    other = cube_at(seed=4, randomize=True)
+    assert np.allclose(once, again)  # the same seed, the same scene
+    assert not np.allclose(once, plain, atol=1e-4) and not np.allclose(once, other, atol=1e-4)

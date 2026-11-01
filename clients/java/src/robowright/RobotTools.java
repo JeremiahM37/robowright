@@ -275,7 +275,8 @@ public final class RobotTools {
    * cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
    * floor, or [x, y, z] (z is a free object's centre, a bin's base),
    * "color": red|green|blue|yellow|..., "mass": kg}. On ros2 there are no objects unless
-   * objects names some, and the robot is not moved to a start pose.
+   * objects names some, and the robot is not moved to a start pose. randomize: true moves the free objects
+   * to places drawn from seed, as each trial of a pytest trials test does (a success rate over seeds).
    */
   public String launch() {
     return launch(null);
@@ -301,7 +302,8 @@ public final class RobotTools {
    * cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
    * floor, or [x, y, z] (z is a free object's centre, a bin's base),
    * "color": red|green|blue|yellow|..., "mass": kg}. On ros2 there are no objects unless
-   * objects names some, and the robot is not moved to a start pose.
+   * objects names some, and the robot is not moved to a start pose. randomize: true moves the free objects
+   * to places drawn from seed, as each trial of a pytest trials test does (a success rate over seeds).
    */
   public String launch(LaunchOptions options) {
     Map<String, Object> args = new LinkedHashMap<>();
@@ -342,6 +344,10 @@ public final class RobotTools {
     }
     public LaunchOptions setKeepOpen(boolean value) {
       values.put("keep_open", value);
+      return this;
+    }
+    public LaunchOptions setRandomize(boolean value) {
+      values.put("randomize", value);
       return this;
     }
   }

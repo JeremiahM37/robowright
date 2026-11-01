@@ -107,7 +107,8 @@ export interface RobotTools {
    * cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
    * floor, or [x, y, z] (z is a free object's centre, a bin's base),
    * "color": red|green|blue|yellow|..., "mass": kg}. On ros2 there are no objects unless
-   * objects names some, and the robot is not moved to a start pose.
+   * objects names some, and the robot is not moved to a start pose. randomize: true moves the free objects
+   * to places drawn from seed, as each trial of a pytest trials test does (a success rate over seeds).
    */
   launch(args?: {
     robot?: string | null;
@@ -118,6 +119,7 @@ export interface RobotTools {
     ros2?: Record<string, unknown> | null;
     robot_options?: Record<string, unknown> | null;
     keep_open?: boolean | null;
+    randomize?: boolean | null;
   }): Promise<string>;
   /**
    * The simulation engines robowright can run here, and how to install the others: what robot_launch's backend

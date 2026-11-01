@@ -100,7 +100,8 @@ export const TOOLS = [
       "fidelity",
       "ros2",
       "robot_options",
-      "keep_open"
+      "keep_open",
+      "randomize"
     ]
   },
   {

@@ -201,21 +201,25 @@ class Run:
 
 
 def merge(blobs: list, out: str | Path) -> Path:
-    """One HTML report at ``out`` from the blobs of a sharded run. Their files are unpacked next to it, in
-    ``<report>-files/<blob>/``. A test in more than one blob (the same suite run twice) is listed once for each."""
+    """One HTML report at ``out`` from the blobs of a sharded run, or the ``.json`` results robowright/test
+    writes (``ROBOWRIGHT_RESULTS``). A blob's files are unpacked next to it, in ``<report>-files/<blob>/``. A
+    test in more than one blob (the same suite run twice) is listed once for each."""
     out = Path(out)
     files = out.parent / (out.stem + "-files")
     run, spans = Run(), []
     for blob in blobs:
         blob = Path(blob)
         dest = files / blob.stem
-        with zipfile.ZipFile(blob) as z:
-            data = json.loads(z.read("run.json"))
-            if data.get("format") != 1:
-                raise ValueError(f"{blob}: not a robowright report blob (pytest --rw-blob)")
-            for name in z.namelist():
-                if name.startswith("files/") and ".." not in Path(name).parts:
-                    z.extract(name, dest)
+        if blob.suffix == ".json":  # a run's results as they are, its files where they lie (robowright/test in Node)
+            data, dest = json.loads(blob.read_text()), Path()
+        else:
+            with zipfile.ZipFile(blob) as z:
+                data = json.loads(z.read("run.json"))
+                for name in z.namelist():
+                    if name.startswith("files/") and ".." not in Path(name).parts:
+                        z.extract(name, dest)
+        if data.get("format") != 1:
+            raise ValueError(f"{blob}: not a robowright report blob (pytest --rw-blob) or results file (ROBOWRIGHT_RESULTS)")
         spans.append((data["started"], data["started"] + data["seconds"]))
         for nodeid, t in data["tests"].items():
             t["traces"] = [str(dest / p) for p in t["traces"]]

@@ -20,3 +20,9 @@ test("fails with its trace", async ({ expect }) => {
 test("flaky", { retries: 1, robot: "so101" }, async ({ rw }) => {
   await rw.call("robot_flaky");
 });
+
+test("trials", { trials: 4, minSuccess: 0.5, robot: "so101" }, async ({ rw }) => {
+  const launched = JSON.parse(await rw.call("robot_last_launch"));
+  assert.equal(launched.randomize, true); // each trial's scene drawn from its seed
+  assert.equal(launched.seed % 2, 1, `seed ${launched.seed}`); // odd seeds pass: 7 and 9 of 7..10
+});

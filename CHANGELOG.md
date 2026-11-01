@@ -21,7 +21,10 @@ partial.
   a fresh world from one server per file, `expect("cube")` needs no connection passed, `test.use({ robot, backend,
   seed, retries, ... })` sets a file's options, `ROBOWRIGHT_ROBOT` and `ROBOWRIGHT_BACKEND` run every test on each
   robot and engine, a failure saves its trace and names the `robowright show-trace` command that opens it, and a test
-  that passes on a retry is reported flaky. TypeScript types in `test.d.ts`.
+  that passes on a retry is reported flaky. `trials: 20, minSuccess: 0.9` judges a success rate over randomized
+  seeds as `@pytest.mark.trials` does, and `ROBOWRIGHT_RESULTS=dir` writes results that `robowright merge-reports
+  dir/*.json` makes into the HTML report. TypeScript types in `test.d.ts`.
+- MCP `robot_launch(randomize=true)` moves the free objects to places drawn from the seed, as each trial does.
 
 ### Running tests
 

@@ -846,7 +846,9 @@ def main(argv=None) -> int:
     s.add_argument("--text", action="store_true", help="print what ran, what failed and the state at the failure, as text")
     s.add_argument("--perfetto", metavar="OUT.json", help="write the trace for ui.perfetto.dev / chrome://tracing instead")
     mr = sub.add_parser("merge-reports", help="one HTML report from the blobs of a sharded run (pytest --rw-blob)")
-    mr.add_argument("blobs", nargs="+", help="the blobs, one per shard")
+    mr.add_argument(
+        "blobs", nargs="+", help="the blobs, one per shard (pytest --rw-blob), or results from robowright/test (ROBOWRIGHT_RESULTS)"
+    )
     mr.add_argument("-o", "--output", default="report.html")
     sr = sub.add_parser("show-report", help="open the HTML report a run wrote (pytest --rw-report)")
     sr.add_argument("report", nargs="?", default="report.html", help="the report, or the folder it is in (default report.html)")

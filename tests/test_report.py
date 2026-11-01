@@ -4,6 +4,8 @@ import json
 import subprocess
 import sys
 
+import robowright as rw
+
 TEST = """
 from robowright import expect
 
@@ -136,6 +138,27 @@ def test_a_sharded_run_merges_into_one_report(pytester):
     viewer = pytester.path / "merged" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].html"
     assert viewer.exists() and 'href="report-traces/' in page
     assert (pytester.path / "merged" / "report-traces" / "test_robots.py__test_wrong_spot[mujoco].png").exists()  # its picture too
+
+
+def test_merge_reports_takes_results_written_as_json(tmp_path):
+    """robowright/test in Node writes its results as the blob's run.json, with its traces where they lie."""
+    w = rw.launch(settings=rw.Settings(trace="on", trace_dir=str(tmp_path / "traces")))
+    trace = w.close(failed=True)
+    results = tmp_path / "results" / "pick.test.js-1.json"
+    results.parent.mkdir()
+    tests = {
+        "tests/pick.test.js::puts the cube in the bin": {"outcome": "passed", "duration": 1.0, "message": "", "traces": []},
+        "tests/pick.test.js::misses": {"outcome": "failed", "duration": 2.0, "message": "FAIL: cube not in bin", "traces": [str(trace)]},
+    }
+    for t in tests.values():
+        t.update(trials="", attachments=[], tags=[], annotations=[])
+    results.write_text(json.dumps({"format": 1, "started": 1.0, "seconds": 3.0, "tests": tests}))
+    out = tmp_path / "report.html"
+    cli = [sys.executable, "-m", "robowright.cli", "merge-reports", str(results), "-o", str(out)]
+    r = subprocess.run(cli, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    page = out.read_text()
+    assert "2 tests" in page and "failed 1" in page and "FAIL: cube not in bin" in page and "open the trace" in page
 
 
 def test_merge_reports_refuses_what_is_not_a_blob(tmp_path):

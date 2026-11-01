@@ -156,7 +156,8 @@ public sealed class RobotTools
     /// cylinder [radius, half_height], sphere [radius]), "pos": [x, y] to rest it on the
     /// floor, or [x, y, z] (z is a free object's centre, a bin's base),
     /// "color": red|green|blue|yellow|..., "mass": kg}. On ros2 there are no objects unless
-    /// objects names some, and the robot is not moved to a start pose.
+    /// objects names some, and the robot is not moved to a start pose. randomize: true moves the free objects
+    /// to places drawn from seed, as each trial of a pytest trials test does (a success rate over seeds).
     /// </summary>
     public Task<string> LaunchAsync(RobotLaunchOptions? options = null)
     {
@@ -556,6 +557,8 @@ public sealed class RobotLaunchOptions
 
     public bool? KeepOpen { get; set; }
 
+    public bool? Randomize { get; set; }
+
     internal void AddTo(Dictionary<string, object?> args)
     {
         if (Robot != null) args["robot"] = Robot;
@@ -566,6 +569,7 @@ public sealed class RobotLaunchOptions
         if (Ros2 != null) args["ros2"] = Ros2;
         if (RobotOptions != null) args["robot_options"] = RobotOptions;
         if (KeepOpen != null) args["keep_open"] = KeepOpen;
+        if (Randomize != null) args["randomize"] = Randomize;
     }
 }
 

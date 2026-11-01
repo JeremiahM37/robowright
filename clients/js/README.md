@@ -37,6 +37,13 @@ test("the arm puts the cube in the bin", async ({ rw }) => {
   `robowright show-trace` command that opens it.
 - **Retries**: `ROBOWRIGHT_RETRIES=2` (or `retries`) runs a failing test again on a fresh world; one that passes on
   a retry is reported flaky (`# flaky: failed 1 time, then passed on retry 1`).
+- **Trials**: `test(name, { trials: 20, minSuccess: 0.9 }, fn)` runs it on up to 20 seeds, each with the scene's
+  free objects moved to places drawn from the seed, and judges the success rate with its 95% interval, as
+  `@pytest.mark.trials` does (`lowerBound: true` judges the interval's lower bound; it stops once the rest cannot
+  change the verdict, unless `ROBOWRIGHT_ALL_TRIALS=1`).
+- **The HTML report**: `ROBOWRIGHT_RESULTS=results node --test`, then `robowright merge-reports results/*.json -o
+  report.html`: robowright's own report, each failure with its trace.
+- **Shards**: Node's `--test-shard=1/3`.
 - `test.only`, `test.skip`, `test.fixme`, `test.describe`, and Node's own reporters (`--test-reporter=junit`,
   `spec`, `tap`) and `--test-name-pattern`.
 

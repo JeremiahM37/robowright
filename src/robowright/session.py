@@ -266,6 +266,7 @@ class Session:
         ros2: dict | None = None,
         robot_options: dict | None = None,
         keep_open: bool = False,
+        randomize: bool = False,
     ) -> str:
         """Start a fresh world (closing any open one, or with ``keep_open`` keeping it beside the new one, as a
         browser keeps a tab: see :meth:`worlds` and :meth:`switch`) and return its snapshot.
@@ -275,7 +276,8 @@ class Session:
         ``robowright.backends.ros2_backend``; ``robot=None`` reads the description the stack publishes);
         it gets no objects unless ``objects`` names some, and the robot is not moved.
         ``robot_options``: for a robot given as a model
-        file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``)."""
+        file, how to read it (``{"gripper": false, "base_pos": [0, 0, 0]}``: see ``robots.load``). ``randomize``
+        moves the free objects to places drawn from ``seed``, as each trial of ``@pytest.mark.trials`` does."""
         if self.world is not None:
             if keep_open:
                 self._park()
@@ -307,6 +309,8 @@ class Session:
             scene.cameras = scene.cameras[:1]  # a ROS 2 robot has the cameras its settings name (in Gazebo, any)
         self.world = launch(scene, backend=backend, seed=seed, name=f"session_{self._n}", settings=settings, **(ros2 or {}))
         self.world.source = "session"
+        if randomize:
+            self.world.faults.randomize_scene()
         if self.view is not None:
             self.view.watch(self.world)
         return self.snapshot()
