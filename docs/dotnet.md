@@ -20,6 +20,29 @@ Playwright assertion does. It is not on NuGet yet; its README in
 Snapshot matchers keep their baseline beside the file named as `test_file`, as Python keeps it beside the test:
 `await rw.Expect("world").ToMatchStateSnapshotAsync("tidy", new Dictionary<string, object?> { ["test_file"] = "Tests/TidyTests.cs" })`.
 
-What it does not have yet: the pytest plugin's runner features (retries, projects, shards, the HTML report) are
-Python's. From .NET you run the world and assert on it in your own test framework, and
-`rw.Robot.GenerateTestAsync()` writes the session as a pytest test when you want it in the suite.
+In any test framework, `RobotTest.RunAsync` runs a test as Playwright Test does, on a fresh world of each target
+`RobotMatrix` names (`ROBOWRIGHT_ROBOT` and `ROBOWRIGHT_BACKEND` override them), with retries on a fresh world (it
+returns the attempts it took: more than one, and it was flaky), and a failure that saves its trace and names it in
+`RobotTestException`. With xUnit:
+
+```csharp
+public class PickTests : IAsyncLifetime
+{
+    private RobowrightClient rw = null!;
+    public async Task InitializeAsync() => rw = await RobowrightClient.LaunchAsync();
+    public async Task DisposeAsync() => await rw.DisposeAsync();
+
+    public static IEnumerable<object[]> Robots => RobotMatrix.Of(new[] { "so101", "panda" });
+
+    [Theory, MemberData(nameof(Robots))]
+    public Task PutsTheCubeInTheBin(RobotTarget target) => RobotTest.RunAsync(rw, target, async rw =>
+    {
+        await rw.Robot.PickAsync("cube");
+        await rw.Robot.PlaceAsync("bin");
+        await rw.Expect("cube", timeout: 2).ToBeInsideAsync("bin");
+    }, new RobotTestOptions { Retries = 1 });
+}
+```
+
+It needs nothing from NuGet. What it does not have yet, of the pytest plugin's runner: trials, projects and
+robowright's HTML report; `rw.Robot.GenerateTestAsync()` writes a session as a pytest test when you want those.

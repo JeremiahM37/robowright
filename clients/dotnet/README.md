@@ -24,6 +24,28 @@ await rw.Expect("gripper").Not.ToBeHoldingAsync("cube");
 await rw.Robot.SaveTraceAsync(new() { Path = "trace.zip" });
 ```
 
+In xUnit, NUnit or MSTest, `RobotTest.RunAsync` gives a test a fresh world on each target `RobotMatrix` names,
+retries it on a fresh world, and saves a failure's trace, naming it in the `RobotTestException`:
+
+```csharp
+public class PickTests : IAsyncLifetime
+{
+    private RobowrightClient rw = null!;
+    public async Task InitializeAsync() => rw = await RobowrightClient.LaunchAsync();
+    public async Task DisposeAsync() => await rw.DisposeAsync();
+
+    public static IEnumerable<object[]> Robots => RobotMatrix.Of(new[] { "so101", "panda" });
+
+    [Theory, MemberData(nameof(Robots))]
+    public Task PutsTheCubeInTheBin(RobotTarget target) => RobotTest.RunAsync(rw, target, async rw =>
+    {
+        await rw.Robot.PickAsync("cube");
+        await rw.Robot.PlaceAsync("bin");
+        await rw.Expect("cube", timeout: 2).ToBeInsideAsync("bin");
+    }, new RobotTestOptions { Retries = 1 });
+}
+```
+
 - **Tools** are grouped as `rw.Robot`, `rw.Ros2` and `rw.Sim`, named after the MCP tools in PascalCase with
   `Async` (`robot_move_to` is `MoveToAsync`). As in Playwright for .NET, a tool's required arguments are parameters
   and the rest go in its options object (`new() { Robot = "panda", KeepOpen = true }`). Each returns the tool's

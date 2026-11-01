@@ -130,8 +130,53 @@ await Test("a command that does not exist fails launch", async () =>
     Check(e.Message.Contains("could not start"), e.Message);
 });
 
+await Test("RobotMatrix names every robot on every engine", async () =>
+{
+    await Task.CompletedTask;
+    if (Environment.GetEnvironmentVariable("ROBOWRIGHT_ROBOT") is { Length: > 0 }) return; // the environment's own list wins
+    var t = RobotMatrix.Targets(new[] { "panda", "ur5e" }, new[] { "mujoco", "drake" });
+    Check(string.Join(",", t) == "mujoco-panda,mujoco-ur5e,drake-panda,drake-ur5e", string.Join(",", t));
+    Check(RobotMatrix.Targets().Single() == new RobotTarget("so101", "mujoco"), "default");
+    Check(RobotMatrix.Of().Single()[0] is RobotTarget, "rows");
+});
+
+await Test("RobotTest.RunAsync launches the target, names a failure's trace, and retries a flaky test", async () =>
+{
+    await using var rw = await Fake();
+    var target = new RobotTarget("panda", "mujoco");
+    var attempts = await RobotTest.RunAsync(rw, target, async rw =>
+    {
+        var launched = await rw.CallAsync("robot_last_launch");
+        Check(launched.Contains("\"robot\":\"panda\"") && launched.Contains("\"seed\":3"), launched);
+    }, new RobotTestOptions { Seed = 3 });
+    Check(attempts == 1, "one attempt");
+    var e = await Raises<RobotTestException>(() => RobotTest.RunAsync(rw, target, rw => rw.Expect("cube").ToBeInsideAsync("box"), test: "Misses"));
+    Check(e.Message.Contains("trace: robowright-traces/Misses_mujoco-panda.zip"), e.Message);
+    Check(e.Message.Contains("robowright show-trace robowright-traces/Misses_mujoco-panda.zip"), e.Message);
+    Check(e.InnerException is ExpectationException, "the matcher's own error inside");
+    var flaky = await RobotTest.RunAsync(rw, target, rw => rw.CallAsync("robot_flaky"), new RobotTestOptions { Retries = 1 });
+    Check(flaky == 2, "passed on its retry");
+});
+
 if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ROBOWRIGHT_COMMAND")))
 {
+    await Test("RobotTest against the real server: a pick and place passes, and a failure's trace is saved", async () =>
+    {
+        await using var rw = await RobowrightClient.LaunchAsync(new LaunchOptions { InheritStderr = false });
+        var target = new RobotTarget("so101", "mujoco");
+        await RobotTest.RunAsync(rw, target, async rw =>
+        {
+            await rw.Robot.PickAsync("cube");
+            await rw.Robot.PlaceAsync("bin");
+            await rw.Expect("cube", timeout: 2).ToBeInsideAsync("bin");
+        });
+        var dir = Path.Combine(Path.GetTempPath(), $"rw-dotnet-{Environment.ProcessId}");
+        var e = await Raises<RobotTestException>(() => RobotTest.RunAsync(
+            rw, target, rw => rw.Expect("cube", timeout: 0.2).ToBeInsideAsync("bin"), new RobotTestOptions { TraceDir = dir }, "LeavesTheCube"));
+        Check(e.Message.Contains("bin spans"), e.Message);
+        Check(e.Trace != null && File.Exists(e.Trace), e.Message);
+    });
+
     await Test("against the real server: pick the cube, hold it, and fail to find it in the bin", async () =>
     {
         await using var rw = await RobowrightClient.LaunchAsync(new LaunchOptions { InheritStderr = false });
@@ -173,6 +218,9 @@ internal static class FakeServer
         return new Dictionary<string, object?> { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
     }
 
+    private static string? lastLaunch;
+    private static int flaky;
+
     public static void Run()
     {
         Console.Out.WriteLine("not a protocol line");
@@ -198,6 +246,18 @@ internal static class FakeServer
                 var args = p.GetProperty("arguments");
                 var id = m.GetProperty("id");
                 if (name == "robot_crash") Environment.Exit(3);
+                if (name == "robot_launch") lastLaunch = args.GetRawText();
+                if (name == "robot_last_launch")
+                {
+                    Send(Text(id, lastLaunch ?? "null", false));
+                    continue;
+                }
+                if (name == "robot_flaky")
+                {
+                    flaky++;
+                    Send(Text(id, $"attempt {flaky}", flaky == 1));
+                    continue;
+                }
                 if (name == "robot_pick" && args.TryGetProperty("object", out var o) && o.GetString() == "nope")
                     Send(Text(id, "KeyError: no object named 'nope'", true));
                 else if (name == "robot_expect")
