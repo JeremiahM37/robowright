@@ -30,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import robots
+from . import robots, snapshots
 from .errors import CapabilityError, RobowrightError
 from .scene import CameraSpec, ObjectSpec, SceneSpec, default_scene
 from .world import Settings, World, launch
@@ -52,7 +52,10 @@ _MATCHERS = (
     "to_have_no_collisions",
     "to_be_visible",
     "to_be_hidden",
+    "to_match_snapshot",
+    "to_match_state_snapshot",
 )
+_SNAPSHOT_MATCHERS = ("to_match_snapshot", "to_match_state_snapshot")
 
 
 class _ContactLog:
@@ -817,8 +820,14 @@ class Session:
         return self._act(w.wait, float(duration))
 
     def move_object(self, object: str, position, yaw: float | None = None) -> str:
+        """Put ``object`` at ``position``: [x, y, z], or [x, y] at the height it is at now (on the table, it stays on it)."""
         w = self._w()
         w.scene[object]
+        position = [float(v) for v in position]
+        if len(position) == 2:
+            position.append(float(w.backend.object_pose(object)[0][2]))
+        elif len(position) != 3:
+            raise RobowrightError(f"move_object position is [x, y] or [x, y, z], not {position}")
         quat = None if yaw is None else (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
 
         def move():
@@ -1107,6 +1116,9 @@ class Session:
         e = expect(subj, timeout=timeout, world=w)
         if negate:
             e = e.not_
+        # A snapshot's baseline is kept beside the test that asked: here, the file a client names (its own test).
+        test_file = kw.pop("test_file", None) if matcher in _SNAPSHOT_MATCHERS else None
+        token = snapshots.TEST_FILE.set(Path(test_file).resolve()) if test_file else None
         # With no advance callable nothing steps the world: the state is checked once, and a hold (time the
         # state must stay true) cannot pass, so it is not waited for.
         once = getattr(w, "_advance", 1) is None
@@ -1119,6 +1131,9 @@ class Session:
             return f"FAIL: {err}{note}"
         except CapabilityError as err:  # a hold where time cannot pass: not checked, and why
             return f"FAIL: expect({subject}).{matcher} was not checked: {err}"
+        finally:
+            if token is not None:
+                snapshots.TEST_FILE.reset(token)
         shown = ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
         return f"PASS: expect({subject}){'.not_' if negate else ''}.{matcher}({shown}){note}"
 
@@ -1141,6 +1156,8 @@ class Session:
                 return w.body(name)
             except KeyError as e:
                 raise RobowrightError(str(e.args[0])) from e
+        if name == "world":  # the whole view, for to_match_snapshot and to_match_state_snapshot
+            return self._w()
         r = self._w().robot
         if name in ("robot", "base") and self.world.backend.robot_model.family in ("legged", "mobile"):
             return r.base  # a legged or mobile robot's pose, velocity and contacts are its base's

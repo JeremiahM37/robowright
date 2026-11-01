@@ -41,7 +41,9 @@ public final class Robowright implements AutoCloseable {
       "to_be_touching", "other",
       "to_have_joint", "joint",
       "to_be_visible", "camera",
-      "to_be_hidden", "camera");
+      "to_be_hidden", "camera",
+      "to_match_snapshot", "name",
+      "to_match_state_snapshot", "name");
 
   /** How to start the server. */
   public static final class LaunchOptions {

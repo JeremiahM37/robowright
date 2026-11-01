@@ -25,6 +25,9 @@ partial.
   seeds as `@pytest.mark.trials` does, and `ROBOWRIGHT_RESULTS=dir` writes results that `robowright merge-reports
   dir/*.json` makes into the HTML report. TypeScript types in `test.d.ts`.
 - MCP `robot_launch(randomize=true)` moves the free objects to places drawn from the seed, as each trial does.
+- Snapshot matchers through the MCP server and every client: `expect("world").toMatchStateSnapshot("tidy")` and
+  `toMatchSnapshot("tidy.png")`, the baseline kept beside the test file the client names (JavaScript names its own;
+  Java and .NET pass `test_file`).
 - `ROBOWRIGHT_PROJECT=nightly` runs robowright/test in `robowright.toml`'s `[projects.nightly]`; `robowright projects
   [--json]` prints the projects, for reading and for runners in other languages.
 
@@ -113,6 +116,8 @@ partial.
 - On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
   is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).
+- `robot_move_object` with `[x, y]` failed with NumPy's broadcasting error, reported as an engine refusing to move the
+  object; `[x, y]` now keeps the object's height, and any other length says what it takes.
 - A short move of robowright's own could break `[ros2.limits] joint_speed` and be refused: its peak speed was estimated
   from as few samples as the move had steps, and two samples of a smooth move average its peak away (an SO-101 wrist
   at 1.16 rad/s under a 1 rad/s limit). Moves are now sampled finely to find it.

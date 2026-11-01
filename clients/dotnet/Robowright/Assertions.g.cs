@@ -66,4 +66,10 @@ public sealed class Assertions
 
     public Task<string> ToHaveNoCollisionsAsync(object? arg = null, IDictionary<string, object?>? args = null) =>
         _rw.ExpectCallAsync(_subject, "to_have_no_collisions", arg, args, _timeout, _negate);
+
+    public Task<string> ToMatchSnapshotAsync(object? arg = null, IDictionary<string, object?>? args = null) =>
+        _rw.ExpectCallAsync(_subject, "to_match_snapshot", arg, args, _timeout, _negate);
+
+    public Task<string> ToMatchStateSnapshotAsync(object? arg = null, IDictionary<string, object?>? args = null) =>
+        _rw.ExpectCallAsync(_subject, "to_match_state_snapshot", arg, args, _timeout, _negate);
 }

@@ -75,8 +75,10 @@ public final class RobotTools {
    * to_be_inside {container}, to_be_holding {obj}, to_be_near {target, tol},
    * to_be_above {target, by}, to_be_at_rest {}, to_be_upright {tol_deg},
    * to_be_touching {other}, to_be_open {}, to_be_closed {}, to_have_joint {joint, value, tol},
-   * to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}. Object names in args
-   * are resolved.
+   * to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}; and for subject
+   * world (or an object), to_match_snapshot {name, camera, mask, test_file} and to_match_state_snapshot {name,
+   * test_file}: the baseline is kept beside test_file (the calling test), written on its first run. Object
+   * names in args are resolved.
    */
   public String expect(String subject, String matcher) {
     return expect(subject, matcher, null);
@@ -89,8 +91,10 @@ public final class RobotTools {
    * to_be_inside {container}, to_be_holding {obj}, to_be_near {target, tol},
    * to_be_above {target, by}, to_be_at_rest {}, to_be_upright {tol_deg},
    * to_be_touching {other}, to_be_open {}, to_be_closed {}, to_have_joint {joint, value, tol},
-   * to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}. Object names in args
-   * are resolved.
+   * to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}; and for subject
+   * world (or an object), to_match_snapshot {name, camera, mask, test_file} and to_match_state_snapshot {name,
+   * test_file}: the baseline is kept beside test_file (the calling test), written on its first run. Object
+   * names in args are resolved.
    */
   public String expect(String subject, String matcher, ExpectOptions options) {
     Map<String, Object> args = new LinkedHashMap<>();
@@ -396,14 +400,16 @@ public final class RobotTools {
   }
 
   /**
-   * Teleport a named object to [x, y, z] (yaw in radians), e.g. to set up a scenario.
+   * Teleport a named object to [x, y, z], or [x, y] at its current height (yaw in radians), e.g. to set up a
+   * scenario.
    */
   public String moveObject(String object, List<? extends Number> position) {
     return moveObject(object, position, null);
   }
 
   /**
-   * Teleport a named object to [x, y, z] (yaw in radians), e.g. to set up a scenario.
+   * Teleport a named object to [x, y, z], or [x, y] at its current height (yaw in radians), e.g. to set up a
+   * scenario.
    */
   public String moveObject(String object, List<? extends Number> position, MoveObjectOptions options) {
     Map<String, Object> args = new LinkedHashMap<>();

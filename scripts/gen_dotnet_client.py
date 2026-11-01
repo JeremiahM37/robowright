@@ -117,7 +117,7 @@ def render(tools: list[dict]) -> dict[str, str]:
         )
 
     expect = next(t for t in tools if t["name"] == "robot_expect")["description"]
-    matchers = sorted(set(re.findall(r"\b(to_(?:be|have)_[a-z_]+)\b", expect)))
+    matchers = sorted(set(re.findall(r"\b(to_(?:be|have|match)_[a-z_]+)\b", expect)))
     ms = "\n".join(
         f"    public Task<string> {_pascal(m)}Async(object? arg = null, IDictionary<string, object?>? args = null) =>\n"
         f'        _rw.ExpectCallAsync(_subject, "{m}", arg, args, _timeout, _negate);\n'

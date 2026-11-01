@@ -55,6 +55,18 @@ test("expect passes, fails with the reason, negates with .not, and takes the mat
   }
 });
 
+test("a snapshot matcher names the test file, so its baseline is kept beside it", async () => {
+  const rw = await fake();
+  try {
+    const sent = JSON.parse((await rw.expect("world").not.toMatchStateSnapshot("tidy")).slice(6)); // the fake passes it
+    assert.deepEqual(sent.args, { name: "tidy", test_file: process.argv[1] });
+    const own = JSON.parse((await rw.expect("world").not.toMatchSnapshot("tidy.png", { testFile: "x.test.js" })).slice(6));
+    assert.equal(own.args.test_file, "x.test.js");
+  } finally {
+    await rw.close();
+  }
+});
+
 test("a matcher with no first argument refuses a bare value", async () => {
   const rw = await fake();
   try {

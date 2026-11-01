@@ -185,4 +185,28 @@ public final class Assertions {
   public String toHaveNoCollisions(Object arg, Map<String, ?> args) {
     return match("to_have_no_collisions", arg, args);
   }
+
+  public String toMatchSnapshot() {
+    return match("to_match_snapshot", null, null);
+  }
+
+  public String toMatchSnapshot(Object arg) {
+    return match("to_match_snapshot", arg, null);
+  }
+
+  public String toMatchSnapshot(Object arg, Map<String, ?> args) {
+    return match("to_match_snapshot", arg, args);
+  }
+
+  public String toMatchStateSnapshot() {
+    return match("to_match_state_snapshot", null, null);
+  }
+
+  public String toMatchStateSnapshot(Object arg) {
+    return match("to_match_state_snapshot", arg, null);
+  }
+
+  public String toMatchStateSnapshot(Object arg, Map<String, ?> args) {
+    return match("to_match_state_snapshot", arg, args);
+  }
 }

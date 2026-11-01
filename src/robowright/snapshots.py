@@ -12,6 +12,7 @@ are written next to the traces, and the failure names them.
 
 from __future__ import annotations
 
+import contextvars
 import inspect
 import os
 import re
@@ -38,8 +39,15 @@ def updating() -> bool:
     return update_mode() == "all"
 
 
+TEST_FILE: contextvars.ContextVar[Path | None] = contextvars.ContextVar("robowright_snapshot_test_file", default=None)
+
+
 def _caller_file() -> Path:
-    """The first file up the stack that is not robowright's own: the test that asked."""
+    """The first file up the stack that is not robowright's own: the test that asked (or, for a test in another
+    language driving the MCP server, the file it named: ``TEST_FILE``)."""
+    named = TEST_FILE.get()
+    if named is not None:
+        return named
     for frame in inspect.stack()[1:]:
         f = Path(frame.filename).resolve()
         if _PACKAGE not in f.parents and f.suffix == ".py":

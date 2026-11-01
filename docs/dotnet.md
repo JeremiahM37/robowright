@@ -17,6 +17,9 @@ A failing expectation throws `ExpectationException`, which fails an xUnit, NUnit
 Playwright assertion does. It is not on NuGet yet; its README in
 [clients/dotnet](https://github.com/JeremiahM37/robowright/tree/main/clients/dotnet) shows how to reference it.
 
+Snapshot matchers keep their baseline beside the file named as `test_file`, as Python keeps it beside the test:
+`await rw.Expect("world").ToMatchStateSnapshotAsync("tidy", new Dictionary<string, object?> { ["test_file"] = "Tests/TidyTests.cs" })`.
+
 What it does not have yet: the pytest plugin's runner features (retries, projects, shards, the HTML report) are
 Python's. From .NET you run the world and assert on it in your own test framework, and
 `rw.Robot.GenerateTestAsync()` writes the session as a pytest test when you want it in the suite.

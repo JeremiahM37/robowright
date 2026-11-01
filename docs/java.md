@@ -18,6 +18,9 @@ A failing expectation throws `ExpectationException`, an `AssertionError`, so it 
 way a Playwright assertion does. It is not on Maven Central yet; its README in
 [clients/java](https://github.com/JeremiahM37/robowright/tree/main/clients/java) shows how to build the jar.
 
+Snapshot matchers keep their baseline beside the file named as `test_file`, as Python keeps it beside the test:
+`rw.expect("world").toMatchStateSnapshot("tidy", Map.of("test_file", "src/test/java/TidyTest.java"))`.
+
 What it does not have yet: the pytest plugin's runner features (retries, projects, shards, the HTML report) are
 Python's. From Java you run the world and assert on it in your own test framework, and `rw.robot().generateTest()`
 writes the session as a pytest test when you want it in the suite.

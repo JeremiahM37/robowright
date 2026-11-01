@@ -269,6 +269,8 @@ class World:
     # --- world edits (recorded so replay can reproduce them) ---------------------
     def move_object(self, name: str, pos, quat=None):
         """Put free object ``name`` at ``pos`` (and ``quat``, w x y z), at rest. Recorded, so a replay makes the same edit."""
+        if len(pos) != 3:
+            raise TypeError(f"move_object({name!r}, ...): pos is (x, y, z), not {tuple(pos)}")
         self.backend.set_object_pose(name, pos, quat)
         if self.trace:
             self.trace.event(

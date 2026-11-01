@@ -127,7 +127,7 @@ def render(tools: list[dict]) -> dict[str, str]:
         )
 
     expect = next(t for t in tools if t["name"] == "robot_expect")["description"]
-    matchers = sorted(set(re.findall(r"\b(to_(?:be|have)_[a-z_]+)\b", expect)))
+    matchers = sorted(set(re.findall(r"\b(to_(?:be|have|match)_[a-z_]+)\b", expect)))
     ms = "".join(
         f'  public String {_camel(m)}() {{\n    return match("{m}", null, null);\n  }}\n\n'
         f'  public String {_camel(m)}(Object arg) {{\n    return match("{m}", arg, null);\n  }}\n\n'

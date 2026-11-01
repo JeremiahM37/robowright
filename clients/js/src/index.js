@@ -34,7 +34,12 @@ const PRIMARY = {
   to_have_joint: "joint",
   to_be_visible: "camera",
   to_be_hidden: "camera",
+  to_match_snapshot: "name",
+  to_match_state_snapshot: "name",
 };
+
+// A snapshot's baseline is kept beside the test that asked: this process's script, unless the call names one.
+const SNAPSHOTS = new Set(["to_match_snapshot", "to_match_state_snapshot"]);
 
 class Connection {
   constructor(proc) {
@@ -145,6 +150,7 @@ export class Robowright {
                 args = { [PRIMARY[matcher]]: arg };
               }
               args = Object.fromEntries(Object.entries({ ...args, ...rest }).map(([k, v]) => [snake(k), v]));
+              if (SNAPSHOTS.has(matcher) && args.test_file === undefined && process.argv[1]) args.test_file = process.argv[1];
               const out = await this.call("robot_expect", { subject, matcher, args, negate, timeout });
               if (!out.startsWith("PASS")) throw new ExpectationError("robot_expect", out);
               return out;

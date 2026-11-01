@@ -67,6 +67,8 @@ public sealed class RobowrightClient : IAsyncDisposable
         ["to_have_joint"] = "joint",
         ["to_be_visible"] = "camera",
         ["to_be_hidden"] = "camera",
+        ["to_match_snapshot"] = "name",
+        ["to_match_state_snapshot"] = "name",
     };
 
     private readonly Process _proc;

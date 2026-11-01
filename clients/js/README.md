@@ -46,6 +46,9 @@ test("the arm puts the cube in the bin", async ({ rw }) => {
 - **Projects**: `ROBOWRIGHT_PROJECT=nightly` (or `nightly,smoke`, or `all`) runs each test in `robowright.toml`'s
   `[projects.nightly]` (its robot, backend, retries, seed, fidelity and timeout), named `name [nightly]`, as
   `--rw-project` does; `robowright projects` lists them.
+- **Snapshots**: `expect("world").toMatchStateSnapshot("tidy")` (positions and joints as text) and
+  `toMatchSnapshot("tidy.png", { mask: ["cube"] })` keep their baselines in `__snapshots__/` beside the test file;
+  the first run writes one and fails, as in Python, and `ROBOWRIGHT_UPDATE_SNAPSHOTS=all` writes them again.
 - **Shards**: Node's `--test-shard=1/3`.
 - `test.only`, `test.skip`, `test.fixme`, `test.describe`, and Node's own reporters (`--test-reporter=junit`,
   `spec`, `tap`) and `--test-name-pattern`.

@@ -438,3 +438,32 @@ def test_launch_randomize_draws_the_scene_from_the_seed(session):
     other = cube_at(seed=4, randomize=True)
     assert np.allclose(once, again)  # the same seed, the same scene
     assert not np.allclose(once, plain, atol=1e-4) and not np.allclose(once, other, atol=1e-4)
+
+
+def test_a_snapshot_through_the_session_is_kept_beside_the_test_that_named_itself(session, tmp_path):
+    """A test in another language (robowright/test in Node) names its own file; the baseline goes beside it."""
+    test_file = tmp_path / "tests" / "tidy.test.js"
+    test_file.parent.mkdir()
+    test_file.write_text("// a Node test\n")
+    session.launch()
+    args = {"name": "tidy", "test_file": str(test_file)}
+    first = session.expect("world", "to_match_state_snapshot", args)
+    assert first.startswith("FAIL") and "wrote" in first  # a missing baseline is never a pass
+    baseline = tmp_path / "tests" / "__snapshots__" / "tidy.test" / "tidy-mujoco-so101.state.txt"
+    assert baseline.exists(), first
+    assert session.expect("world", "to_match_state_snapshot", args).startswith("PASS")
+    session.launch()
+    session.move_object("cube", [0.05, 0.1])
+    moved = session.expect("world", "to_match_state_snapshot", args)
+    assert moved.startswith("FAIL") and "cube" in moved
+
+
+def test_move_object_takes_x_y_at_its_height_or_x_y_z_and_says_what_else_is_wrong(session):
+    session.launch()
+    z = float(session.world.backend.object_pose("cube")[0][2])
+    session.move_object("cube", [0.05, 0.1])
+    assert np.allclose(session.world.backend.object_pose("cube")[0], [0.05, 0.1, z], atol=2e-3)
+    session.move_object("cube", [0.1, 0.1, 0.05])
+    assert np.allclose(session.world.backend.object_pose("cube")[0][:2], [0.1, 0.1], atol=2e-3)
+    with pytest.raises(RobowrightError, match=r"position is \[x, y\] or \[x, y, z\]"):
+        session.move_object("cube", [0.1])

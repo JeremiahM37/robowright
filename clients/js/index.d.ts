@@ -34,8 +34,10 @@ export interface RobotTools {
    * to_be_inside {container}, to_be_holding {obj}, to_be_near {target, tol},
    * to_be_above {target, by}, to_be_at_rest {}, to_be_upright {tol_deg},
    * to_be_touching {other}, to_be_open {}, to_be_closed {}, to_have_joint {joint, value, tol},
-   * to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}. Object names in args
-   * are resolved.
+   * to_have_no_collisions {}, to_be_visible {camera, min_pixels}, to_be_hidden {camera}; and for subject
+   * world (or an object), to_match_snapshot {name, camera, mask, test_file} and to_match_state_snapshot {name,
+   * test_file}: the baseline is kept beside test_file (the calling test), written on its first run. Object
+   * names in args are resolved.
    */
   expect(args: {
     subject: string;
@@ -139,7 +141,8 @@ export interface RobotTools {
     joints: Record<string, unknown>;
   }): Promise<string>;
   /**
-   * Teleport a named object to [x, y, z] (yaw in radians), e.g. to set up a scenario.
+   * Teleport a named object to [x, y, z], or [x, y] at its current height (yaw in radians), e.g. to set up a
+   * scenario.
    */
   moveObject(args: {
     object: string;
@@ -481,6 +484,8 @@ export interface Assertions {
   toBeVisible(arg?: unknown, options?: Record<string, unknown> & { timeout?: number }): Promise<string>;
   toHaveJoint(arg?: unknown, options?: Record<string, unknown> & { timeout?: number }): Promise<string>;
   toHaveNoCollisions(arg?: unknown, options?: Record<string, unknown> & { timeout?: number }): Promise<string>;
+  toMatchSnapshot(arg?: unknown, options?: Record<string, unknown> & { timeout?: number }): Promise<string>;
+  toMatchStateSnapshot(arg?: unknown, options?: Record<string, unknown> & { timeout?: number }): Promise<string>;
   /** The same matchers, expecting the opposite. */
   readonly not: Assertions;
 }

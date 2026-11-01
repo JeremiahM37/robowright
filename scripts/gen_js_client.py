@@ -91,7 +91,7 @@ def render(tools: list[dict]) -> tuple[str, str]:
         spaces.setdefault(ns, []).append(_doc(t.get("description", ""), "  ") + f"  {method}({arg}): Promise<string>;\n")
 
     matchers = sorted(
-        set(re.findall(r"\b(to_(?:be|have)_[a-z_]+)\b", next(t for t in tools if t["name"] == "robot_expect")["description"]))
+        set(re.findall(r"\b(to_(?:be|have|match)_[a-z_]+)\b", next(t for t in tools if t["name"] == "robot_expect")["description"]))
     )
     mlines = "".join(
         f"  {_camel(m)}(arg?: unknown, options?: Record<string, unknown> & {{ timeout?: number }}): Promise<string>;\n" for m in matchers
