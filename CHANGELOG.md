@@ -80,6 +80,7 @@ partial.
 - `rw.attach` on gymnasium, dm_control, Meta-World, robosuite, ManiSkill 3, Isaac Lab, Isaac Sim, Stable-Baselines3
   vector envs and async vector envs.
 - Wheeled and omni bases on PyBullet, Drake and Genesis.
+- Python 3.14: tested on CI; every extra installs (PyBullet builds from source there, as on 3.12 and 3.13).
 - `[ros2.limits] workspace = {min = [x, y, z], max = [x, y, z]}`: a box the tool centre point must stay in on a real
   arm (ROS 2 or LeRobot), checked at every point of a command from the arm's kinematics, robowright's own moves
   included; a command that would leave it is refused whole, saying where the tool would have gone. A misspelt key

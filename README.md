@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/JeremiahM37/robowright/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JeremiahM37/robowright/ci.yml?branch=main&label=CI"></a>
-  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-3776ab">
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-3776ab">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-green"></a>
   <img alt="19 robots" src="https://img.shields.io/badge/robots-19-00b4d8">
   <img alt="5 engines" src="https://img.shields.io/badge/engines-5-00d9a3">
@@ -1011,7 +1011,7 @@ pip install "git+https://github.com/JeremiahM37/robowright"      # core: MuJoCo,
 ```
 
 To work on robowright itself: `git clone https://github.com/JeremiahM37/robowright && cd robowright && pip install -e ".[dev]"`
-(MuJoCo, xdist, ruff and the test tools; any Python 3.10-3.13, no compiler). Add PyBullet with
+(MuJoCo, xdist, ruff and the test tools; any Python 3.10-3.14, no compiler). Add PyBullet with
 `pip install -e ".[dev,pybullet]"`; without it the PyBullet tests skip.
 
 MuJoCo versions: `rw.launch` builds its simulations with MuJoCo 3.7 or newer and is tested on 3.13
@@ -1057,7 +1057,7 @@ into the same environment and use `--rw-backend isaac`. Its URDF importer needs
 | Symptom | Fix |
 |---|---|
 | `the 'pybullet' engine is not installed: pip install "robowright[pybullet]"` | The engine's extra is missing. Install the extra named in the message; `robowright info` lists the engines you have. |
-| `[pybullet]` takes a minute and runs a compiler, or fails with `Python.h: No such file` | PyBullet publishes wheels only up to Python 3.11, so on 3.12 and 3.13 pip builds it from source. That needs a C++ compiler and the Python headers. Install the headers for your Python (`sudo apt install python3.13-dev`, or `python3.12-dev`), or use a uv-managed Python, which ships them: `uv venv --python 3.13 --python-preference only-managed`. Or use Python 3.10 or 3.11, which get a prebuilt wheel. Checked on 3.13: the build fails with the system Python lacking headers and succeeds with uv's. |
+| `[pybullet]` takes a minute and runs a compiler, or fails with `Python.h: No such file` | PyBullet publishes wheels only up to Python 3.11, so on 3.12 and later pip builds it from source. That needs a C++ compiler and the Python headers. Install the headers for your Python (`sudo apt install python3.13-dev`, or `python3.12-dev`), or use a uv-managed Python, which ships them: `uv venv --python 3.13 --python-preference only-managed`. Or use Python 3.10 or 3.11, which get a prebuilt wheel. Checked on 3.13: the build fails with the system Python lacking headers and succeeds with uv's. |
 | Drake is unavailable | Drake wheels need Python 3.12+. Create the venv with `uv venv --python 3.12`. |
 | `offscreen rendering: unavailable` in `robowright info` | Tests still pass and traces still record; the viewer just has no camera picture. On headless Linux install Mesa EGL (`sudo apt install libegl1 libgl1 libgles2 libosmesa6`) and set `MUJOCO_GL=egl`. |
 | `show-trace` does nothing on a server | It opens a browser. Use `--no-open -o trace.html` and open the file. |
