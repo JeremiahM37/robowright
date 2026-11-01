@@ -595,14 +595,17 @@ class Robot:
         if not np.isfinite(limits).any():
             return n
         now = self._target.copy()
+        # Sampled finely, whatever n is: two samples of a short move average its peak away (a 2-step
+        # move of the SO-101's wrist planned at 5 steps went at 1.16 rad/s under a 1 rad/s limit).
+        m = max(n, 100)
         last, worst = now[: self.n_arm].copy(), 0.0
-        for i in range(1, n + 1):
-            at(i / n)
+        for i in range(1, m + 1):
+            at(i / m)
             q = self._target[: self.n_arm]
             worst = max(worst, float(np.max(np.abs(q - last) / limits)))
             last = q.copy()
         self._target = now
-        return max(n, int(np.ceil(n * worst / self.world.dt)))
+        return max(n, int(np.ceil(m * worst / self.world.dt)))
 
     def _send_whole(self, at, n: int) -> bool:
         """Hand the move to a controller that takes whole trajectories (a ROS 2

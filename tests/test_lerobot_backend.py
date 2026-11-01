@@ -109,6 +109,29 @@ def test_a_policy_jump_is_refused_before_it_reaches_the_motors():
         w.close()
 
 
+def test_a_move_that_would_take_the_tool_out_of_its_workspace_is_refused_whole():
+    arm = StandInArm()
+    w = _launch(arm, limits={"joint_speed": 1.0, "workspace": {"min": [-1, -1, -1], "max": [1, 1, 1]}})
+    try:
+        w.robot.reset_to()
+        at = w.robot.tcp.position.copy()
+        n = len(arm.sent)
+        w.robot.arm.move_to(at + [0.0, 0.0, -0.02])  # inside the box: it goes
+        assert len(arm.sent) > n
+        w.close()
+        arm = StandInArm()
+        w = _launch(arm, limits={"joint_speed": 1.0, "workspace": {"min": [-1, -1, at[2] - 0.01], "max": [1, 1, 1]}})
+        w.robot.reset_to()
+        here = w.robot.qpos()[: w.robot.n_arm].copy()
+        n = len(arm.sent)
+        with pytest.raises(rw.SafetyLimitError, match=r"outside the workspace .* in z \(\[ros2\] limits.workspace\)"):
+            w.robot.arm.move_to(at + [0.0, 0.0, -0.05])  # its floor is 1 cm below the tool
+        sent = arm.sent[n:]
+        assert all(abs(a["shoulder_lift.pos"] - math.degrees(here[1])) < 1.0 for a in sent)  # nothing that moves it
+    finally:
+        w.close()
+
+
 def test_calibration_and_names_map_lerobot_onto_the_model():
     arm = StandInArm({"elbow_flex": 10.0})
     w = _launch(arm, calibration={"elbow_flex": (-1.0, 0.5)})

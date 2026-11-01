@@ -514,7 +514,7 @@ class Ros2Backend(Backend):
             from .. import limits
 
             start = self._arm_sent if self._arm_sent is not None else self.qpos()[: self.n_arm]
-            limits.check(self.cfg["limits"], self.ros_names, start, [arm], self.control_dt)
+            limits.check(self.cfg["limits"], self.ros_names, start, [arm], self.control_dt, tcp=self._tcp_at)
             self._arm_sent = np.array(arm)
         if self._traj is not None or arm is None:
             pass  # the controller has the whole move (start_trajectory) or the test's goal: a target now would replace it
@@ -526,6 +526,13 @@ class Ros2Backend(Backend):
             self._grip_pub.publish(Float64MultiArray(data=[grip]) if gi == "position" else trajectory([self._grip_joint], [grip]))
         elif self._grip_action is not None and (self._grip_sent is None or abs(grip - self._grip_sent) > 1e-4):
             self._send_grip_goal(grip)
+
+    def _tcp_at(self, q):
+        """Where the tool centre point would be with the arm at ``q``, for ``limits.workspace``: the same
+        kinematics ``robot.tcp.position`` reads."""
+        from ..robot import _kinematics
+
+        return _kinematics(self.robot_model.name).tcp(np.asarray(q, float))
 
     # --- a whole move, as one goal -----------------------------------------------------------
     @property
@@ -551,7 +558,8 @@ class Ros2Backend(Backend):
             from .. import limits
 
             # From where the arm is, through every point of the move: refused whole, before it is sent.
-            limits.check(self.cfg["limits"], self.ros_names, self.qpos()[: self.n_arm], [r[: self.n_arm] for r in rows], self.control_dt)
+            arm_rows = [r[: self.n_arm] for r in rows]
+            limits.check(self.cfg["limits"], self.ros_names, self.qpos()[: self.n_arm], arm_rows, self.control_dt, tcp=self._tcp_at)
             self._arm_sent = np.array(rows[-1][: self.n_arm])
         if not self._traj_action.wait_for_server(timeout_sec=self.cfg["timeout"]):
             raise TimeoutError(

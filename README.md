@@ -229,7 +229,12 @@ sent, with the joint and the value, and the arm holds where it is:
 [ros2.limits]
 joint_speed = 0.5                                  # rad/s, any arm joint
 positions = { shoulder_lift_joint = [-2.0, -0.5] } # per joint, in the driver's names
+workspace = { min = [-0.6, -0.6, 0.02], max = [0.6, 0.6, 0.8] }  # a box the tool stays in (m)
 ```
+
+`workspace` is checked at every point of a command, robowright's own moves included, from the
+arm's kinematics: a move whose path would take the tool below the table or past the fence is
+refused whole, with where the tool would have gone.
 
 [`tests/test_ur_driver.py`](tests/test_ur_driver.py) runs Universal Robots' own driver
 (`ur_robot_driver`), exactly as on a real UR but with its mock hardware in place of the arm:

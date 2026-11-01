@@ -90,4 +90,7 @@ divergences, with what the trace showed.
 
 Set `command = true` to let robowright's reference controller and `run_policy` drive the arm.
 Keep the speeds low at first: `Settings(max_joint_speed=0.3, max_tcp_speed=0.05)`, and
-`[ros2] reset_speed = 0.2`. Keep an emergency stop in reach; robowright is not a safety system.
+`[ros2] reset_speed = 0.2`. Set `[ros2.limits]` too: `joint_speed`, per-joint `positions`, and a
+`workspace` box the tool must stay in, measured from the cell (the table's height plus a margin as
+its lowest z), so that a policy's bad target or a mistyped pose is refused before it is sent. Keep
+an emergency stop in reach; robowright is not a safety system.

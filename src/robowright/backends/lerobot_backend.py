@@ -122,12 +122,18 @@ class LeRobotBackend(Backend):
     def ctrl(self) -> np.ndarray:
         return self._ctrl.copy()
 
+    def _tcp_at(self, q):
+        """Where the tool centre point would be with the arm at ``q`` (``limits.workspace``), as ``robot.tcp`` reads it."""
+        from ..robot import _kinematics
+
+        return _kinematics(self.robot_model.name).tcp(np.asarray(q, float))
+
     def _send(self, target) -> None:
         from .. import limits
 
         arm = [float(v) for v in target[: self.n_arm]]
         start = self._arm_sent if self._arm_sent is not None else self.qpos()[: self.n_arm]
-        limits.check(self.cfg["limits"], self.ros_names, start, [arm], self._dt)  # before anything is sent
+        limits.check(self.cfg["limits"], self.ros_names, start, [arm], self._dt, tcp=self._tcp_at)  # before anything is sent
         action = {f"{motor}.pos": self._to_lerobot(j, q) for (j, motor), q in zip(self.joint_map.items(), arm)}
         if self.has_gripper:
             closed, opened = self.grip_range

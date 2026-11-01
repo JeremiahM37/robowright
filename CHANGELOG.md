@@ -80,6 +80,10 @@ partial.
 - `rw.attach` on gymnasium, dm_control, Meta-World, robosuite, ManiSkill 3, Isaac Lab, Isaac Sim, Stable-Baselines3
   vector envs and async vector envs.
 - Wheeled and omni bases on PyBullet, Drake and Genesis.
+- `[ros2.limits] workspace = {min = [x, y, z], max = [x, y, z]}`: a box the tool centre point must stay in on a real
+  arm (ROS 2 or LeRobot), checked at every point of a command from the arm's kinematics, robowright's own moves
+  included; a command that would leave it is refused whole, saying where the tool would have gone. A misspelt key
+  under `[ros2.limits]` is refused instead of ignored.
 
 ### Fixes
 
@@ -98,6 +102,9 @@ partial.
 - On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
   is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).
+- A short move of robowright's own could break `[ros2.limits] joint_speed` and be refused: its peak speed was estimated
+  from as few samples as the move had steps, and two samples of a smooth move average its peak away (an SO-101 wrist
+  at 1.16 rad/s under a 1 rad/s limit). Moves are now sampled finely to find it.
 - First run, from a walkthrough by someone new to it: `robowright info` gave 0.1.0 (the version is now read from the
   installed package); a `--rw-backend` engine that is not installed is one line before anything runs, saying what to
   install, not a traceback from every test; Drake's hint no longer says it needs Python 3.12 on 3.12; `robowright
