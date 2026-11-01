@@ -58,7 +58,7 @@ filled) put robowright at about 92 % of the Playwright Test and Playwright MCP f
 | fixture timeout | `--rw-setup-timeout 600`, `rw_timeout(300, setup=600)` or `use(setup_timeout=600)`: fixtures (a stack coming up) on a budget of their own, the test's limit starting with its body | same |
 | `globalSetup` | session fixtures in `conftest.py`; the `[ros2]` stack | same (pytest's) |
 | `storageState` (set up once, start every test from there) | `ready = world.checkpoint("cube in hand")`, then `world.restore(ready)` in this world or a fresh one of the same scene; traces replay through it and codegen writes it (MuJoCo, Drake, Genesis) | robot |
-| `npm init playwright` | `robowright init`: a test, settings, a CI workflow, the MCP server | same |
+| `npm init playwright` | `robowright init`: a test, settings, a CI workflow, the MCP server; `robowright init --js` the same for Node, the client installed from robowright itself | same |
 | clock control | everything runs in simulated time; nothing waits on the wall clock | robot |
 
 ## Debugging and tools

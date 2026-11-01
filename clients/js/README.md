@@ -14,6 +14,10 @@ pip install "robowright[mcp] @ git+https://github.com/JeremiahM37/robowright"
 With `robowright/test`, tests read as Playwright Test's do: each one gets a fresh world, `expect` needs no
 connection passed, and a failure saves its trace:
 
+The examples are ES modules: give your `package.json` `"type": "module"` (or name the files `.mjs`).
+`robowright init --js` sets up such a project: `package.json`, an example test, settings, CI, and the MCP server for
+AI agents, with the client installed from robowright itself (`robowright js-client` says where it is).
+
 ```js
 // tests/pick.test.js, run with: node --test
 import { expect, test } from "robowright/test";
@@ -47,8 +51,9 @@ test("the arm puts the cube in the bin", async ({ rw }) => {
   `[projects.nightly]` (its robot, backend, retries, seed, fidelity and timeout), named `name [nightly]`, as
   `--rw-project` does; `robowright projects` lists them.
 - **Snapshots**: `expect("world").toMatchStateSnapshot("tidy")` (positions and joints as text) and
-  `toMatchSnapshot("tidy.png", { mask: ["cube"] })` keep their baselines in `__snapshots__/` beside the test file;
-  the first run writes one and fails, as in Python, and `ROBOWRIGHT_UPDATE_SNAPSHOTS=all` writes them again.
+  `toMatchSnapshot("tidy.png", { mask: ["cube"] })` keep one baseline per engine and robot beside the test file, as in
+  Python: `tests/__snapshots__/pick.test/tidy-mujoco-so101.state.txt` for `tests/pick.test.js` (`[snapshots] path` in
+  robowright.toml moves them). The first run writes it and fails; `ROBOWRIGHT_UPDATE_SNAPSHOTS=all` writes them again.
 - **Shards**: Node's `--test-shard=1/3`.
 - `test.only`, `test.skip`, `test.fixme`, `test.describe`, and Node's own reporters (`--test-reporter=junit`,
   `spec`, `tap`) and `--test-name-pattern`.

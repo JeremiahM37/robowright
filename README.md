@@ -89,6 +89,25 @@ scripted pick-and-place passes on MuJoCo and not reliably on PyBullet, so this e
 [the matrix](#the-matrix-every-robot-on-every-engine) has every pair. Outside pytest, `import
 robowright as rw` and `rw.launch()` give the same world to a plain script.
 
+### In JavaScript or TypeScript
+
+`robowright init --js` sets up a Node project with `robowright/test`, which writes robot tests as Playwright Test
+writes web tests, on Node's own runner:
+
+```js
+import { expect, test } from "robowright/test";
+
+test("the arm puts the cube in the bin", async ({ rw }) => {
+  await rw.robot.pick({ object: "cube" });
+  await rw.robot.place({ on: "bin" });
+  await expect("cube").toBeInside("bin", { timeout: 2 });
+});
+```
+
+`npm test` runs it; `ROBOWRIGHT_ROBOT=panda,ur5e` runs it on each robot, a failure saves its trace, and trials,
+retries, snapshots, projects and the HTML report work as in pytest ([JavaScript](docs/javascript.md)). Java and .NET
+clients drive the same server ([Java](docs/java.md), [.NET](docs/dotnet.md)).
+
 ### Test your ROS 2 stack
 
 robowright serves its simulation as a ROS 2 robot (`/joint_states`, `/clock`, TF for the objects,

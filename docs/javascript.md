@@ -16,7 +16,8 @@ await rw.expect("cube").toBeInside("bin", { timeout: 2 });
 await rw.close();
 ```
 
-It is not on npm yet; install it from the repository (`npm install ./clients/js` from a checkout). Its README in
+It is not on npm yet, but it comes with robowright: `robowright init --js` sets up a Node project that installs it
+from there (`npm install "$(robowright js-client)"`), with an example test, CI and the MCP server. Its README in
 [clients/js](https://github.com/JeremiahM37/robowright/tree/main/clients/js) has the details.
 
 `robowright/test` runs them as Playwright Test does, on Node's own runner (`node --test`): a fresh world per test,

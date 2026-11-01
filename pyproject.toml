@@ -62,6 +62,15 @@ Homepage = "https://github.com/JeremiahM37/robowright"
 [tool.hatch.build.targets.wheel]
 packages = ["src/robowright"]
 
+# The JavaScript client rides in the wheel, at the version of the server it talks to: `robowright js-client` says
+# where, and `robowright init --js` installs it from there.
+[tool.hatch.build.targets.wheel.force-include]
+"clients/js/src" = "robowright/js/src"
+"clients/js/package.json" = "robowright/js/package.json"
+"clients/js/index.d.ts" = "robowright/js/index.d.ts"
+"clients/js/test.d.ts" = "robowright/js/test.d.ts"
+"clients/js/README.md" = "robowright/js/README.md"
+
 [tool.hatch.build.targets.sdist]
 exclude = ["/robowright-traces", "/bench/results/*.zip", "/.venv"]
 

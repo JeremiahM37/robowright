@@ -237,22 +237,106 @@ jobs:
 REPO = "https://github.com/JeremiahM37/robowright"
 
 
-def _install_spec() -> str:
+def _install_spec(extra: str = "") -> str:
     """How CI installs robowright, the way it is installed here: from PyPI at this version when it came from PyPI,
     else from its repository (a git or local install, which a CI machine cannot reach)."""
     from importlib import metadata
 
+    name = f"robowright[{extra}]" if extra else "robowright"
     try:
         dist = metadata.distribution("robowright")
     except metadata.PackageNotFoundError:
-        return f'"robowright @ git+{REPO}"'
+        return f'"{name} @ git+{REPO}"'
     if dist.read_text("direct_url.json"):  # installed from a URL or a path, not from an index
-        return f'"robowright @ git+{REPO}"'
-    return f'"robowright=={dist.version}"'
+        return f'"{name} @ git+{REPO}"'
+    return f'"{name}=={dist.version}"'
 
 
 def _init_ci() -> str:
     return _INIT_CI.replace("__ROBOWRIGHT__", _install_spec())
+
+
+def js_client() -> Path | None:
+    """The JavaScript client (robowright and robowright/test for Node): shipped inside the wheel as robowright/js,
+    or clients/js in a source checkout. None when neither is there."""
+    here = Path(__file__).resolve().parent
+    for d in (here / "js", here.parent.parent / "clients" / "js"):
+        if (d / "package.json").is_file() and (d / "src" / "test.js").is_file():
+            return d
+    return None
+
+
+_INIT_JS_TEST = """// Robot tests in Node, written as Playwright Test writes web tests: your code drives the robot, the test watches and
+// asserts. Run them with `npm test`; a failure saves its trace and prints the `robowright show-trace` command for it.
+import { expect, test } from "robowright/test";
+
+test.use({ robot: "so101" }); // or ROBOWRIGHT_ROBOT=panda,ur5e npm test: every test on each robot
+
+test("the arm puts the cube in the bin", async ({ rw }) => {
+  // Stand-in for your controller: robowright's own pick and place. Replace with the code under test.
+  await rw.robot.pick({ object: "cube" });
+  await expect("gripper").toBeHolding("cube");
+  await rw.robot.place({ on: "bin" });
+  await expect("cube").toBeInside("bin", { timeout: 2 });
+});
+
+// A rate over 20 seeds, each with the cube and bin moved: robot behaviour is judged as a success rate.
+test("it still works with the cube moved", { trials: 20, minSuccess: 0.9 }, async ({ rw }) => {
+  await rw.robot.pick({ object: "cube" });
+  await rw.robot.place({ on: "bin" });
+  await expect("cube").toBeInside("bin", { timeout: 2 });
+});
+"""
+
+_INIT_JS_CI = """name: robot tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Rendering (image snapshots) uses the CPU through Mesa's EGL: no GPU or display needed.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libgles2 libosmesa6
+      - run: pip install __ROBOWRIGHT__
+      # The client comes with robowright itself, at the same version as its server.
+      - run: npm install --no-save "$(robowright js-client)"
+      # A failed test is run again: one that then passes is reported flaky. Each failure's trace is kept for the report.
+      - run: npm test
+        env:
+          ROBOWRIGHT_RETRIES: "2"
+          ROBOWRIGHT_RESULTS: results
+      - run: robowright merge-reports results/*.json -o report/report.html
+        if: always()
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: robowright-report
+          path: |
+            report/
+            robowright-traces/
+"""
+
+
+def _init_js_package(root: Path) -> str:
+    import json as _json
+    import re as _re
+
+    client = js_client()
+    name = _re.sub(r"[^a-z0-9._-]+", "-", (root.resolve().name or "robot-tests").lower()).strip("-") or "robot-tests"
+    package = {
+        "name": name,
+        "private": True,
+        "type": "module",
+        "scripts": {"test": "node --test tests/"},
+        "devDependencies": {"robowright": f"file:{client}" if client else "github:JeremiahM37/robowright"},
+    }
+    return _json.dumps(package, indent=2) + "\n"
 
 
 def _init_mcp() -> str:
@@ -355,7 +439,15 @@ def _init(args, rest):
     """Set up a project the way ``npm init playwright`` does: an example test, settings, CI, and
     the MCP server registered for AI coding agents. Files that exist are left alone."""
     root = Path(args.dir)
-    if args.ros2:
+    if args.js:
+        files = {
+            root / "tests" / "robot.test.js": _INIT_JS_TEST,
+            root / "package.json": _init_js_package(root),
+            root / "robowright.toml": _INIT_TOML,
+            root / ".github" / "workflows" / "robowright.yml": _INIT_JS_CI.replace("__ROBOWRIGHT__", _install_spec("mcp")),
+            root / ".mcp.json": _init_mcp(),
+        }
+    elif args.ros2:
         import json as _json
 
         gz = args.gazebo
@@ -391,6 +483,16 @@ def _init(args, rest):
     if "robowright-traces/" not in lines:
         ignore.write_text("\n".join([*lines, "robowright-traces/"]) + "\n")
         print(f"updated  {ignore}")
+    if args.js:
+        print(
+            "\nnext:\n"
+            "  npm install                       the client, from robowright itself (robowright js-client)\n"
+            "  npm test                          run the tests (node --test)\n"
+            "  robowright show-trace <test>      look into a failure (--text for a plain summary)\n"
+            "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)"
+            + _mcp_missing(always=True)
+        )
+        return 0
     if args.ros2:
         print(
             "\nnext (in your ROS 2 environment):\n"
@@ -408,12 +510,15 @@ def _init(args, rest):
     return 0
 
 
-def _mcp_missing() -> str:
-    """The extra .mcp.json's server needs, said where init points at it, if this environment lacks it."""
+def _mcp_missing(always: bool = False) -> str:
+    """The extra .mcp.json's server needs, said where init points at it, if this environment lacks it (``always``:
+    the tests themselves need it, as robowright/test's do)."""
     import importlib.util
 
     if importlib.util.find_spec("mcp") is not None:
         return ""
+    if always:
+        return '\n\n  first: pip install "robowright[mcp]" (the tests drive robowright through its MCP server)'
     return '\n                                    (first: pip install "robowright[mcp]", which that server needs)'
 
 
@@ -452,6 +557,15 @@ def _show(args, rest):
     print(out)
     if not args.no_open:
         webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
+def _js_client_cmd(args, rest):
+    d = js_client()
+    if d is None:
+        print("robowright js-client: this install has no JavaScript client (an old wheel?)", file=sys.stderr)
+        return 1
+    print(d)
     return 0
 
 
@@ -854,6 +968,8 @@ def main(argv=None) -> int:
         "--ros2", metavar="COMMAND", help='a ROS 2 project: the command that starts your stack ("ros2 launch my_robot sim.launch.py")'
     )
     i.add_argument("--gazebo", action="store_true", help="with --ros2: the stack runs Gazebo (simulated time, Gazebo's ground truth)")
+    i.add_argument("--js", action="store_true", help="a JavaScript/TypeScript project: tests in Node with robowright/test")
+    sub.add_parser("js-client", help="where the JavaScript client is (npm install it from there)")
     pj = sub.add_parser("projects", help="the [projects.*] in robowright.toml, as --rw-project and robowright/test read them")
     pj.add_argument("--json", action="store_true", help="as JSON, for a runner in another language")
     ia = sub.add_parser("init-agents", help="AI agents that plan, write and repair robot tests (Claude Code), as playwright init-agents")
@@ -963,6 +1079,7 @@ def main(argv=None) -> int:
         "init": _init,
         "init-agents": _init_agents,
         "projects": _projects,
+        "js-client": _js_client_cmd,
         "ros2": _ros2,
     }
     return commands[args.cmd](args, [])

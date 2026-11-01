@@ -28,6 +28,9 @@ partial.
 - Snapshot matchers through the MCP server and every client: `expect("world").toMatchStateSnapshot("tidy")` and
   `toMatchSnapshot("tidy.png")`, the baseline kept beside the test file the client names (JavaScript names its own;
   Java and .NET pass `test_file`).
+- `robowright init --js`: a Node project (package.json, an example test with a trials test, settings, a CI workflow
+  that writes the HTML report, the MCP server). The JavaScript client ships inside the wheel, at its server's
+  version; `robowright js-client` says where, and the project installs it from there.
 - `ROBOWRIGHT_PROJECT=nightly` runs robowright/test in `robowright.toml`'s `[projects.nightly]`; `robowright projects
   [--json]` prints the projects, for reading and for runners in other languages.
 
@@ -116,6 +119,7 @@ partial.
 - On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
   is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).
+- An expectation with no timeout (a snapshot's) says it failed, not that it "failed after 0.00s (timeout 0.0s)".
 - `robot_move_object` with `[x, y]` failed with NumPy's broadcasting error, reported as an engine refusing to move the
   object; `[x, y]` now keeps the object's height, and any other length says what it takes.
 - A short move of robowright's own could break `[ros2.limits] joint_speed` and be refused: its peak speed was estimated

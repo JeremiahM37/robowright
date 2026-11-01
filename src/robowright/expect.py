@@ -144,10 +144,9 @@ class Expectation:
             if tr:
                 tr.event("expect", label, rec, "ok", last["detail"])
             return self
-        msg = (
-            f"{self.message + ': ' if self.message else ''}{label} failed after {w.time - t0:.2f}s "
-            f"(timeout {t}s{f', hold {hold}s' if hold else ''})\n  {last['detail']}"
-        )
+        # A check with no timeout (a snapshot's, by default) was made once: no time to report.
+        when = "failed" if not t and not hold else f"failed after {w.time - t0:.2f}s (timeout {t}s{f', hold {hold}s' if hold else ''})"
+        msg = f"{self.message + ': ' if self.message else ''}{label} {when}\n  {last['detail']}"
         if tr:
             tr.event("expect", label, rec, "failed", last["detail"])
         if self.soft:
