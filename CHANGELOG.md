@@ -17,6 +17,11 @@ partial.
   subclass, so JUnit reports it). No dependencies; generated from the tool list the same way.
 - `clients/dotnet`: the same for .NET 8, in Playwright for .NET's style (`await rw.Robot.PickAsync("cube")`,
   options objects, `rw.Expect("cube").Not.ToBeInsideAsync("bin")`). No dependencies; generated the same way.
+- `robowright/test`: robot tests in Node written as Playwright Test writes them, on Node's own runner. Each test gets
+  a fresh world from one server per file, `expect("cube")` needs no connection passed, `test.use({ robot, backend,
+  seed, retries, ... })` sets a file's options, `ROBOWRIGHT_ROBOT` and `ROBOWRIGHT_BACKEND` run every test on each
+  robot and engine, a failure saves its trace and names the `robowright show-trace` command that opens it, and a test
+  that passes on a retry is reported flaky. TypeScript types in `test.d.ts`.
 
 ### Running tests
 

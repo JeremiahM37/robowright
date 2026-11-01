@@ -9,14 +9,18 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./src/index.js"
+    },
+    "./test": {
+      "types": "./test.d.ts",
+      "default": "./src/test.js"
     }
   },
-  "files": ["src", "index.d.ts", "README.md"],
+  "files": ["src", "index.d.ts", "test.d.ts", "README.md"],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/client.test.js"
+    "test": "node --test test/client.test.js test/runner.test.js"
   },
   "license": "Apache-2.0",
   "repository": {

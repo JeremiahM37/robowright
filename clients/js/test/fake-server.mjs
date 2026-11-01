@@ -3,6 +3,8 @@
 import { createInterface } from "node:readline";
 
 const rl = createInterface({ input: process.stdin });
+let lastLaunch = null;
+let flaky = 0;
 const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
 process.stdout.write("not a protocol line\n");
 rl.on("line", (line) => {
@@ -13,6 +15,11 @@ rl.on("line", (line) => {
   } else if (m.method === "tools/call") {
     const { name, arguments: args } = m.params;
     if (name === "robot_crash") process.exit(3);
+    const reply = (text, isError = false) => send({ jsonrpc: "2.0", id: m.id, result: { ...(isError ? { isError } : {}), content: [{ type: "text", text }] } });
+    if (name === "robot_launch") lastLaunch = args; // and echoed, as every call is
+    if (name === "robot_last_launch") return reply(JSON.stringify(lastLaunch));
+    if (name === "robot_save_trace") return reply(`saved ${args.path}`);
+    if (name === "robot_flaky") return reply(`attempt ${++flaky}`, flaky === 1);
     if (name === "robot_pick" && args.object === "nope") {
       send({ jsonrpc: "2.0", id: m.id, result: { isError: true, content: [{ type: "text", text: "KeyError: no object named 'nope'" }] } });
     } else if (name === "robot_expect") {

@@ -11,6 +11,37 @@ It needs robowright itself, with its MCP extra, where the server will run:
 pip install "robowright[mcp] @ git+https://github.com/JeremiahM37/robowright"
 ```
 
+With `robowright/test`, tests read as Playwright Test's do: each one gets a fresh world, `expect` needs no
+connection passed, and a failure saves its trace:
+
+```js
+// tests/pick.test.js, run with: node --test
+import { expect, test } from "robowright/test";
+
+test.use({ robot: "so101" });
+
+test("the arm puts the cube in the bin", async ({ rw }) => {
+  await rw.robot.pick({ object: "cube" });
+  await expect("gripper").toBeHolding("cube");
+  await rw.robot.place({ on: "bin" });
+  await expect("cube").toBeInside("bin", { timeout: 2 });
+});
+```
+
+- **One server per test file**, started on the first test; each test launches a fresh world in it with the
+  file's options (`test.use({ robot, backend, seed, objects, fidelity, ros2, robotOptions, retries, timeout })`)
+  and its own (`test(name, { retries: 2 }, fn)`).
+- **Every robot and engine**: `ROBOWRIGHT_ROBOT=panda,ur5e ROBOWRIGHT_BACKEND=mujoco,drake node --test` runs each
+  test on every pair, named `name [mujoco-panda]`, as `--rw-robot` and `--rw-backend` do in pytest.
+- **A failed test** saves its trace to `robowright-traces/<test>.zip` and its error ends with the
+  `robowright show-trace` command that opens it.
+- **Retries**: `ROBOWRIGHT_RETRIES=2` (or `retries`) runs a failing test again on a fresh world; one that passes on
+  a retry is reported flaky (`# flaky: failed 1 time, then passed on retry 1`).
+- `test.only`, `test.skip`, `test.fixme`, `test.describe`, and Node's own reporters (`--test-reporter=junit`,
+  `spec`, `tap`) and `--test-name-pattern`.
+
+The client underneath it can be used directly, with any test runner:
+
 ```js
 import { test } from "node:test";
 import { launch } from "robowright";

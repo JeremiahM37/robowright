@@ -19,6 +19,23 @@ await rw.close();
 It is not on npm yet; install it from the repository (`npm install ./clients/js` from a checkout). Its README in
 [clients/js](https://github.com/JeremiahM37/robowright/tree/main/clients/js) has the details.
 
-What it does not have yet: the pytest plugin's runner features (retries, projects, shards, the HTML report) are
-Python's. From Node you run the world and assert on it with Node's own test runner, and `rw.robot.generateTest()`
-writes the session as a pytest test when you want it in the suite.
+`robowright/test` runs them as Playwright Test does, on Node's own runner (`node --test`): a fresh world per test,
+`expect` with no connection passed, every test on each robot and engine (`ROBOWRIGHT_ROBOT=panda,ur5e
+ROBOWRIGHT_BACKEND=mujoco,drake`), a failure's trace saved with the `robowright show-trace` command that opens it,
+and retries that report a test flaky when it passes on one:
+
+```js
+import { expect, test } from "robowright/test";
+
+test.use({ robot: "so101", retries: 1 });
+
+test("puts the cube in the bin", async ({ rw }) => {
+  await rw.robot.pick({ object: "cube" });
+  await rw.robot.place({ on: "bin" });
+  await expect("cube").toBeInside("bin", { timeout: 2 });
+});
+```
+
+What it does not have yet, of the pytest plugin's runner: projects from `robowright.toml`, shards, randomized
+trials with a success rate, and the HTML report (Node's own reporters, JUnit among them, work).
+`rw.robot.generateTest()` writes a session as a pytest test when you want it in that suite.

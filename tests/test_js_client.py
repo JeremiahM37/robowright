@@ -23,7 +23,7 @@ def test_the_js_clients_own_tests_pass_against_this_server():
     exe = Path(sys.executable).with_name("robowright")
     env = {"ROBOWRIGHT_COMMAND": f"{exe} mcp"} if exe.exists() else {}
     r = subprocess.run(
-        ["node", "--test", "--test-reporter=tap", "test/client.test.js"],
+        ["node", "--test", "--test-reporter=tap", "test/client.test.js", "test/runner.test.js"],
         cwd=ROOT / "clients" / "js",
         capture_output=True,
         text=True,
