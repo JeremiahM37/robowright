@@ -12,6 +12,27 @@ import zipfile
 from pathlib import Path
 
 
+def _rw_options_help() -> str | None:
+    """The robowright section of ``pytest --help``; pytest's own options are left to ``pytest --help``."""
+    import contextlib
+    import io
+
+    import pytest
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        pytest.main(["--help", "-p", "no:cacheprovider"])
+    lines, out = buf.getvalue().splitlines(), []
+    for line in lines:
+        if out and line and not line[0].isspace() and line.rstrip().endswith(":"):
+            break  # the next group
+        if out or line.strip().lower().startswith("robowright"):
+            out.append(line)
+    if not out:
+        return None
+    return "\n".join(out).rstrip() + "\n\npytest's own options: pytest --help"
+
+
 def _test(args, rest):
     import pytest
 
@@ -19,13 +40,15 @@ def _test(args, rest):
         # pytest's usage text alone reads as if `robowright test` were pytest itself; say what it is first.
         print(
             "usage: robowright test [--watch | --ui] [pytest arguments]\n\n"
-            "Runs this project's robot tests. Every argument goes to pytest unchanged, so the\n"
-            "options below are pytest's, plus robowright's --rw-* options (see `pytest --help`).\n\n"
+            "Runs this project's robot tests. Every argument goes to pytest unchanged: robowright's\n"
+            "own options are below, and every pytest option works too.\n\n"
             "  --watch    run again whenever a file changes: the changed test files when only\n"
             "             tests changed, everything otherwise (Enter runs everything)\n"
             "  --ui       open the UI in a browser: the suite by file, run any test or file with a\n"
             "             click, each test's trace in place, the camera live, and watch mode\n"
         )
+        print(_rw_options_help() or "")
+        return 0
     if "--ui" in rest and not ("-h" in rest or "--help" in rest):
         from .ui import serve
 
@@ -373,19 +396,42 @@ def _init(args, rest):
             "\nnext (in your ROS 2 environment):\n"
             "  pytest                            start the stack once, run the tests against it\n"
             "  robowright show-trace <trace>     look into a failure\n"
-            "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)"
+            "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)" + _mcp_missing()
         )
         return 0
     print(
         "\nnext:\n"
         "  pytest                            run the tests\n"
         "  robowright show-trace <trace>     look into a failure (--text for a plain summary)\n"
-        "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)"
+        "  claude                            an AI agent that can drive the robot and run the tests (.mcp.json)" + _mcp_missing()
     )
     return 0
 
 
+def _mcp_missing() -> str:
+    """The extra .mcp.json's server needs, said where init points at it, if this environment lacks it."""
+    import importlib.util
+
+    if importlib.util.find_spec("mcp") is not None:
+        return ""
+    return '\n                                    (first: pip install "robowright[mcp]", which that server needs)'
+
+
+def _find_trace(arg: str | None) -> str:
+    """``arg`` itself if it is a file; else the newest trace in robowright-traces/ whose name contains it (a
+    test's name, unquoted: the brackets and colons of a parametrized id need no escaping that way)."""
+    if arg and Path(arg).exists():
+        return arg
+    found = sorted(Path("robowright-traces").glob("**/*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    match = [p for p in found if not arg or arg in p.name]
+    if not match:
+        where = f"no trace named like {arg!r}" if arg else "no traces"
+        raise SystemExit(f"robowright show-trace: {where} in robowright-traces/ (run pytest with --rw-trace on first)")
+    return str(match[0])
+
+
 def _show(args, rest):
+    args.trace = _find_trace(args.trace)
     if args.perfetto:
         import json as _json
 
@@ -790,7 +836,11 @@ def main(argv=None) -> int:
     ia.add_argument("dir", nargs="?", default=".")
     sub.add_parser("test", help="run tests (arguments go to pytest; --watch: again on every change; --ui: in a browser)", add_help=False)
     s = sub.add_parser("show-trace", help="open a trace in the HTML viewer")
-    s.add_argument("trace")
+    s.add_argument(
+        "trace",
+        nargs="?",
+        help="a trace file, or part of a test's name to find its newest trace in robowright-traces/ (none: the newest of all)",
+    )
     s.add_argument("-o", "--out")
     s.add_argument("--no-open", action="store_true", help="write the HTML but do not open a browser")
     s.add_argument("--text", action="store_true", help="print what ran, what failed and the state at the failure, as text")

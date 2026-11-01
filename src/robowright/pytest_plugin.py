@@ -417,8 +417,12 @@ def pytest_configure(config):
             raise pytest.UsageError(f"--rw-robot: {e}") from None
     _shard(config)  # a malformed --rw-shard is said before anything runs
     config.stash[_STARTED] = time.monotonic()
-    if config.getoption("--rw-debug", False) and config.getoption("--rw-live", None) is None:
-        config.option.rw_live = 8765
+    if config.getoption("--rw-debug", False):
+        if os.environ.get("CI"):
+            raise pytest.UsageError("--rw-debug waits for a person to press Step or Resume in the live view; it cannot run in CI")
+        if config.getoption("--rw-live", None) is None:
+            config.option.rw_live = 8765
+    _engines_installed(config)  # a missing engine is said in one line, before anything runs
     ref = config.getoption("--rw-only-changed", None)
     if ref:
         from . import changed
@@ -957,6 +961,20 @@ def _ros2_stack(config):
     return config.stash[_STACK]
 
 
+def _engines_installed(config) -> None:
+    """A built-in engine named in --rw-backend whose package is missing, as a usage error saying what to install,
+    rather than a traceback from every test that asks for it."""
+    import importlib.util
+
+    from .backends.base import _INSTALL, _REQUIRES
+
+    # Only the pip extras: Isaac Sim and ROS 2 can live in an interpreter of their own.
+    for name in {b.strip() for b in config.getoption("--rw-backend", "mujoco").split(",")} & {"pybullet", "genesis", "drake"}:
+        if importlib.util.find_spec(_REQUIRES[name]) is None:
+            hint = _INSTALL[name]
+            raise pytest.UsageError(f"--rw-backend {name}: the {name!r} engine is not installed: {hint}")
+
+
 def _live(config):
     """This process's live view (--rw-live), started on first use: one port per xdist worker."""
     port = config.getoption("--rw-live", None)
@@ -968,7 +986,11 @@ def _live(config):
         worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0").removeprefix("gw")
         view = config.stash[_LIVE] = LiveView(port=port + int(worker) if port else 0, quiet=True)
         view.announce = lambda msg: _say(config, msg)
-        view.announce(f"robowright: watch live at {view.url}")
+        where = ""
+        if os.environ.get("SSH_CONNECTION"):  # 127.0.0.1 here is not the browser's machine
+            p = view.url.rsplit(":", 1)[1]
+            where = f" (from your own machine: ssh -L {p}:127.0.0.1:{p} {os.uname().nodename}, then open http://127.0.0.1:{p})"
+        view.announce(f"robowright: watch live at {view.url}{where}")
         config.add_cleanup(view.close)
     return config.stash[_LIVE]
 

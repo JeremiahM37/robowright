@@ -264,7 +264,7 @@ class LiveView:
         with self._lock:
             self._paused, self._command = {"what": what, "at": at}, None
         self._update(world, draw=True)
-        self.announce(f"robowright: paused before {what}{f' ({at})' if at else ''}; resume or step at {self.url}")
+        self.announce(f"robowright: paused before {what}{f' ({at})' if at else ''}; the test waits until you resume or step at {self.url}")
         with self._lock:
             while self._command is None:
                 self._lock.wait(0.5)

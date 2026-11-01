@@ -76,14 +76,14 @@ def test_my_controller_puts_the_cube_in_the_bin(robot, scene):
 ```bash
 pytest test_my_controller.py --rw-trace on       # the SO-101 in MuJoCo: about a second
 pytest test_my_controller.py --rw-live            # watch it live in a browser as it runs
-pytest test_my_controller.py --rw-debug           # step through it, one action at a time
+pytest test_my_controller.py --rw-debug           # step through it in the browser: it waits for you
 robowright test --watch test_my_controller.py     # run it again on every save
 robowright test --ui                              # or pick and run tests in a browser, each with its trace
 robowright show-trace robowright-traces/*.zip --no-open -o trace.html
 ```
 
 The same file runs on other robots and engines (`--rw-robot panda,ur5e`, `--rw-backend
-mujoco,drake`), and a policy is judged as a rate across randomized scenes with
+mujoco,drake` once `uv pip install "robowright[drake]"` has added Drake), and a policy is judged as a rate across randomized scenes with
 `@pytest.mark.trials(20, min_success=0.9)`. A robot does not pass on every engine: the SO-101's
 scripted pick-and-place passes on MuJoCo and not reliably on PyBullet, so this example fails there, and
 [the matrix](#the-matrix-every-robot-on-every-engine) has every pair. Outside pytest, `import

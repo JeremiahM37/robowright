@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import gc
 import os
+import sys
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -448,7 +449,7 @@ _REQUIRES = {
 _INSTALL = {
     "pybullet": 'pip install "robowright[pybullet]"',
     "genesis": 'install PyTorch first (https://pytorch.org), then pip install "robowright[genesis]"',
-    "drake": 'pip install "robowright[drake]" (needs Python 3.12 or newer)',
+    "drake": 'pip install "robowright[drake]"' + (" (needs Python 3.12 or newer)" if sys.version_info < (3, 12) else ""),
     "isaac": "Isaac Sim is not a pip extra; see the Install section of the README",
 }
 

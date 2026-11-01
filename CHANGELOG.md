@@ -98,6 +98,14 @@ partial.
 - On MuJoCo 3.17, a closed world no longer breaks the next one's drawing (3.17 frees a renderer in whichever GL context
   is current).
 - A Dockerfile (MuJoCo, PyBullet and video, rendering on the CPU).
+- First run, from a walkthrough by someone new to it: `robowright info` gave 0.1.0 (the version is now read from the
+  installed package); a `--rw-backend` engine that is not installed is one line before anything runs, saying what to
+  install, not a traceback from every test; Drake's hint no longer says it needs Python 3.12 on 3.12; `robowright
+  init` says the MCP server it registers needs `robowright[mcp]`; a failed `run_policy` says why its `until` never
+  held (`<Rollout success=False ...: cube at (0.220, -0.060, 0.012); bin spans (0.150, 0.070, 0.000)..(0.250, 0.170, 0.040)>`); `--rw-debug` says the test waits for you,
+  and refuses to run on CI; the live view's address comes with the `ssh -L` that reaches it over SSH; `robowright
+  test --help` lists robowright's options, not pytest's 450 lines; `robowright show-trace test_pick` finds the newest
+  trace of that test (no quoting of `[...]`), and `robowright show-trace` alone opens the newest.
 
 ## 0.1.0 (2026-10-15, tagged, not published)
 

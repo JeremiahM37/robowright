@@ -80,7 +80,13 @@ if sys.platform.startswith("linux") and "MUJOCO_GL" not in os.environ and not os
             if _gl == "osmesa":
                 os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
-__version__ = "0.1.0"
+try:  # pyproject.toml is the one place the version is written
+    from importlib.metadata import PackageNotFoundError as _NotInstalled
+    from importlib.metadata import version as _version
+
+    __version__ = _version("robowright")
+except _NotInstalled:  # a source tree on sys.path that was never installed
+    __version__ = "0+unknown"
 
 _current: contextvars.ContextVar = contextvars.ContextVar("robowright_world", default=None)
 

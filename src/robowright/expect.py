@@ -834,6 +834,7 @@ def condition(subject, matcher: str, *args, world=None, **kwargs):
     def pred():
         return bool(check()[0])
 
+    pred.why = lambda: check()[1]  # what the matcher would say now, for a rollout that ended without it
     pred.__robowright__ = {
         "subject": e.subject.name,
         "matcher": matcher,

@@ -66,12 +66,13 @@ def test_init_mcp_entry_starts_the_server_with_the_interpreter_that_ran_init(tmp
     assert entry == {"command": sys.executable, "args": ["-m", "robowright.cli", "mcp"]}  # no venv needed on PATH
 
 
-def test_test_help_says_what_robowright_test_is_before_pytests_help():
+def test_test_help_says_what_robowright_test_is_then_lists_its_own_options():
     r = subprocess.run([sys.executable, "-m", "robowright.cli", "test", "--help"], capture_output=True, text=True)
     assert r.returncode == 0
     head, _, rest = r.stdout.partition("\n\n")
     assert head.startswith("usage: robowright test") and "pytest" in rest.split("\n", 1)[0]
-    assert "positional arguments" in r.stdout  # pytest's own help follows
+    assert "--rw-backend" in r.stdout and "positional arguments" not in r.stdout  # robowright's options, not pytest's 450 lines
+    assert r.stdout.rstrip().endswith("pytest --help")  # where pytest's own are
 
 
 def test_headed_without_a_display_says_so(monkeypatch):

@@ -1196,12 +1196,15 @@ class Robot:
             self._policy = False
             for k, relay in relays.items():
                 w.log(f"route {k}: {relay.route.describe()}: {relay.route.stats}")
-        return Rollout(met, steps, w.time - t0, _time.perf_counter() - wall0, infer_ms)
+        why = getattr(until, "why", None)
+        reason = None if met or why is None else why()
+        return Rollout(met, steps, w.time - t0, _time.perf_counter() - wall0, infer_ms, reason)
 
 
 class Rollout:
-    def __init__(self, success, steps, sim_seconds, wall_seconds, infer_ms):
+    def __init__(self, success, steps, sim_seconds, wall_seconds, infer_ms, reason=None):
         self.success = success
+        self.reason = reason  # why ``until`` was not met, where it was built with condition()
         self.steps = steps
         self.sim_seconds = sim_seconds
         self.wall_seconds = wall_seconds
@@ -1211,7 +1214,8 @@ class Rollout:
         return self.success
 
     def __repr__(self):
-        return f"<Rollout success={self.success} steps={self.steps} sim={self.sim_seconds:.2f}s>"
+        why = f": {self.reason}" if self.reason else ""
+        return f"<Rollout success={self.success} steps={self.steps} sim={self.sim_seconds:.2f}s{why}>"
 
 
 def _kinematics(name: str) -> Kinematics:
