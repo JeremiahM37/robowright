@@ -24,6 +24,9 @@ public final class FakeServer {
     return Map.of("jsonrpc", "2.0", "id", id, "result", result);
   }
 
+  private static Object lastLaunch = null;
+  private static int flaky = 0;
+
   @SuppressWarnings("unchecked")
   public static void main(String[] argv) throws Exception {
     System.out.println("not a protocol line");
@@ -42,6 +45,15 @@ public final class FakeServer {
         String name = (String) params.get("name");
         Map<String, Object> args = (Map<String, Object>) params.get("arguments");
         if (name.equals("robot_crash")) System.exit(3);
+        if (name.equals("robot_launch")) lastLaunch = args;
+        if (name.equals("robot_last_launch")) {
+          send(text(id, Json.write(lastLaunch), false));
+          continue;
+        }
+        if (name.equals("robot_flaky")) {
+          send(text(id, "attempt " + (++flaky), flaky == 1));
+          continue;
+        }
         if (name.equals("robot_pick") && "nope".equals(args.get("object"))) {
           send(text(id, "KeyError: no object named 'nope'", true));
         } else if (name.equals("robot_expect")) {

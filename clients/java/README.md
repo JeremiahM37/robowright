@@ -25,6 +25,27 @@ try (Robowright rw = Robowright.launch()) {
 }
 ```
 
+With JUnit 5, `@RobotTest` (`robowright.junit`) gives each test a fresh world and runs it on every robot and engine
+named, saving a failure's trace and naming it in the failure:
+
+```java
+import robowright.Robowright;
+import robowright.junit.RobotTest;
+
+class PickTest {
+  @RobotTest(robot = {"so101", "panda"}, retries = 1)
+  void putsTheCubeInTheBin(Robowright rw) {
+    rw.robot().pick("cube");
+    rw.robot().place("bin");
+    rw.expect("cube", 2).toBeInside("bin");
+  }
+}
+```
+
+One server serves a test class. `ROBOWRIGHT_ROBOT`, `ROBOWRIGHT_BACKEND` and `ROBOWRIGHT_RETRIES` override the
+annotation; `ROBOWRIGHT_TRACE_DIR` is where traces go (default `robowright-traces`). A test that passes on a retry is
+reported flaky in JUnit's report entries. JUnit's API is a provided dependency, which a project using JUnit 5 has.
+
 - **Tools** are grouped as `rw.robot()`, `rw.ros2()` and `rw.sim()`, named after the MCP tools in camelCase
   (`robot_move_to` is `moveTo`). As in Playwright for Java, a tool's required arguments are parameters and the rest
   go in its options class (`new RobotTools.LaunchOptions().setRobot("panda").setKeepOpen(true)`). Two names

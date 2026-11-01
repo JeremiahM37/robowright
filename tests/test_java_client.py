@@ -48,3 +48,85 @@ def test_the_java_client_builds_with_maven(tmp_path):
     )
     assert r.returncode == 0, r.stdout[-4000:] + r.stderr[-2000:]
     assert list((JAVA / "target").glob("robowright-*.jar"))
+
+
+JUNIT = "junit-platform-console-standalone-1.11.4.jar"
+JUNIT_SHA1 = "44650aaff63a4dbb63cb0bf0f3725a4eb9406da1"
+
+
+def _junit_jar(tmp_path) -> Path | None:
+    """JUnit's standalone launcher: from the cache, else from Maven Central (checked against its SHA-1), else None."""
+    import hashlib
+    import urllib.request
+
+    cached = Path(os.environ.get("ROBOWRIGHT_JUNIT_JAR", Path.home() / ".cache" / "robowright" / "junit" / JUNIT))
+    if cached.exists():
+        return cached
+    url = f"https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.11.4/{JUNIT}"
+    try:
+        data = urllib.request.urlopen(url, timeout=60).read()
+    except OSError:
+        return None
+    if hashlib.sha1(data).hexdigest() != JUNIT_SHA1:
+        return None
+    jar = tmp_path / JUNIT
+    jar.write_bytes(data)
+    return jar
+
+
+def _run_junit(tmp_path, cls: str, env: dict) -> tuple[subprocess.CompletedProcess, str]:
+    jar = _junit_jar(tmp_path)
+    if jar is None:
+        pytest.skip("JUnit's console launcher is not cached and could not be downloaded")
+    out = tmp_path / "classes"
+    sources = sorted(
+        str(p)
+        for p in [
+            *JAVA.glob("src/robowright/*.java"),
+            JAVA / "test" / "robowright" / "FakeServer.java",
+            *JAVA.glob("junit/src/robowright/junit/*.java"),
+            *JAVA.glob("junit/test/robowright/junit/*.java"),
+        ]
+    )
+    r = subprocess.run(["javac", "-Xlint:all", "-Werror", "-cp", str(jar), "-d", str(out), *sources], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    work = tmp_path / "work"
+    work.mkdir()
+    cmd = ["java", "-jar", str(jar), "execute", "--class-path", str(out), "--select-class", cls, "--reports-dir", "reports"]
+    r = subprocess.run(
+        [*cmd, "--disable-banner", "--disable-ansi-colors"],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={**os.environ, **env},
+    )
+    xml = "\n".join(p.read_text() for p in (work / "reports").glob("*.xml"))
+    return r, xml
+
+
+@pytest.mark.skipif(shutil.which("javac") is None, reason="no JDK (javac) installed")
+def test_robottest_runs_each_robot_names_a_failures_trace_and_retries(tmp_path):
+    fake = f"java -cp {tmp_path / 'classes'} robowright.FakeServer"
+    r, xml = _run_junit(tmp_path, "robowright.junit.SampleTest", {"ROBOWRIGHT_COMMAND": fake})
+    assert r.returncode == 1, r.stdout[-3000:]  # one test fails, on purpose
+    assert "[mujoco-panda]" in r.stdout and "[mujoco-ur5e]" in r.stdout
+    assert "4 tests successful" not in r.stdout and "3 tests successful" in r.stdout and "1 tests failed" in r.stdout
+    assert "trace: robowright-traces/SampleTest.failsWithItsTrace_so101.zip" in r.stdout
+    assert "robowright show-trace robowright-traces/SampleTest.failsWithItsTrace_so101.zip" in r.stdout
+    assert "failed 1 time, then passed on retry 1" in r.stdout + xml
+
+
+@pytest.mark.skipif(shutil.which("javac") is None, reason="no JDK (javac) installed")
+def test_robottest_against_the_real_server(tmp_path):
+    exe = Path(sys.executable).with_name("robowright")
+    if not exe.exists():
+        pytest.skip("robowright is not installed beside this Python")
+    r, xml = _run_junit(tmp_path, "robowright.junit.RealServerTest", {"ROBOWRIGHT_COMMAND": f"{exe} mcp"})
+    assert r.returncode == 1, r.stdout[-3000:]
+    assert "1 tests successful" in r.stdout and "1 tests failed" in r.stdout, r.stdout[-3000:]
+    assert "bin spans" in r.stdout  # the matcher's own reason
+    trace = tmp_path / "work" / "robowright-traces" / "RealServerTest.leavesTheCubeWhereItWas_so101.zip"
+    assert trace.exists(), r.stdout[-3000:]
+    text = subprocess.run([str(exe), "show-trace", "--text", str(trace)], capture_output=True, text=True)
+    assert text.returncode == 0 and "to_be_inside" in text.stdout

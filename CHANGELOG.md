@@ -28,6 +28,9 @@ partial.
 - Snapshot matchers through the MCP server and every client: `expect("world").toMatchStateSnapshot("tidy")` and
   `toMatchSnapshot("tidy.png")`, the baseline kept beside the test file the client names (JavaScript names its own;
   Java and .NET pass `test_file`).
+- `@RobotTest` for JUnit 5 (`robowright.junit` in the Java client): a fresh world per test from one server per class,
+  the `Robowright` it drives as a parameter, a run per robot and engine (`ROBOWRIGHT_ROBOT`, `ROBOWRIGHT_BACKEND`),
+  retries reported as flaky, and a failure that saves its trace and names it. JUnit's API is a provided dependency.
 - `robowright init --js`: a Node project (package.json, an example test with a trials test, settings, a CI workflow
   that writes the HTML report, the MCP server). The JavaScript client ships inside the wheel, at its server's
   version; `robowright js-client` says where, and the project installs it from there.

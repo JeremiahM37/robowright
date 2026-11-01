@@ -21,6 +21,26 @@ way a Playwright assertion does. It is not on Maven Central yet; its README in
 Snapshot matchers keep their baseline beside the file named as `test_file`, as Python keeps it beside the test:
 `rw.expect("world").toMatchStateSnapshot("tidy", Map.of("test_file", "src/test/java/TidyTest.java"))`.
 
-What it does not have yet: the pytest plugin's runner features (retries, projects, shards, the HTML report) are
-Python's. From Java you run the world and assert on it in your own test framework, and `rw.robot().generateTest()`
-writes the session as a pytest test when you want it in the suite.
+With JUnit 5, `@RobotTest` (in `robowright.junit`) writes robot tests as Playwright Test writes web tests: one
+robowright server per test class, a fresh world per test, the `Robowright` it drives as a parameter, a run per robot
+and engine, retries that report a test flaky when it passes on one, and a failure that saves its trace and names it:
+
+```java
+import robowright.Robowright;
+import robowright.junit.RobotTest;
+
+class PickTest {
+  @RobotTest(robot = {"so101", "panda"}, retries = 1)
+  void putsTheCubeInTheBin(Robowright rw) {
+    rw.robot().pick("cube");
+    rw.robot().place("bin");
+    rw.expect("cube", 2).toBeInside("bin");
+  }
+}
+```
+
+`ROBOWRIGHT_ROBOT` and `ROBOWRIGHT_BACKEND` (comma lists) override the robots and engines, as `--rw-robot` and
+`--rw-backend` do; `ROBOWRIGHT_RETRIES` the retries. JUnit's API is a provided dependency of the jar: a project with
+JUnit 5 has it. What it does not have yet, of the pytest plugin's runner: trials, projects and robowright's HTML
+report (JUnit's own reports work), and `rw.robot().generateTest()` writes a session as a pytest test when you want
+those.
