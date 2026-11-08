@@ -184,7 +184,7 @@ def test_pick(robot, scene):
         end = time.monotonic() + 120
         url = None
         while url is None and time.monotonic() < end:
-            url = next((ln.split("watch live at ")[1].strip() for ln in list(lines) if "watch live at " in ln), None)
+            url = next((ln.split("watch live at ")[1].split()[0] for ln in list(lines) if "watch live at " in ln), None)
             time.sleep(0.1)
         assert url, "".join(lines)
         _wait_paused(url, "robot.pick(obj=cube)")
