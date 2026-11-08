@@ -105,5 +105,6 @@ def test_a_collected_mujoco_renderer_releases_the_threads_gl_context():
     other._gl_context.make_current()
     assert EGL.eglGetCurrentContext()
     mine.close()
-    assert not EGL.eglGetCurrentContext()
+    # MuJoCo 4.0 frees only its own: the guard stays for the 3.x releases robowright still supports.
+    assert bool(EGL.eglGetCurrentContext()) == (int(mujoco.__version__.split(".")[0]) >= 4)
     other.close()

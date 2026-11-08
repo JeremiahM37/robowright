@@ -662,16 +662,24 @@ def _squeeze(model: RobotModel, limit: float | None = None, spec: mujoco.MjSpec 
     labels = body_labels(m, model)
     side = {"left_finger": 0.0, "right_finger": 0.0}
     f = np.zeros(6)
-    for i in range(d.ncon):
-        c = d.contact[i]
-        if block not in (c.geom1, c.geom2):
-            continue
-        label = labels.get(int(m.geom_bodyid[c.geom2 if c.geom1 == block else c.geom1]))
-        if label in side:
-            mujoco.mj_contactForce(m, d, i, f)
-            side[label] += abs(f[0])
+    # Averaged over 0.1 s, not read at one step: jaws that have not quite stopped (MuJoCo 4.0's
+    # ViperX's bounce on the block) lose one side's contact at some steps, and a squeeze read as
+    # zero there made the servo stiffened from it 750 times too stiff, its jaws ringing shut.
+    steps = max(1, round(0.1 / m.opt.timestep))
+    pushed = 0.0
+    for _ in range(steps):
+        mujoco.mj_step(m, d)
+        pushed += abs(float(d.actuator_force[act])) / steps
+        for i in range(d.ncon):
+            c = d.contact[i]
+            if block not in (c.geom1, c.geom2):
+                continue
+            label = labels.get(int(m.geom_bodyid[c.geom2 if c.geom1 == block else c.geom1]))
+            if label in side:
+                mujoco.mj_contactForce(m, d, i, f)
+                side[label] += abs(f[0]) / steps
     clamp = sum(side.values()) / 2 if min(side.values()) > 0 else 0.0
-    return clamp, abs(float(d.actuator_force[act]))
+    return clamp, pushed
 
 
 def closing_speeds(model: RobotModel) -> dict[str, float]:

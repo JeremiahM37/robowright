@@ -4,4 +4,9 @@
 !LICENSE
 !NOTICE
 !src
+!clients/js/src
+!clients/js/package.json
+!clients/js/index.d.ts
+!clients/js/test.d.ts
+!clients/js/README.md
 src/**/__pycache__

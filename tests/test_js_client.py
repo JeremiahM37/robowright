@@ -49,7 +49,7 @@ def test_robowright_init_js_then_npm_install_and_npm_test_pass(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "npm install" in r.stdout and "npm test" in r.stdout
     package = json.loads((proj / "package.json").read_text())
-    assert package["type"] == "module" and package["scripts"]["test"] == "node --test tests/"
+    assert package["type"] == "module" and package["scripts"]["test"] == "node --test"
     assert package["devDependencies"]["robowright"] == f"file:{ROOT / 'clients' / 'js'}"
     ci = (proj / ".github" / "workflows" / "robowright.yml").read_text()
     assert 'npm install --no-save "$(robowright js-client)"' in ci and "merge-reports results/*.json" in ci
@@ -58,6 +58,6 @@ def test_robowright_init_js_then_npm_install_and_npm_test_pass(tmp_path):
     exe = Path(sys.executable).with_name("robowright")
     env = {**os.environ, "PATH": f"{exe.parent}{os.pathsep}{os.environ['PATH']}"}
     env.pop("NODE_TEST_CONTEXT", None)
-    t = subprocess.run(["node", "--test", "--test-reporter=tap", "tests/"], cwd=proj, capture_output=True, text=True, timeout=600, env=env)
+    t = subprocess.run(["node", "--test", "--test-reporter=tap"], cwd=proj, capture_output=True, text=True, timeout=600, env=env)
     assert t.returncode == 0, t.stdout[-3000:] + t.stderr[-2000:]
     assert "# pass 2" in t.stdout and "# fail 0" in t.stdout

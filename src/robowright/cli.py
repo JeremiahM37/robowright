@@ -333,7 +333,7 @@ def _init_js_package(root: Path) -> str:
         "name": name,
         "private": True,
         "type": "module",
-        "scripts": {"test": "node --test tests/"},
+        "scripts": {"test": "node --test"},
         "devDependencies": {"robowright": f"file:{client}" if client else "github:JeremiahM37/robowright"},
     }
     return _json.dumps(package, indent=2) + "\n"
