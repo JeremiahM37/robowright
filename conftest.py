@@ -101,6 +101,7 @@ for robot in ("so100", "so101_new_calib"):
 for test in (
     "test_deterministic",
     "test_grasp_is_seen_by_both_fingers",
+    "test_grip_force_matches_the_datasheet",  # passes there since the 0.1 s grip calibration (6352806)
     "test_no_arm_collisions_during_a_pick",
     "test_pick_and_place",
     "test_places_a_second_object_beside_the_first",
@@ -158,6 +159,7 @@ KNOWN[("test_places_a_second_object_beside_the_first", "pybullet", "xarm7")] = K
 for test in (
     "test_deterministic",
     "test_grasp_is_seen_by_both_fingers",
+    "test_grip_force_matches_the_datasheet",  # passes there since the 0.1 s grip calibration (6352806)
     "test_no_arm_collisions_during_a_pick",
     "test_pick_and_place",
     "test_places_a_second_object_beside_the_first",
