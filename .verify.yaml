@@ -26,6 +26,12 @@ steps:
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py examples -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend mujoco,pybullet --rw-robot all,legged", timeout: 1800 }
 
+  # .venv stays on MuJoCo 3.x; CI installs the newest release, and was the first to meet MuJoCo 4.0 (the ViperX
+  # grip calibration broke there). This venv is upgraded to the newest release on every run.
+  - name: tests and every robot on the newest MuJoCo release
+    actions:
+      - shell: { cmd: "V=$HOME/.cache/robowright/newest-venv; ([ -x $V/bin/python ] || uv venv -q --python 3.12 $V) && uv pip install -q --python $V/bin/python -e '.[dev,pybullet]' PyOpenGL && uv pip install -q --python $V/bin/python --upgrade mujoco && $V/bin/python -c 'import mujoco; print(\"mujoco\", mujoco.__version__)' && capped $V/bin/python -m pytest tests -q -n auto --dist loadgroup -p no:cacheprovider --ignore=tests/test_conformance.py --ignore=tests/test_legged.py --rw-backend mujoco && capped $V/bin/python -m pytest tests/test_conformance.py tests/test_legged.py examples -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend mujoco --rw-robot all,legged", timeout: 1800 }
+
   - name: every robot on Drake and Genesis (conformance + legged)
     actions:
       - shell: { cmd: "capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend drake --rw-robot all,legged && capped .venv/bin/python -m pytest tests/test_conformance.py tests/test_legged.py -q -n auto --dist loadgroup -p no:cacheprovider --rw-backend genesis --rw-robot all,legged", timeout: 2400 }
