@@ -52,6 +52,7 @@ Markers::
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import re
 import time
@@ -408,6 +409,8 @@ def pytest_configure(config):
     _apply_project(config)
     if hasattr(config, "workerinput") and getattr(config.option, "loadgroup", False):
         config.pluginmanager.register(_LoadGroupIds(), "robowright-loadgroup-ids")
+    if not hasattr(config, "workerinput"):
+        _fix_xdist_restart_hang()
     if config.getoption("--rw-robot", "so101") != "so101":
         # Named here, not when a test first asks for the robot: a test that builds its own world never
         # does, and a misspelt name then ran nothing on the robot meant and passed.
@@ -790,6 +793,44 @@ class _LoadGroupIds:
             names = {str(m.args[0] if m.args else m.kwargs.get("name", "default")) for m in item.iter_markers("xdist_group")}
             if names and "@" not in item.nodeid and hasattr(item, "_id"):
                 item._id = NodeId.parse(f"{item.nodeid}@{'_'.join(sorted(names))}")
+
+
+def _fix_xdist_restart_hang():
+    """Backport pytest-xdist's fix for a run that hangs forever after a worker crashes (``--dist loadgroup``).
+
+    In xdist 3.8 a crashed worker's whole workload goes back on the queue, units it had finished included; a worker
+    handed a finished unit is sent no tests, so it never reports one, is never given more, and the run waits on it
+    for good (xdist #1323, #1327; fixed by #1324 and #1328, not yet released). Found 2026-11-09: a MuJoCo renderer
+    segfault on a GPU out of memory left the 5080 gate's conformance step waiting for two hours at 97 %.
+    Patches only an xdist whose code still has the bug.
+    """
+    try:
+        from xdist.scheduler.loadscope import LoadScopeScheduling  # loadgroup and loadfile schedule through it
+    except ImportError:
+        return
+    remove_node, schedule = LoadScopeScheduling.remove_node, LoadScopeScheduling.schedule
+    try:
+        buggy = "self.workqueue.update(workload)" in inspect.getsource(remove_node)
+    except (OSError, TypeError):
+        return
+    if not buggy:
+        return
+
+    def remove_node_requeuing_only_unfinished(self, node):
+        work = self.assigned_work.get(node, {})
+        for scope in [scope for scope, unit in work.items() if all(unit.values())]:
+            del work[scope]
+        return remove_node(self, node)
+
+    def schedule_giving_a_new_worker_its_next_item(self):
+        rescheduling = self.collection is not None  # a replacement for a crashed worker
+        schedule(self)
+        if rescheduling:  # a worker runs a test only once it has the next: give a new one two units if it can
+            for node in self.nodes:
+                self._reschedule(node)
+
+    LoadScopeScheduling.remove_node = remove_node_requeuing_only_unfinished
+    LoadScopeScheduling.schedule = schedule_giving_a_new_worker_its_next_item
 
 
 @pytest.fixture

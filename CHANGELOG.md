@@ -117,6 +117,9 @@ partial.
 - On pytest 9.2, `--dist loadgroup` keeps a robot's tests on one worker again. pytest-xdist 3.8 adds the group to a
   test's id in a field pytest 9.2 no longer reads, so every group was silently spread over all workers (and serial
   modules ran in parallel); robowright now writes it where pytest reads it.
+- A worker that crashes under `--dist loadgroup` no longer hangs the run. pytest-xdist 3.8 puts a crashed worker's
+  finished tests back on the queue, and a worker handed only finished tests waits for good (xdist #1323 and #1327,
+  fixed upstream but not yet released); robowright applies xdist's fix to the versions that still have the bug.
 - `place()` fails with a `GraspError` when the object slipped out of the hand on the way, instead of opening the jaws
   over the target and passing wherever the object happened to fall. The SO-101 on PyBullet, whose published squeeze
   pushes the cube out of its jaws within a second, passed its plain pick-and-place that way on one PyBullet build and

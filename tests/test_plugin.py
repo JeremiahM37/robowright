@@ -116,6 +116,41 @@ def test_c(robot, scene):
     assert traces == ["test_g.py__test_c[mujoco-panda].zip", "test_g.py__test_c[mujoco-so101].zip"]  # no "@group"
 
 
+_CRASHES = {
+    # xdist #1323: the worker had finished a test before it crashed
+    "after_a_finished_test": ("def test_a(): pass\ndef test_b(): os._exit(1)\n", ["-n", "1"], "*5 failed*1 passed*"),
+    # xdist #1327: the replacement has work left but nothing after it
+    "with_work_left": ("def test_a(): os._exit(1)\ndef test_b(): pass\n", ["-n", "1"], "*5 failed*"),
+    # the 5080 gate (2026-11-09): one crash among many groups, six workers
+    "among_many_groups": (
+        "import time, pytest\n"
+        "@pytest.mark.parametrize('i', range(10))\n@pytest.mark.parametrize('g', range(30))\n"
+        "def test_a(g, i, request):\n"
+        "    time.sleep(0.02)\n"
+        "    if (g, i) == (7, 4) and not os.path.exists('crashed'):\n"
+        "        open('crashed', 'w').close()\n        os._exit(1)\n",
+        ["-n", "6"],
+        "*1 failed, 300 passed*",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_CRASHES))
+def test_a_crashed_worker_under_loadgroup_does_not_hang_the_run(pytester, case):
+    pytest.importorskip("xdist")
+    body, workers, outcome = _CRASHES[case]
+    pytester.makeconftest(
+        "import pytest\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    for it in items:\n"
+        "        g = getattr(it, 'callspec', None)\n"
+        "        it.add_marker(pytest.mark.xdist_group(f\"g{g.params['g'] if g else it.name}\"))\n"
+    )
+    pytester.makepyfile(test_crash="import os\n" + body)
+    r = pytester.runpytest_subprocess("-p", "no:cacheprovider", *workers, "--dist", "loadgroup", timeout=120)
+    r.stdout.fnmatch_lines(["*replacing crashed worker*", outcome])
+
+
 def test_an_object_wider_than_the_gripper_skips_the_test_on_that_robot(pytester):
     pytester.makepyfile(
         test_w="""
