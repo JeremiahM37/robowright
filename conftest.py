@@ -167,6 +167,25 @@ for test in (
     KNOWN[(test, "pybullet", "xarm7")] += _XARM_BUILD
     UNSETTLED.add((test, "pybullet", "xarm7"))
 
+
+def _genesis_version() -> tuple[int, ...]:
+    try:
+        from importlib.metadata import version
+
+        return tuple(int(p) for p in version("genesis-world").split(".")[:3])
+    except Exception:
+        return ()
+
+
+# Genesis 1.4.6: a ViperX 250 state restored mid-grasp replays its first step 1.7e-16 off (cube and three joints),
+# and so the rest. Genesis's own complete round trip (Simulator.__getstate__/__setstate__) lands the same way and
+# robowright's own state matches, so the part of the step that differs is not in what Genesis checkpoints. Exact on
+# 1.4.3-1.4.5 (2026-11-10).
+if _genesis_version() >= (1, 4, 6):
+    KNOWN[("test_state_restore_mid_grasp_is_exact", "genesis", "wx250s")] = (
+        "Genesis 1.4.6: a state restored mid-grasp replays 1.7e-16 off, as Genesis's own checkpoints do"
+    )
+
 # --- adjusted mode -----------------------------------------------------------------------------
 # Genesis's friction with the elliptic cone the backend uses (see its comment for every setting
 # tried, and what each cost): the iiwa 14 picks its second cube and carries it, then drops it

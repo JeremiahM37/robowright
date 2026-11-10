@@ -595,7 +595,10 @@ class GenesisBackend(WheeledDrive, Backend):
         return state
 
     def set_state(self, state):
-        from genesis.utils.array_class import fill_data
+        try:
+            from genesis.utils.data import fill_data  # Genesis 1.4.6 moved it
+        except ImportError:
+            from genesis.utils.array_class import fill_data
 
         s = self.scene.sim.rigid_solver
         state = np.asarray(state, float)
